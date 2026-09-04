@@ -84,6 +84,9 @@ class SlottedPage:
         self._buf = new_buf
         self._free_end = new_free_end
         self._write_header()
+    @property
+    def slot_count(self) -> int:
+        return self._nslots
     def to_bytes(self) -> bytes:
         return bytes(self._buf)
     @classmethod
