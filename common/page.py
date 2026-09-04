@@ -22,6 +22,8 @@ class SlottedPage:
         return self._free_end - slot_directory_end
     def insert(self, data: bytes) -> int:
         record_size = len(data)
+        if record_size == 0: 
+            raise ValueError("Cannot insert empty record")
         reusable_slot = None
         for slot_id in range(self._nslots):
             slot_offset = self._slot_offset(slot_id)
@@ -34,6 +36,8 @@ class SlottedPage:
         else: 
             required_space = record_size + SLOT_SIZE
         if self.free_space() < required_space:
+            self.compact()
+        if self.free_space() < required_space:
             raise ValueError("Not enough space in page")
         self._free_end -= record_size
         self._buf[self._free_end:self._free_end + record_size] = data
@@ -43,14 +47,6 @@ class SlottedPage:
             slot_id = self._nslots
             self._nslots += 1
         struct.pack_into(SLOT_FORMAT, self._buf, self._slot_offset(slot_id), self._free_end, record_size)
-        self._write_header()
-        return slot_id
-    def read(self, slot_id: int) -> bytes:
-        if slot_id < 0 or slot_id >= self._nslots:
-            raise ValueError(f"Invalid slot ID: {slot_id}")
-        slot_offset = self._slot_offset(slot_id)
-        struct.pack_into(SLOT_FORMAT, self._buf, self._slot_offset(slot_id), self._free_end, record_size)
-        self._nslots += 1
         self._write_header()
         return slot_id
     def read(self, slot_id: int) -> bytes:
@@ -88,43 +84,13 @@ class SlottedPage:
         self._buf = new_buf
         self._free_end = new_free_end
         self._write_header()
-
-page = SlottedPage()
-
-s0 = page.insert(b"Ana")
-s1 = page.insert(b"Pedro")
-s2 = page.insert(b"Maria")
-
-print("Antes de eliminar:")
-print(page.read(s0))
-print(page.read(s1))
-print(page.read(s2))
-print("Espacio:", page.free_space())
-
-page.delete(s1)
-
-print("\nDespues de eliminar:")
-print(page.read(s0))
-print(page.read(s1))
-print(page.read(s2))
-print("Espacio:", page.free_space())
-
-page.compact()
-
-print("\nDespues de compactar:")
-
-print(s0) 
-print(s1)
-print(s2)
-
-print(page.read(s0))
-print(page.read(s1))
-print(page.read(s2))
-print("Espacio:", page.free_space())
-
-s3 = page.insert(b"Luis")
-
-print(s3)
-print(page.read(s0))
-print(page.read(s1))
-print(page.read(s2))
+    def to_bytes(self) -> bytes:
+        return bytes(self._buf)
+    @classmethod
+    def from_bytes(cls, data: bytes) -> "SlottedPage":
+        if len(data) != PAGE_SIZE:
+            raise ValueError(f"Page must have exactly {PAGE_SIZE} bytes")
+        page = cls()
+        page._buf = bytearray(data)
+        page._nslots, page._free_end = struct.unpack_from(HEADER_FORMAT, page._buf, 0)
+        return page
