@@ -44,6 +44,8 @@ class Record:
         return f"Record({self.values})"
 
     def pack(self, schema: Schema) -> bytes:
+        if len(self.values) != len(schema.columns):
+            raise ValueError(f"Expected {len(schema.columns)} values, got {len(self.values)}")
         fixed_values = []
         varchar_raws: list[bytes] = []
 
@@ -56,7 +58,12 @@ class Record:
                     )
                 varchar_raws.append(raw)
             elif col.type == DataType.CHAR:
-                fixed_values.append(val.encode("utf-8"))
+                raw = val.encode("utf-8")
+                if len(raw) > col.size:
+                    raise ValueError(
+                        f"'{val}' exceeds CHAR({col.size}) for column '{col.name}'"
+                    )
+                fixed_values.append(raw)
             else:
                 fixed_values.append(val)
 
