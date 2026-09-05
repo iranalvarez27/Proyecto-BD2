@@ -65,7 +65,16 @@ class SlottedPage:
         if record_length == 0:
             return 
         struct.pack_into(SLOT_FORMAT, self._buf, slot_offset, 0, 0)
-    
+    def update(self, slot_id: int, data: bytes) -> None:
+        if slot_id < 0 or slot_id >= self._nslots:
+            raise ValueError(f"Invalid slot ID: {slot_id}")
+        slot_offset = self._slot_offset(slot_id)
+        record_offset, record_length = struct.unpack_from(SLOT_FORMAT, self._buf, slot_offset)
+        if record_length == 0:
+            raise ValueError(f"Slot {slot_id} is empty")
+        if len(data) != record_length:
+            raise ValueError(f"Updated record must have the same size")
+        self._buf[record_offset:record_offset + record_length] = data
     def compact(self) -> None:
         live_records = []
         for slot_id in range(self._nslots):
