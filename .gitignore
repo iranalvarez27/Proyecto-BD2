@@ -1,5 +1,6 @@
 __pycache__/
 *.pyc
-*Proyecto_final(1).docx
+*.docx
 *.dat
 *.db
+*.bin
