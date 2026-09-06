@@ -57,6 +57,7 @@ class SequentialFile:
         self._schema = schema
         self._key_column = key_column
         self._key_index = schema.column_index(key_column)
+        self._key_is_pk = schema.columns[self._key_index].is_pk
         if not os.path.exists(data_path):
             open(data_path, "wb").close()
         if not os.path.exists(aux_path):
@@ -152,6 +153,8 @@ class SequentialFile:
         return head_pointer
     def insert(self, record: Record) -> FilePointer:
         new_key = record.values[self._key_index]
+        if self._key_is_pk and self.search(new_key) is not None:
+            raise ValueError(f"Key {new_key} already exists")
         head = self._find_head()
         if head is None:
             entry = SequentialEntry(record=record, next_pointer=None, deleted=False)
@@ -197,11 +200,114 @@ class SequentialFile:
             previous_pointer = current_pointer
             current_pointer = current_entry.next_pointer
         return None, None, None
+    def _binary_search_in_page(
+        self,
+        page_id: int,
+        key
+    ):
+        page = self.read_page(
+            MAIN_FILE,
+            page_id
+        )
+
+        left = 0
+        right = page.slot_count - 1
+
+        while left <= right:
+            middle = (left + right) // 2
+
+            data = page.read(middle)
+
+            entry = SequentialEntry.unpack(
+                data,
+                self._schema
+            )
+
+            current_key = self._get_key(entry)
+
+            if current_key == key:
+                if not entry.deleted:
+                    pointer = FilePointer(
+                        file_type=MAIN_FILE,
+                        page_id=page_id,
+                        slot_id=middle
+                    )
+
+                    return pointer, entry
+
+                return None, None
+
+            if key < current_key:
+                right = middle - 1
+            else:
+                left = middle + 1
+
+        return None, None
+    def _search_main_binary(self, key):
+        left = 0
+        right = self.page_count(MAIN_FILE) - 1
+
+        while left <= right:
+            middle = (left + right) // 2
+
+            page = self.read_page(
+                MAIN_FILE,
+                middle
+            )
+
+            if page.slot_count == 0:
+                return None, None
+
+            first_data = page.read(0)
+            last_data = page.read(
+                page.slot_count - 1
+            )
+
+            first_entry = SequentialEntry.unpack(
+                first_data,
+                self._schema
+            )
+
+            last_entry = SequentialEntry.unpack(
+                last_data,
+                self._schema
+            )
+
+            first_key = self._get_key(first_entry)
+            last_key = self._get_key(last_entry)
+
+            if key < first_key:
+                right = middle - 1
+
+            elif key > last_key:
+                left = middle + 1
+
+            else:
+                return self._binary_search_in_page(
+                    middle,
+                    key
+                )
+
+        return None, None   
+    def _search_aux(self, key):
+        for pointer, entry in self._iter_file_entries(
+            AUX_FILE
+        ):
+            if entry.deleted:
+                continue
+
+            if self._get_key(entry) == key:
+                return pointer, entry
+
+        return None, None 
     def search(self, key) -> Record | None:
-        _, pointer, entry = self._find_by_key(key)
-        if pointer is None:
-            return None
-        return entry.record
+        _, entry = self._search_main_binary(key)
+        if entry is not None:
+            return entry.record
+        _, entry = self._search_aux(key)
+        if entry is not None:
+            return entry.record
+        return None
     def delete(self, key) -> bool:
         previous_pointer, current_pointer, current_entry = \
             self._find_by_key(key)
@@ -226,38 +332,37 @@ class SequentialFile:
             )
 
         return True
-
     def wasted_ratio(self) -> float:
         total_bytes = 0
         wasted_bytes = 0
-
         for file_type in [MAIN_FILE, AUX_FILE]:
             for page_id in range(self.page_count(file_type)):
                 page = self.read_page(
                     file_type,
                     page_id
                 )
-
                 for slot_id in range(page.slot_count):
                     data = page.read(slot_id)
-
                     if data == b"":
                         continue
-
                     total_bytes += len(data)
-
                     entry = SequentialEntry.unpack(
                         data,
                         self._schema
                     )
-
                     if entry.deleted:
                         wasted_bytes += len(data)
-
         if total_bytes == 0:
             return 0.0
-
         return wasted_bytes / total_bytes
+    def aux_record_count(self) -> int:
+        count = 0
+
+        for _, entry in self._iter_file_entries(AUX_FILE):
+            if not entry.deleted:
+                count += 1
+
+        return count
     def reorganize(self) -> None:
         records = list(self.scan())
         open(
@@ -293,158 +398,8 @@ class SequentialFile:
                 pointer,
                 entry
             )
-    def needs_reorganization(self, threshold: float = 0.30) -> bool:
-        return self.wasted_ratio() > threshold
+    def needs_reorganization(self, threshold: float = 0.30, max_aux_records: int = 100) -> bool:
+        too_much_waste = self.wasted_ratio() > threshold
+        aux_too_large = (self.aux_record_count() >= max_aux_records)
+        return too_much_waste or aux_too_large
 
-
-if __name__ == "__main__":
-    from common.types import Column, DataType
-
-    for path in ["datos.dat", "aux.dat"]:
-        if os.path.exists(path):
-            os.remove(path)
-
-    schema = Schema(
-        table_name="alumnos",
-        columns=[
-            Column(
-                "id",
-                DataType.INT,
-                4,
-                is_pk=True
-            ),
-            Column(
-                "nombre",
-                DataType.VARCHAR,
-                30
-            ),
-            Column(
-                "edad",
-                DataType.SMALLINT,
-                2
-            )
-        ]
-    )
-
-    seq = SequentialFile(
-        "datos.dat",
-        "aux.dat",
-        schema,
-        "id"
-    )
-
-    print("Insertando 30...")
-    p30 = seq.insert(
-        Record([30, "Maria", 22])
-    )
-
-    print("Insertando 10...")
-    p10 = seq.insert(
-        Record([10, "Ana", 20])
-    )
-
-    print("Insertando 20...")
-    p20 = seq.insert(
-        Record([20, "Pedro", 21])
-    )
-
-    print()
-    print("Punteros:")
-    print("30:", p30)
-    print("10:", p10)
-    print("20:", p20)
-
-    print()
-    print("SCAN ORDENADO:")
-
-    for record in seq.scan():
-        print(record)
-
-    print()
-    print(
-        "Paginas MAIN:",
-        seq.page_count(MAIN_FILE)
-    )
-
-    print(
-        "Paginas AUX:",
-        seq.page_count(AUX_FILE)
-    )
-    print()
-    print("BUSQUEDA 20:")
-    print(seq.search(20))
-
-    print()
-    print("ELIMINANDO 20...")
-    print(seq.delete(20))
-
-    print()
-    print("SCAN DESPUES DE DELETE:")
-
-    for record in seq.scan():
-        print(record)
-
-    print()
-    print("BUSQUEDA 20 DESPUES DE DELETE:")
-    print(seq.search(20))
-    print()
-    print("CONTENIDO FISICO DEL AUX:")
-
-    for pointer, entry in seq._iter_file_entries(AUX_FILE):
-        print(
-            pointer,
-            entry.record,
-            "deleted =", entry.deleted
-        )
-    print()
-    print(
-        "ESPACIO DESPERDICIADO:",
-        f"{seq.wasted_ratio() * 100:.2f}%"
-    )
-    print()
-    print(
-        "DESPERDICIO:",
-        f"{seq.wasted_ratio() * 100:.2f}%"
-    )
-    if seq.needs_reorganization():
-        print()
-        print("REORGANIZANDO...")
-        seq.reorganize()
-    print()
-    print("SCAN DESPUES DE REORGANIZAR:")
-
-    for record in seq.scan():
-        print(record)
-    print()
-    print(
-        "Paginas MAIN:",
-        seq.page_count(MAIN_FILE)
-    )
-
-    print(
-        "Paginas AUX:",
-        seq.page_count(AUX_FILE)
-    )
-    print()
-    print("CONTENIDO FISICO MAIN:")
-    for pointer, entry in seq._iter_file_entries(
-        MAIN_FILE
-    ):
-        print(
-            pointer,
-            entry.record,
-            "deleted =",
-            entry.deleted
-        )
-    print()
-    print("CONTENIDO FISICO AUX:")
-
-    for pointer, entry in seq._iter_file_entries(
-        AUX_FILE
-    ):
-        print(
-            pointer,
-            entry.record,
-            "deleted =",
-            entry.deleted
-        )
