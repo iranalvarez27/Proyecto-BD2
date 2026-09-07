@@ -98,7 +98,7 @@ class Lexer:
 
         simple = {"=": TokenType.EQ, "<": TokenType.LT, ">": TokenType.GT,
                  "*": TokenType.STAR,",": TokenType.COMMA, "(": TokenType.LPAREN,
-                 ")": TokenType.RPAREN, }
+                 ")": TokenType.RPAREN, ";": TokenType.SEMICOLON, }
 
         tipo = simple.get(c)
         if tipo is not None:
