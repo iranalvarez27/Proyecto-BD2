@@ -32,7 +32,8 @@ class TokenType(Enum):
     COMMA = auto()
     LPAREN = auto()
     RPAREN = auto()
-
+    
+    SEMICOLON = auto()
     EOF = auto() 
 
 KEYWORDS = {"select": TokenType.SELECT, "from": TokenType.FROM, "where": TokenType.WHERE,
