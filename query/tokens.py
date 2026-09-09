@@ -1,40 +1,40 @@
-from enum import Enum, auto
+from enum import Enum
 from dataclasses import dataclass
 
 class TokenType(Enum):
-    SELECT = auto()
-    FROM = auto()
-    WHERE = auto()
-    INSERT = auto()
-    INTO = auto()
-    VALUES = auto()
-    DELETE = auto()
-    ORDER = auto()
-    BY = auto()
-    GROUP = auto()
-    ASC = auto()
-    DESC = auto()
-    AND = auto()
-    OR = auto()
+    SELECT = 1
+    FROM = 2
+    WHERE = 3
+    INSERT = 4
+    INTO = 5
+    VALUES = 6
+    DELETE = 7
+    ORDER = 8
+    BY = 9
+    GROUP = 10
+    ASC = 11
+    DESC = 12
+    AND = 13
+    OR = 14
     
-    IDENT = auto()   
-    NUMBER = auto()   
-    STRING = auto()     
+    IDENT = 15 
+    NUMBER = 16
+    STRING = 17 
 
-    EQ = auto()         
-    NEQ = auto()       
-    LT = auto()         
-    LTE = auto()        
-    GT = auto()         
-    GTE = auto()        
+    EQ = 18       
+    NEQ = 19      
+    LT = 20        
+    LTE = 21       
+    GT = 22         
+    GTE = 23       
 
-    STAR = auto()
-    COMMA = auto()
-    LPAREN = auto()
-    RPAREN = auto()
+    STAR = 24
+    COMMA = 25
+    LPAREN = 26
+    RPAREN = 27
     
-    SEMICOLON = auto()
-    EOF = auto() 
+    SEMICOLON = 28
+    EOF = 29
 
 KEYWORDS = {"select": TokenType.SELECT, "from": TokenType.FROM, "where": TokenType.WHERE,
             "insert": TokenType.INSERT, "into": TokenType.INTO, "values": TokenType.VALUES,
