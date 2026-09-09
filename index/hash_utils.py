@@ -1,8 +1,38 @@
 import hashlib
+import struct
 from typing import Any
 
 
+class UnhashableKeyType(Exception):
+    """A hash index addresses keys by exact bit equality, so types whose
+    equality is not bit-exact cannot be indexed."""
+
+    def __init__(self, value: Any):
+        self.value = value
+        super().__init__(
+            f"{value!r} ({type(value).__name__}) cannot be a hash index key: "
+            "float equality is not bit-exact (0.0 vs -0.0, NaN). Use a B+ tree."
+        )
+
+
+def _tagged_bytes(key: Any) -> bytes:
+    """Serialize with a type tag, so that 1 and "1" do not collide."""
+    # bool first: in Python bool subclasses int, so isinstance(True, int) is True
+    if isinstance(key, bool):
+        return b"b" + (b"\x01" if key else b"\x00")
+    if isinstance(key, int):
+        return b"i" + struct.pack("<q", key)
+    if isinstance(key, str):
+        return b"s" + key.encode("utf-8")
+    if isinstance(key, bytes):
+        return b"s" + key
+    raise UnhashableKeyType(key)
+
+
 def stable_hash(key: Any) -> int:
-    """Deterministic, unlike Python's built-in hash()"""
-    raw = str(key).encode("utf-8")
-    return int.from_bytes(hashlib.blake2b(raw, digest_size=8).digest(), "big")
+    """Deterministic, unlike Python's built-in hash(), which is randomized per
+    process for str/bytes and would make a persisted index lose its own keys
+    after a restart."""
+    return int.from_bytes(
+        hashlib.blake2b(_tagged_bytes(key), digest_size=8).digest(), "big"
+    )
