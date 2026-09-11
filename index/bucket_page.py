@@ -24,10 +24,7 @@ MAX_ENTRIES = (PAGE_SIZE - HEADER_SIZE) // ENTRY_SIZE  # 255
 
 
 class BucketPage:
-    """Fixed-size hash bucket: a dense array of (hash, RID) entries plus a
-    small header. Unlike SlottedPage there is no slot directory, no
-    compaction and no stable slot ids -- a hash bucket never needs them,
-    entries move freely on split."""
+    """Fixed-size hash bucket: a dense array of (hash, RID) entries."""
 
     def __init__(self, local_depth: int = 0, page_kind: int = PAGE_KIND_PRIMARY):
         self.local_depth = local_depth
