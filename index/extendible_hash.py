@@ -32,21 +32,8 @@ NIL = -1
 
 
 class ExtendibleHash(Index):
-    """ One file: page 0 is the metapage, and directory pages, primary buckets and
-    overflow pages are interleaved freely after it -- everything is addressed by
-    page id, so growing the directory never moves a bucket.
-
-    A full bucket is split (doubling the directory when its local depth equals
-    the global depth); overflow pages are chained only for the collision case
-    the book calls out -- more entries with an identical hash value than fit in
-    a page, i.e. duplicate keys on a non-unique column.
-
-    The index is *lossy*: entries store only ``(hash, RID)``, not the key, so
-    ``search`` returns candidate RIDs whose key hash matches. The caller must
-    recheck the actual key against the base record, as PostgreSQL does for its
-    hash indexes.
-
-    See docs/extendible-hash for the full design and rationale."""
+    """Non-clustered hash index: lossy (stores hash + RID, not the key), no
+    range queries."""
 
     def __init__(self, path: str, bucket_capacity: int = MAX_ENTRIES):
         self._path = path
@@ -117,25 +104,10 @@ class ExtendibleHash(Index):
             # retry: the target bucket is recomputed from scratch
 
     def _is_stuck(self, bucket: BucketPage, key_hash: int) -> bool:
-        """Whether *this* split would leave the newcomer without room.
-
-        The split sends every entry to one side or the other according to bit
-        ``local_depth``; the newcomer goes to the side its own hash selects. If
-        that side already holds a full bucket's worth, the split makes no room
-        and only deepens the directory -- chain instead.
-
-        Asking whether the entries are *all identical* instead (the obvious
-        reading of "the split cannot separate them") is not enough: two distinct
-        keys whose hashes agree on their low k bits look separable at every
-        depth below k, so each insert splits and doubles the directory k times
-        over without ever relieving the bucket. With 6000 keys that is a 2**23
-        directory for 2000 buckets. Here the same bucket is chained at once.
-
-        Only the primary is inspected, never the chain behind it: the primary is
-        full whenever this is called, so if all of it sits on the newcomer's side
-        that side is already at capacity whatever the chain holds. When the
-        primary straddles the bit the split does separate entries, and the chain
-        is redistributed along with it."""
+        """True if splitting would not make room for key_hash: every entry in
+        the primary shares its bit, so it would land in a bucket that's still
+        full. Only the primary is checked (it's already full on its own, so
+        that's enough); the chain is irrelevant to this decision."""
         if bucket.local_depth >= HASH_BITS:
             return True
         bit = 1 << bucket.local_depth
@@ -146,9 +118,8 @@ class ExtendibleHash(Index):
         old_depth = bucket.local_depth
         discriminating_bit = 1 << old_depth
 
-        # the whole chain is split, not just the primary: a bucket that chained
-        # once must be able to shed those entries later, or the first chain it
-        # grows freezes it forever and it collects every key that maps there.
+        # split the whole chain, not just the primary, so a chained bucket can
+        # still shrink later instead of freezing forever
         entries: list[tuple[int, RID]] = []
         spare: list[int] = []
         page = bucket
@@ -165,18 +136,16 @@ class ExtendibleHash(Index):
         for h, rid in entries:
             (move if h & discriminating_bit else keep).append((h, rid))
 
-        # the old primary is reused as the half that stays, and the old chain
-        # pages are recycled for both halves before any new page is allocated
+        # reuse the old primary as the half that stays; recycle old chain pages
+        # for both halves before allocating anything new
         image_page_id = spare.pop() if spare else self._alloc_page()
         self._write_chain(page_id, keep, old_depth + 1, spare)
         self._write_chain(image_page_id, move, old_depth + 1, spare)
         for leftover in spare:
             self._free_page(leftover)
 
-        # every directory slot pointing here shares its low old_depth bits, so
-        # they sit at stride 2**old_depth -- no need to scan the whole directory.
-        # A shallow bucket in a deep directory touches many slots, so group the
-        # writes: one page write per affected page, not one per slot.
+        # slots pointing here sit at stride 2**old_depth; group writes by page
+        # instead of one per slot
         low_bits = idx & (discriminating_bit - 1)
         touched: set[int] = set()
         for i in range(low_bits, len(self._dir), discriminating_bit):
@@ -193,10 +162,10 @@ class ExtendibleHash(Index):
         local_depth: int,
         spare: list[int],
     ) -> None:
-        """Lay `entries` out as a primary at `head_id` plus as many overflow
-        pages as they need, drawing page ids from `spare` (consumed in place)
-        before allocating new ones. An empty side still gets its primary."""
+        """Write `entries` as a primary at `head_id` plus overflow pages as
+        needed, reusing page ids from `spare` before allocating new ones."""
         cap = self._capacity
+        # `or [[]]` so an empty side still writes a (empty) primary page
         chunks = [entries[i:i + cap] for i in range(0, len(entries), cap)] or [[]]
 
         page_ids = [head_id]
@@ -223,12 +192,7 @@ class ExtendibleHash(Index):
     def _add_to_overflow(
         self, primary_id: int, primary: BucketPage, key_hash: int, rid: RID
     ) -> None:
-        """Insert at the *head* of the chain, right after the primary.
-
-        Walking to the tail would cost O(chain) reads per insert, and since the
-        chain grows with every insert that makes loading n duplicates of one key
-        O(n²). Only the head is ever inspected, so an insert is O(1); each page
-        still fills to capacity before a new one is pushed in front of it."""
+        """Insert at the head of the chain."""
         first_id = primary.overflow_page_id
 
         if first_id != NIL:
