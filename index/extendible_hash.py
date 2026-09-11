@@ -229,8 +229,12 @@ class ExtendibleHash(Index):
     # ------------------------------------------------------------ maintenance
 
     def rebuild(self) -> None:
-        """Reload every entry into a fresh index. The escape valve for the
-        space that bucket merging would otherwise reclaim (docs §9)."""
+        """Reload every entry into a fresh index, compacting it.
+
+        Deletes never fuse two buckets back together, so one the deletes
+        emptied keeps its page and its directory slots; rebuilding is the only
+        way that space comes back. Overflow pages are a separate story --
+        _consolidate frees those on every delete."""
         entries = [(h, rid) for _, page in self._iter_pages() for h, rid in page.entries]
         tmp_path = self._path + ".rebuild"
         fresh = ExtendibleHash(tmp_path, bucket_capacity=self._capacity)
