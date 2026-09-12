@@ -109,13 +109,77 @@ class Conexion:
     def ejecutar_select(self, nodo: SelectNode) -> list:
         info = self.catalog.get_table(nodo.tabla)
         where = nodo.where
+        orden_ya_resuelto = False
         if where is None:
-            self.plan.append(f"escaneo completo de '{info.nombre}' ({info.tipo_storage})")
-            filas = list(self.leer_todo(info))
+            usa_indice_orden = (nodo.order_by is not None and info.tipo_storage == STORAGE_HEAP
+                                and self.catalog.tiene_indice(nodo.tabla, nodo.order_by.columna))
+            if usa_indice_orden:
+                indice, tipo_indice = self.catalog.get_indice(nodo.tabla, nodo.order_by.columna)
+            else:
+                indice, tipo_indice = None, None
+
+            if usa_indice_orden and tipo_indice == "bplus":
+                self.plan.append(f"lectura ordenada por indice bplus sobre '{nodo.order_by.columna}'")
+                nombres_col = [c.name for c in info.schema.columns]
+                filas = []
+                for clave, rid in indice.scan():
+                    record = info.storage.read(rid, info.schema)
+                    if record is not None:
+                        filas.append(dict(zip(nombres_col, record.values)))
+                if nodo.order_by.descendente:
+                    filas.reverse()
+                orden_ya_resuelto = True
+            else:
+                self.plan.append(f"escaneo completo de '{info.nombre}' ({info.tipo_storage})")
+                filas = list(self.leer_todo(info))
         else:
+            usa_indice_igualdad = (isinstance(where, Condition) and where.operador == TokenType.EQ
+                and info.tipo_storage == STORAGE_HEAP and self.catalog.tiene_indice(nodo.tabla, where.columna))
+            usa_indice_rango = (isinstance(where, Condition) and where.operador in (TokenType.GT, TokenType.GTE, TokenType.LT, TokenType.LTE)
+                and info.tipo_storage == STORAGE_HEAP and self.catalog.tiene_indice(nodo.tabla, where.columna))
             es_por_clave = (isinstance(where, Condition) and where.operador == TokenType.EQ
-                and where.columna == info.key_column and info.tipo_storage == STORAGE_SEQUENTIAL)
-            if es_por_clave:
+                            and where.columna == info.key_column and info.tipo_storage == STORAGE_SEQUENTIAL)
+
+            if usa_indice_igualdad:
+                indice, tipo_indice = self.catalog.get_indice(nodo.tabla, where.columna)
+                self.plan.append(f"busqueda por indice {tipo_indice} en '{where.columna}={where.valor}'")
+                rids = indice.search(where.valor)
+                nombres_col = [c.name for c in info.schema.columns]
+                filas = []
+                for rid in rids:
+                    record = info.storage.read(rid, info.schema)
+                    if record is not None:
+                        filas.append(dict(zip(nombres_col, record.values)))
+
+            elif usa_indice_rango:
+                indice, tipo_indice = self.catalog.get_indice(nodo.tabla, where.columna)
+                if tipo_indice != "bplus":
+                    self.plan.append(f"escaneo completo de '{info.nombre}' ({info.tipo_storage}) + filtro WHERE")
+                    filas = []
+                    for fila in self.leer_todo(info):
+                        if self.cumple_where(where, fila):
+                            filas.append(fila)
+                else:
+                    if where.operador == TokenType.GT or where.operador == TokenType.GTE:
+                        low = where.valor
+                        high = 999999999
+                    else:
+                        low = -999999999
+                        high = where.valor
+
+                    self.plan.append(f"busqueda por rango en indice {tipo_indice} sobre '{where.columna}'")
+                    rids = indice.range_search(low, high)
+                    nombres_col = [c.name for c in info.schema.columns]
+                    filas = []
+                    for rid in rids:
+                        record = info.storage.read(rid, info.schema)
+                        if record is None:
+                            continue
+                        fila = dict(zip(nombres_col, record.values))
+                        if self.cumple_where(where, fila):
+                            filas.append(fila)
+
+            elif es_por_clave:
                 clave = where.valor
                 self.plan.append(f"busqueda binaria por clave '{info.key_column}={clave}' en '{info.nombre}'")
                 record = info.storage.search(clave)
@@ -134,13 +198,14 @@ class Conexion:
             filas = self.agrupar(filas, nodo.group_by)
             self.plan.append(f"GROUP BY {nodo.group_by}")
 
-        if nodo.order_by is not None:
+        if nodo.order_by is not None and not orden_ya_resuelto:
             filas = sorted(filas, key=lambda f: f[nodo.order_by.columna], reverse=nodo.order_by.descendente)
             if nodo.order_by.descendente:
                 direccion = "DESC"
             else:
                 direccion = "ASC"
-            self.plan.append(f"ORDER BY {nodo.order_by.columna} {direccion}")
+            self.plan.append(f"ORDER BY {nodo.order_by.columna} {direccion} (sort en memoria)")
+
         if nodo.columnas == ["*"]:
             return filas
         salida = []
@@ -183,7 +248,8 @@ class Conexion:
                         raise ExecutionError(f"no se pudo insertar: clave {nueva_pk} ya existe")
         try:
             if info.tipo_storage == STORAGE_HEAP:
-                info.storage.insert(record, info.schema)
+                rid = info.storage.insert(record, info.schema)
+                self.actualizar_indices_insert(nodo.tabla, info, record, rid)
             elif info.tipo_storage == STORAGE_SEQUENTIAL:
                 info.storage.insert(record)
             else:
@@ -194,12 +260,23 @@ class Conexion:
         self.plan.append(f"INSERT en '{info.nombre}' ({info.tipo_storage})")
         return {"operacion": "INSERT", "filas_afectadas": 1}
 
+    def actualizar_indices_insert(self, tabla: str, info: TableInfo, record: Record, rid) -> None:
+        for columna in info.indices:
+            indice, tipo_indice = self.catalog.get_indice(tabla, columna)
+            idx = info.schema.column_index(columna)
+            valor = record.values[idx]
+            indice.insert(valor, rid)
+
     def ejecutar_delete(self, nodo: DeleteNode) -> dict:
         info = self.catalog.get_table(nodo.tabla)
         where = nodo.where
         if where is not None:
-            es_por_clave = (isinstance(where, Condition) and where.operador == TokenType.EQ
-                and where.columna == info.key_column and info.tipo_storage == STORAGE_SEQUENTIAL)
+            es_por_clave = (
+                isinstance(where, Condition)
+                and where.operador == TokenType.EQ
+                and where.columna == info.key_column
+                and info.tipo_storage == STORAGE_SEQUENTIAL
+            )
             if es_por_clave:
                 clave = where.valor
                 self.plan.append(f"DELETE por clave '{info.key_column}={clave}' en '{info.nombre}'")
@@ -221,13 +298,22 @@ class Conexion:
 
         if info.tipo_storage == STORAGE_HEAP:
             nombres_col = [c.name for c in info.schema.columns]
-            rids = []
+            candidatos = []
             for rid, record in info.storage.scan_con_rid(info.schema):
                 fila = dict(zip(nombres_col, record.values))
                 if where is None or self.cumple_where(where, fila):
-                    rids.append(rid)
-            for rid in rids:
+                    candidatos.append((rid, record))
+            for rid, record in candidatos:
+                self.actualizar_indices_delete(nodo.tabla, info, record, rid)
                 info.storage.delete(rid)
             self.plan.append(f"escaneo + DELETE por RID en '{info.nombre}'")
-            return {"operacion": "DELETE", "filas_afectadas": len(rids)}
+            return {"operacion": "DELETE", "filas_afectadas": len(candidatos)}
+
         raise ExecutionError(f"storage desconocido: {info.tipo_storage}")
+
+    def actualizar_indices_delete(self, tabla: str, info: TableInfo, record: Record, rid) -> None:
+        for columna in info.indices:
+            indice, tipo_indice = self.catalog.get_indice(tabla, columna)
+            idx = info.schema.column_index(columna)
+            valor = record.values[idx]
+            indice.delete(valor, rid)
