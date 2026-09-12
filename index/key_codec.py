@@ -6,9 +6,8 @@ from typing import Any
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from common.types import DataType
 
-# Ceiling on a *codified* key. Derived from requiring that two entries always
-# fit in a node page, or a split would divide a page that cannot be divided,
-# forever:  2 * (2 + 8 + K) <= PAGE_SIZE - NODE_HEADER_SIZE = 4080.
+# Two entries must always fit in a node page or splitting never terminates:
+# 2 * (2 + 8 + K) <= 4096 - 16.
 MAX_KEY_SIZE = 2030
 
 MASK64 = (1 << 64) - 1
@@ -21,9 +20,8 @@ _STR_TYPES = frozenset({DataType.CHAR, DataType.VARCHAR})
 INT64_MIN = -(1 << 63)
 INT64_MAX = (1 << 63) - 1
 
-# Stable on-disk codes for the metapage's key_type byte. The index stores the
-# column type *once* instead of tagging every key, so these numbers are part of
-# the file format: append, never renumber.
+# Part of the on-disk format (the metapage's key_type byte): append, never
+# renumber.
 _TYPE_CODES = {
     DataType.SMALLINT: 1,
     DataType.INT: 2,
@@ -38,9 +36,6 @@ _TYPE_BY_CODE = {code: dtype for dtype, code in _TYPE_CODES.items()}
 
 
 class UnorderableKey(Exception):
-    """A B+ tree places keys by order, so a value with no total order cannot be
-    indexed. Only NaN qualifies -- unlike the hash index, which rejects every
-    float because it needs bit-exact equality."""
 
     def __init__(self, value: Any):
         self.value = value
@@ -83,9 +78,7 @@ def type_from_code(code: int) -> DataType:
 
 
 def encode(value: Any, dtype: DataType) -> bytes:
-    """Order-preserving serialization: encode(a) < encode(b) as bytes if and
-    only if a < b as values. That is what lets the tree compare keys with the
-    plain bytes '<' and stay ignorant of types."""
+    """Order-preserving: encode(a) < encode(b) as bytes iff a < b as values."""
     raw = _encode(value, dtype)
     if len(raw) > MAX_KEY_SIZE:
         raise KeyTooLong(len(raw))
@@ -94,8 +87,7 @@ def encode(value: Any, dtype: DataType) -> bytes:
 
 def _encode(value: Any, dtype: DataType) -> bytes:
     if dtype == DataType.BOOL:
-        # bool first: in Python bool subclasses int, so an unguarded int branch
-        # would swallow it (same trap as hash_utils._tagged_bytes)
+        # bool first: it subclasses int, so an int branch would swallow it
         if not isinstance(value, bool):
             raise KeyTypeMismatch(value, dtype)
         return b"\x01" if value else b"\x00"
@@ -105,10 +97,7 @@ def _encode(value: Any, dtype: DataType) -> bytes:
             raise KeyTypeMismatch(value, dtype)
         if not INT64_MIN <= value <= INT64_MAX:
             raise ValueError(f"{value} does not fit in a 64-bit integer key")
-        # In two's complement -1 is 0xFF..FF and +1 is 0x00..01, so compared as
-        # unsigned bytes -1 would come out *greater*. Flipping the top bit sends
-        # negatives (which start with 1) down to the low half and positives up,
-        # and there the unsigned order matches the signed one.
+        # flipping the sign bit makes unsigned byte order match signed order
         return struct.pack(">Q", (value & MASK64) ^ SIGN_BIT)
 
     if dtype in _FLOAT_TYPES:
@@ -117,33 +106,26 @@ def _encode(value: Any, dtype: DataType) -> bytes:
         value = float(value)
         if value != value:
             raise UnorderableKey(value)
-        # -0.0 == 0.0 is true in Python but their bit patterns differ, so
-        # without this a row stored under -0.0 would be invisible to a lookup
-        # for 0.0. Collapsing them keeps encode() consistent with ==.
+        # -0.0 == 0.0 but their bit patterns differ, and a row stored under
+        # -0.0 would be invisible to a lookup for 0.0
         if value == 0.0:
             value = 0.0
         bits = struct.unpack(">Q", struct.pack(">d", value))[0]
-        # IEEE-754 is built so two positives compare correctly as integers.
-        # Negatives run backwards (bigger magnitude = bigger pattern), so they
-        # get inverted whole; positives only need their sign bit raised above
-        # every negative.
+        # negatives run backwards as integers, so they get inverted whole
         bits = (~bits & MASK64) if bits & SIGN_BIT else (bits | SIGN_BIT)
         return struct.pack(">Q", bits)
 
     if dtype in _STR_TYPES:
         if not isinstance(value, str):
             raise KeyTypeMismatch(value, dtype)
-        # UTF-8 preserves code point order, so comparing its bytes compares the
-        # strings. No padding and no terminator: Python's bytes already order a
-        # prefix below its extensions, which is exactly "ab" < "abc".
+        # UTF-8 preserves code point order; no padding, so "ab" < "abc" falls out
         return value.encode("utf-8")
 
     raise ValueError(f"{dtype} cannot be indexed by a B+ tree")
 
 
 def decode(raw: bytes, dtype: DataType) -> Any:
-    """Inverse of encode(). Only for diagnostics and error messages -- the hot
-    path compares encoded bytes and never decodes."""
+    """Inverse of encode(). Diagnostics only: the hot path never decodes."""
     if dtype == DataType.BOOL:
         return raw != b"\x00"
 

@@ -4,8 +4,6 @@ from typing import Any
 
 
 class UnhashableKeyType(Exception):
-    """A hash index addresses keys by exact bit equality, so types whose
-    equality is not bit-exact cannot be indexed."""
 
     def __init__(self, value: Any):
         self.value = value
@@ -30,9 +28,8 @@ def _tagged_bytes(key: Any) -> bytes:
 
 
 def stable_hash(key: Any) -> int:
-    """Deterministic, unlike Python's built-in hash(), which is randomized per
-    process for str/bytes and would make a persisted index lose its own keys
-    after a restart."""
+    """Not hash(): that one is randomized per process for str/bytes, so a
+    persisted index would lose its keys on restart."""
     return int.from_bytes(
         hashlib.blake2b(_tagged_bytes(key), digest_size=8).digest(), "big"
     )
