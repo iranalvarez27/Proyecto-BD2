@@ -50,8 +50,7 @@ class ExtendibleHash(Index):
         self._insert_hash(stable_hash(key), rid)
 
     def search(self, key: Any) -> list[RID]:
-        """Candidates, not confirmed matches: the caller must recheck the key
-        against the base record."""
+        """Candidates, not matches: the caller must recheck against the row."""
         key_hash = stable_hash(key)
         out: list[RID] = []
         page_id = self._dir[key_hash & self._mask()]
@@ -104,10 +103,9 @@ class ExtendibleHash(Index):
             # retry: the target bucket is recomputed from scratch
 
     def _is_stuck(self, bucket: BucketPage, key_hash: int) -> bool:
-        """True if splitting would not make room for key_hash: every entry in
-        the primary shares its bit, so it would land in a bucket that's still
-        full. Only the primary is checked (it's already full on its own, so
-        that's enough); the chain is irrelevant to this decision."""
+        """True if splitting would not make room for key_hash: the whole
+        primary falls on its side. The chain is not inspected: the primary is
+        already full on its own, so it settles the question."""
         if bucket.local_depth >= HASH_BITS:
             return True
         bit = 1 << bucket.local_depth
@@ -118,8 +116,8 @@ class ExtendibleHash(Index):
         old_depth = bucket.local_depth
         discriminating_bit = 1 << old_depth
 
-        # split the whole chain, not just the primary, so a chained bucket can
-        # still shrink later instead of freezing forever
+        # the whole chain splits, not just the primary, or a chained bucket
+        # freezes forever
         entries: list[tuple[int, RID]] = []
         spare: list[int] = []
         page = bucket
@@ -136,16 +134,14 @@ class ExtendibleHash(Index):
         for h, rid in entries:
             (move if h & discriminating_bit else keep).append((h, rid))
 
-        # reuse the old primary as the half that stays; recycle old chain pages
-        # for both halves before allocating anything new
+        # the old primary is reused as the half that stays
         image_page_id = spare.pop() if spare else self._alloc_page()
         self._write_chain(page_id, keep, old_depth + 1, spare)
         self._write_chain(image_page_id, move, old_depth + 1, spare)
         for leftover in spare:
             self._free_page(leftover)
 
-        # slots pointing here sit at stride 2**old_depth; group writes by page
-        # instead of one per slot
+        # slots pointing here sit at stride 2**old_depth; one write per page
         low_bits = idx & (discriminating_bit - 1)
         touched: set[int] = set()
         for i in range(low_bits, len(self._dir), discriminating_bit):
@@ -165,7 +161,7 @@ class ExtendibleHash(Index):
         """Write `entries` as a primary at `head_id` plus overflow pages as
         needed, reusing page ids from `spare` before allocating new ones."""
         cap = self._capacity
-        # `or [[]]` so an empty side still writes a (empty) primary page
+        # `or [[]]` so an empty side still gets its primary page
         chunks = [entries[i:i + cap] for i in range(0, len(entries), cap)] or [[]]
 
         page_ids = [head_id]
@@ -182,7 +178,7 @@ class ExtendibleHash(Index):
             self._write_bucket(pid, page)
 
     def _double_directory(self) -> None:
-        # last-d-bits scheme: doubling is just concatenation (R&G p. 285)
+        # last-d-bits scheme: doubling is concatenation
         self._dir = self._dir + self._dir
         self._global_depth += 1
         self._grow_dir_pages()
@@ -206,15 +202,14 @@ class ExtendibleHash(Index):
         new_page.add(key_hash, rid)
         new_page.overflow_page_id = first_id
         new_id = self._alloc_page()
-        # the new page is written before the primary points at it, so a crash
-        # leaves an orphan page rather than a dangling pointer
+        # written before the primary points at it: a crash leaves an orphan
+        # page rather than a dangling pointer
         self._write_bucket(new_id, new_page)
         primary.overflow_page_id = new_id
         self._write_bucket(primary_id, primary)
 
     def _consolidate(self, page_id: int, page: BucketPage) -> None:
-        """Pull the next link of the chain up when it fits, which also covers
-        the case where it became empty. At most one page per delete."""
+        """Pulls the next link up when it fits. At most one page per delete."""
         next_id = page.overflow_page_id
         if next_id == NIL:
             return
@@ -229,12 +224,9 @@ class ExtendibleHash(Index):
     # ------------------------------------------------------------ maintenance
 
     def rebuild(self) -> None:
-        """Reload every entry into a fresh index, compacting it.
-
-        Deletes never fuse two buckets back together, so one the deletes
-        emptied keeps its page and its directory slots; rebuilding is the only
-        way that space comes back. Overflow pages are a separate story --
-        _consolidate frees those on every delete."""
+        """Reload every entry into a fresh index, compacting it. Deletes never
+        fuse two buckets, so an emptied one keeps its page and its directory
+        slots until this runs."""
         entries = [(h, rid) for _, page in self._iter_pages() for h, rid in page.entries]
         tmp_path = self._path + ".rebuild"
         fresh = ExtendibleHash(tmp_path, bucket_capacity=self._capacity)
@@ -277,8 +269,8 @@ class ExtendibleHash(Index):
         return page_id
 
     def _free_page(self, page_id: int) -> None:
-        """A freed page sits in the middle of the file -- truncating would move
-        every later page and invalidate the directory, so it goes on the list."""
+        """Freed pages sit mid-file: truncating would invalidate every later
+        page id, so they go on the list instead."""
         buf = bytearray(PAGE_SIZE)
         struct.pack_into("<i", buf, 0, self._free_list_head)
         self._write_raw(page_id, bytes(buf))
@@ -368,8 +360,6 @@ class ExtendibleHash(Index):
         for k in range(len(self._dir_pages)):
             self._write_dir_page(k)
 
-    # ------------------------------------------------------------------ debug
-
     def _iter_pages(self):
         """Every live page reachable from the directory, primaries first."""
         for page_id in dict.fromkeys(self._dir):  # dedup, keep order
@@ -377,84 +367,3 @@ class ExtendibleHash(Index):
                 page = self._read_bucket(page_id)
                 yield page_id, page
                 page_id = page.overflow_page_id
-
-    def stats(self) -> dict:
-        primaries = overflow = entries = 0
-        for _, page in self._iter_pages():
-            entries += len(page.entries)
-            if page.is_overflow:
-                overflow += 1
-            else:
-                primaries += 1
-
-        free = 0
-        page_id = self._free_list_head
-        while page_id != NIL:
-            free += 1
-            page_id = struct.unpack_from("<i", self._read_raw(page_id), 0)[0]
-
-        return {
-            "global_depth": self._global_depth,
-            "directory_size": len(self._dir),
-            "directory_pages": len(self._dir_pages),
-            "primary_buckets": primaries,
-            "overflow_pages": overflow,
-            "free_pages": free,
-            "file_pages": self._page_count(),
-            "entries": entries,
-            "capacity": self._capacity,
-        }
-
-
-if __name__ == "__main__":
-    import shutil
-    import tempfile
-
-    from index.hash_utils import UnhashableKeyType
-
-    tmp = tempfile.mkdtemp(prefix="eh_demo_")
-    path = os.path.join(tmp, "alumnos_edad.idx")
-
-    # tiny buckets so splits happen fast, like the book's "4 entries per bucket"
-    eh = ExtendibleHash(path, bucket_capacity=4)
-
-    print("insert 0..19 (unique keys)")
-    for i in range(20):
-        eh.insert(i, RID(page_id=i // 10, slot_id=i % 10))
-    print("stats:", eh.stats())
-
-    print("\nsearch(7):", eh.search(7))
-    print("search(999) (absent):", eh.search(999))
-
-    print("\ndelete(7):", eh.delete(7, RID(page_id=0, slot_id=7)))
-    print("search(7) after delete:", eh.search(7))
-    print("delete(7) again:", eh.delete(7, RID(page_id=0, slot_id=7)))
-
-    print("\ninsert 10 duplicates of 'dup' -> forces an overflow chain")
-    for s in range(10):
-        eh.insert("dup", RID(page_id=42, slot_id=s))
-    print("stats:", eh.stats())
-    print("search('dup') count:", len(eh.search("dup")))
-
-    print("\ndelete 6 of them -> chain consolidates and frees pages")
-    for s in range(6):
-        eh.delete("dup", RID(page_id=42, slot_id=s))
-    print("stats:", eh.stats())
-
-    print("\nreopen from disk")
-    eh2 = ExtendibleHash(path)
-    print("stats:", eh2.stats())
-    print("search(15):", eh2.search(15))
-    print("search('dup') count:", len(eh2.search("dup")))
-
-    try:
-        eh2.range_search(1, 5)
-    except NotImplementedError as e:
-        print("\nrange_search ->", e)
-
-    try:
-        eh2.insert(3.14, RID(0, 0))
-    except UnhashableKeyType as e:
-        print("insert(3.14) ->", e)
-
-    shutil.rmtree(tmp)

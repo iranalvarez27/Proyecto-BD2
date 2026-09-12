@@ -11,21 +11,19 @@ PAGE_SIZE = 4096
 HEADER_FORMAT = "<BBHiii"
 HEADER_SIZE = struct.calcsize(HEADER_FORMAT)  # 16
 
-# Every entry is  key_len (u16) | payload | key_bytes.  The length prefix goes
-# first so skipping an entry without decoding it is "read 2 bytes and add".
+# entry: key_len (u16) | payload | key_bytes
 KEY_LEN_FORMAT = "<H"
 KEY_LEN_SIZE = struct.calcsize(KEY_LEN_FORMAT)  # 2
 
 USABLE = PAGE_SIZE - HEADER_SIZE  # 4080
-HALF = USABLE // 2  # 2040 -- merge threshold
-QUARTER = USABLE // 4  # 1020 -- verifiable floor, see NodePage.min_fill_ok
+HALF = USABLE // 2  # merge threshold
+QUARTER = USABLE // 4  # verifiable occupancy floor
 
 NIL = -1
 
 
 class ChildCodec:
-    """Payload of an inner slot: the page id of its *left* child. With the last
-    child in the page header, n keys address n+1 children."""
+    """Inner slot payload: the page id of its left child."""
 
     size = 4
 
@@ -37,7 +35,7 @@ class ChildCodec:
 
 
 class RIDCodec:
-    """Payload of an unclustered leaf: where the row lives in the heap file."""
+    """Unclustered leaf payload: where the row lives."""
 
     size = 8
 
@@ -50,8 +48,7 @@ class RIDCodec:
 
 
 class PageIdCodec:
-    """Payload of a clustered leaf: a page of the sequential file's MAIN area.
-    One entry per page, not per row."""
+    """Clustered leaf payload: a MAIN page, one entry per page not per row."""
 
     size = 4
 
@@ -68,8 +65,8 @@ PAGE_ID_CODEC = PageIdCodec()
 
 
 class NodePage:
-    """A B+ tree node: (key, payload) entries kept in key order, plus a
-    header. Keys are opaque order-preserving bytes (see key_codec)."""
+    """A B+ tree node: (key, payload) entries in key order. Keys are opaque
+    order-preserving bytes, so the node never knows what type it indexes."""
 
     def __init__(self, is_leaf: bool, leaf_codec=RID_CODEC):
         self.is_leaf = is_leaf
@@ -100,28 +97,26 @@ class NodePage:
         return self.byte_size() + self.entry_size(key) <= PAGE_SIZE
 
     def is_underfull(self) -> bool:
-        """Below half the usable space -- triggers borrow/merge."""
+        """Below half the usable space: triggers borrow/merge."""
         return self.byte_size() - HEADER_SIZE < HALF
 
     def min_fill_ok(self) -> bool:
-        """The occupancy floor a split can actually guarantee (QUARTER, not
-        HALF): with variable-width keys a cut can't always land near the
-        middle. Checked on every node but the root. Kept separate from
-        is_underfull(), the merge trigger, which needs the exact HALF."""
+        """QUARTER, not HALF: with variable-width keys a split cannot always
+        cut near the middle. Every node but the root."""
         return self.byte_size() - HEADER_SIZE >= QUARTER
 
     def can_lend(self, i: int) -> bool:
-        """Whether giving entry `i` to a sibling leaves this node still at
-        least half full. Takes the index because a left sibling lends its
-        last entry and a right one its first, and they're not the same size."""
+        """Whether giving entry `i` away leaves this node still half full.
+        Takes the index: a left sibling lends its last, a right one its
+        first, and they are not the same size."""
         if self.count == 0:
             return False
         return self.byte_size() - HEADER_SIZE - self.entry_size(self.keys[i]) >= HALF
 
     def can_replace(self, i: int, key: bytes) -> bool:
-        """Whether swapping entry `i`'s key for `key` keeps the node inside a
-        page. Borrowing and rebalancing raise a separator to a child's new
-        minimum, and a wider key there can push the parent past 4096 B."""
+        """Whether swapping entry `i`'s key for `key` still fits. A separator
+        raised to a child's new minimum can be wider than the one it
+        replaces."""
         return (self.byte_size() - self.entry_size(self.keys[i])
                 + self.entry_size(key)) <= PAGE_SIZE
 
@@ -157,8 +152,7 @@ class NodePage:
     # -------------------------------------------------------------- split
 
     def split_index(self, keys: list[bytes], min_left: int = 1, min_right: int = 1) -> int:
-        """Where to cut `keys` (already overflowing a page) so both halves fit
-        and are as even as possible."""
+        """Where to cut `keys` (already overflowing) so both halves fit."""
         sizes = [self.entry_size(k) for k in keys]
         total = sum(sizes)
 

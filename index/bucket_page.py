@@ -18,8 +18,6 @@ HEADER_SIZE = struct.calcsize(HEADER_FORMAT)  # 16
 ENTRY_FORMAT = "<Qii"
 ENTRY_SIZE = struct.calcsize(ENTRY_FORMAT)  # 16
 
-# Physical ceiling. A 16-byte header leaves exactly 255 entries with no dead
-# bytes; an 8-byte header would also give 255 but waste the leftover 8.
 MAX_ENTRIES = (PAGE_SIZE - HEADER_SIZE) // ENTRY_SIZE  # 255
 
 
@@ -40,8 +38,7 @@ class BucketPage:
         self.entries.append((key_hash, rid))
 
     def remove(self, key_hash: int, rid: RID) -> bool:
-        """Removes a single occurrence: the index mirrors the base file, and two
-        identical rows there mean two identical entries here."""
+        """Removes one occurrence, not all matches."""
         for i, (h, r) in enumerate(self.entries):
             if h == key_hash and r == rid:
                 self.entries.pop(i)

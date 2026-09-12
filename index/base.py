@@ -14,9 +14,7 @@ class Index(ABC):
 
     @abstractmethod
     def range_search(self, low: Any, high: Any) -> list[RID]:
-        """Inclusive [low, high]. Not implemented by ExtendibleHash: hashing
-        destroys key ordering, so a range would require scanning every
-        bucket (worse than a linear scan)."""
+        """Inclusive [low, high]. ExtendibleHash raises NotImplementedError."""
         ...
 
     @abstractmethod
