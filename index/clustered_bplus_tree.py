@@ -12,8 +12,7 @@ from storage.sequential_file import AUX_FILE, MAIN_FILE, SequentialEntry, Sequen
 
 
 class ClusteredBPlusTree:
-    """Clustered B+ tree over a SequentialFile's primary key: one leaf entry
-    per MAIN page, rebuilt by bulk load on every reorganization."""
+    """Clustered B+ tree over a SequentialFile's primary key."""
 
     def __init__(self, seq: SequentialFile, index_path: str):
         self._seq = seq
@@ -29,7 +28,7 @@ class ClusteredBPlusTree:
         else:
             self._n_main = sum(1 for _ in self._main_rows())
 
-    # --------------------------------------------------------------- lectura
+    # ----------------------------------------------------------------- reads
 
     def search(self, key):
         """Two sources: the MAIN page the tree points at, then AUX."""
@@ -44,8 +43,8 @@ class ClusteredBPlusTree:
         return None
 
     def range_search(self, low, high) -> list[Record]:
-        """Inclusive [low, high]. No leaf chain: MAIN pages are walked by
-        consecutive page id, since logical and physical order match here."""
+        """Inclusive [low, high]. MAIN pages are walked by consecutive page
+        id, since logical and physical order match here."""
         if low > high:
             return []
         start = self._tree.floor(low)
@@ -62,7 +61,6 @@ class ClusteredBPlusTree:
             if done:
                 break
 
-        # AUX esta acotado, asi que entra en RAM
         from_aux = sorted(
             (self._key_of(e), e.record)
             for e in self._aux_rows()
@@ -70,15 +68,12 @@ class ClusteredBPlusTree:
         )
         return [r for _, r in heapq.merge(from_main, from_aux, key=lambda t: t[0])]
 
-    # -------------------------------------------------------------- escritura
+    # ---------------------------------------------------------------- writes
 
     def insert(self, record: Record) -> None:
         key = record.values[self._key_index]
         if self.search(key) is not None:
-            # el SequentialFile no valida unicidad por su cuenta
             raise DuplicateKey(key)
-        # SequentialFile.insert appendea a MAIN, no a AUX, cuando el archivo no
-        # tiene filas vivas; eso si rompe el descenso, asi que se reconstruye
         before = self._main_extent()
         self._seq.insert(record)
         if self._main_extent() != before:
@@ -87,7 +82,6 @@ class ClusteredBPlusTree:
             self.reorganize()
 
     def delete(self, key) -> bool:
-        """El arbol no se toca. O(n) porque lo es SequentialFile.delete."""
         if not self._seq.delete(key):
             return False
         if self._seq.needs_reorganization():
@@ -98,24 +92,22 @@ class ClusteredBPlusTree:
         self._seq.reorganize()
         self._rebuild()
 
-    # ------------------------------------------------------------- politica
+    # --------------------------------------------------------------- policy
 
     def aux_limit(self) -> int:
-        """k < log2(n): mantiene el escaneo lineal de AUX del mismo orden que
-        el descenso."""
         return max(1, int(math.log2(max(self._n_main, 2))))
 
     def aux_count(self) -> int:
         return sum(1 for _ in self._aux_rows())
 
-    # -------------------------------------------------------------- interno
+    # ------------------------------------------------------------- internals
 
     def _key_of(self, entry: SequentialEntry):
         return entry.record.values[self._key_index]
 
     def _main_extent(self) -> tuple[int, int]:
-        """Page count plus the last page's slot count: detects a write to MAIN
-        using only the sequential file's public API."""
+        """Page count plus the last page's slot count: detects a write to
+        MAIN using only the sequential file's public API."""
         pages = self._seq.page_count(MAIN_FILE)
         if pages == 0:
             return (0, 0)

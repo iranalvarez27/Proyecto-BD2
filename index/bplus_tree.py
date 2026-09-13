@@ -25,7 +25,7 @@ MAGIC = b"BPIX"
 VERSION = 1
 META_PAGE = 0
 
-# magic | version | flags | key_type | root | height | payload_size | free_list_head | n_entries
+# magic | version | flags | key_type | root | height | payload_size | free_list_head | reserved
 META_FORMAT = "<4sHBBiHHiq"
 META_SIZE = struct.calcsize(META_FORMAT)  # 28
 
@@ -41,8 +41,8 @@ class DuplicateKey(Exception):
 
 class BPlusTree(Index):
     """B+ tree over one file: page 0 is the metapage, nodes and free pages
-    interleaved after it. Stores the key, so a match is a match; keys are
-    variable width, so a node splits by bytes and not by an order M."""
+    interleaved after it. Keys are variable width, so a node splits by bytes
+    and not by an order M."""
 
     def __init__(
         self,
@@ -89,7 +89,7 @@ class BPlusTree(Index):
         page_id = self._root
         node = self._read_node(page_id)
         while not node.is_leaf:
-            i = bisect_left(node.keys, k)  # bisect_left, no `<`: hay repetidas
+            i = bisect_left(node.keys, k)
             path.append((page_id, i))
             page_id = node.child(i)
             node = self._read_node(page_id)
@@ -98,33 +98,24 @@ class BPlusTree(Index):
         if self._unique and self._present(node, i, k):
             raise DuplicateKey(decode(k, self._key_type))
 
-        # caso 1: entra, y entonces no se toca ningun nodo interno
         if node.will_fit(k):
             node.insert(i, k, payload)
             self._write_node(page_id, node)
-            self._n_entries += 1
-            self._flush_meta()
             return
 
-        # caso 2: se parte la hoja y el aviso sube
         sep, right_id = self._split_leaf(page_id, node, i, k, payload)
-        self._n_entries += 1
 
         while path:
             parent_id, idx = path.pop()
             parent = self._read_node(parent_id)
-            # la mitad izquierda reuso la pagina vieja: el hijo en idx ya es el
-            # correcto, solo hay que reapuntar el que quedo a su derecha
             parent.insert(idx, sep, parent.child(idx))
             parent.set_child(idx + 1, right_id)
 
             if parent.byte_size() <= PAGE_SIZE:
                 self._write_node(parent_id, parent)
-                self._flush_meta()
                 return
             sep, right_id = self._split_inner(parent_id, parent)
 
-        # caso 3: se partio la raiz, el arbol crece hacia arriba
         new_root_id = self._alloc_page()
         new_root = NodePage(is_leaf=False)
         new_root.append(sep, self._root)
@@ -136,7 +127,7 @@ class BPlusTree(Index):
 
     def _split_leaf(self, page_id: int, leaf: NodePage, i: int, k: bytes, payload):
         """Returns (separator, right_page_id). The separator is copied, not
-        lifted: it is a datum and has to stay in the right half too."""
+        lifted: it is a datum and stays in the right half too."""
         keys = leaf.keys[:i] + [k] + leaf.keys[i:]
         payloads = leaf.payloads[:i] + [payload] + leaf.payloads[i:]
         m = leaf.split_index(keys)
@@ -150,8 +141,6 @@ class BPlusTree(Index):
         old_next = leaf.next_page
         leaf.keys, leaf.payloads = keys[:m], payloads[:m]
         leaf.next_page = right_id
-        # prev_page no se toca: reusar la pagina deja intacto el `next` del
-        # vecino izquierdo y el puntero del padre
 
         self._write_node(page_id, leaf)
         self._write_node(right_id, right)
@@ -163,11 +152,11 @@ class BPlusTree(Index):
         return keys[m], right_id
 
     def _split_inner(self, page_id: int, node: NodePage):
-        """Returns (separator, right_page_id). Here the middle key is lifted:
-        it is a signpost, so it disappears from both children."""
+        """Returns (separator, right_page_id). The middle key is lifted: it
+        is a signpost, so it leaves both children."""
         m = node.split_index(node.keys, min_right=2)
         mid_key = node.keys[m]
-        mid_child = node.payloads[m]  # el subarbol de lo menor que la que sube
+        mid_child = node.payloads[m]
 
         right_id = self._alloc_page()
         right = NodePage(is_leaf=False)
@@ -181,7 +170,7 @@ class BPlusTree(Index):
         self._write_node(right_id, right)
         return mid_key, right_id
 
-    # --------------------------------------------------------------- borrado
+    # -------------------------------------------------------------- deletion
 
     def _delete_raw(self, k: bytes, payload) -> bool:
         path: list[tuple[int, int]] = []
@@ -195,8 +184,6 @@ class BPlusTree(Index):
 
         i = bisect_left(leaf.keys, k)
         if i == leaf.count:
-            # el descenso frena una hoja antes cuando la clave es un separador,
-            # por el mismo motivo que _present
             page_id, leaf = self._advance(path)
             i = 0
             while leaf is not None and leaf.count == 0:
@@ -206,9 +193,6 @@ class BPlusTree(Index):
         elif leaf.keys[i] != k:
             return False
 
-        # el RID pedido puede estar en cualquier copia de la clave, hasta en
-        # una hoja posterior: se lo pisa con el payload de la primera y se
-        # borra esa, que es la unica con camino de padres conocido
         found = self._find_payload(page_id, leaf, i, k, payload)
         if found is None:
             return False
@@ -220,16 +204,14 @@ class BPlusTree(Index):
         old_min = leaf.keys[0]
         leaf.remove(i)
         self._write_node(page_id, leaf)
-        self._n_entries -= 1
 
         new_min = leaf.keys[0] if leaf.count and leaf.keys[0] != old_min else None
         self._rebalance(path, new_min)
-        self._flush_meta()
         return True
 
     def _find_payload(self, page_id: int, leaf: NodePage, i: int, k: bytes, payload):
-        """Walks leaves forward from (leaf, i) while the key matches, looking
-        for this exact payload. Returns (page_id, node, slot) or None."""
+        """Finds this exact payload from (leaf, i) forward, while the key
+        matches. Returns (page_id, node, slot) or None."""
         node_id, node, j = page_id, leaf, i
         while True:
             if j == node.count:
@@ -246,8 +228,7 @@ class BPlusTree(Index):
             j += 1
 
     def _advance(self, path: list[tuple[int, int]]):
-        """Steps one leaf right keeping the parent path valid, which is what
-        next_page alone cannot do and the rebalance needs."""
+        """Steps one leaf right keeping the parent path valid."""
         while path:
             parent_id, idx = path[-1]
             parent = self._read_node(parent_id)
@@ -269,11 +250,7 @@ class BPlusTree(Index):
             parent = self._read_node(parent_id)
             dirty = False
 
-            # el separador de este hijo es el de idx-1; con idx == 0 esta mas
-            # arriba, asi que se sigue subiendo
             if new_min is not None and idx > 0:
-                # si no entra se deja el viejo: queda por debajo del minimo
-                # real, y el descenso sigue cayendo en el hijo correcto
                 if parent.can_replace(idx - 1, new_min):
                     parent.keys[idx - 1] = new_min
                     dirty = True
@@ -293,21 +270,17 @@ class BPlusTree(Index):
             if new_min is None and not parent.is_underfull():
                 break
 
-        # la raiz se queda sin claves y con un solo hijo: sobra, y el arbol baja
         root = self._read_node(self._root)
         if not root.is_leaf and root.count == 0:
             old_root = self._root
             self._root = root.last_child
             self._height -= 1
             self._free_page(old_root)
+            self._flush_meta()
 
     def _borrow(self, parent: NodePage, idx: int, node_id: int, node: NodePage) -> bool:
-        """Takes one entry from a sibling that can spare it, trying the left
-        one first. False if neither side works, and then the caller merges.
-
-        Three things must fit: the entry here, the sibling staying half full,
-        and the parent, whose separator can be replaced by a wider key.
-        Nothing is mutated until all three hold, so a failed side moves on."""
+        """Takes one entry from a sibling that can spare it, left one first.
+        False if neither side works, and then the caller merges."""
         for side in (-1, +1):
             sib_idx = idx + side
             if not 0 <= sib_idx <= parent.count:
@@ -320,8 +293,6 @@ class BPlusTree(Index):
             sep_idx = idx - 1 if side < 0 else idx
 
             if node.is_leaf:
-                # el separador pasa a ser la clave que queda al frente del nodo
-                # de la derecha; can_lend garantiza que esa segunda clave existe
                 moving = sib.keys[take]
                 new_sep = moving if side < 0 else sib.keys[1]
                 if not node.will_fit(moving) or not parent.can_replace(sep_idx, new_sep):
@@ -332,8 +303,6 @@ class BPlusTree(Index):
                 else:
                     node.append(key, pay)
             else:
-                # rotacion de tres partes: una clave interna es un separador y
-                # no puede saltar de nodo sin pasar por el padre
                 lowered = parent.keys[sep_idx]
                 new_sep = sib.keys[take]
                 if not node.will_fit(lowered) or not parent.can_replace(sep_idx, new_sep):
@@ -353,10 +322,10 @@ class BPlusTree(Index):
         return False
 
     def _merge(self, parent: NodePage, idx: int) -> int | None:
-        """Merges child idx with the one to its right, so there is a single
-        case; the last child is absorbed by its left sibling instead."""
+        """Merges child idx with the one to its right, or into its left
+        sibling when it is the last child."""
         if idx == parent.count:
-            idx -= 1  # somos el ultimo hijo: nos absorbe el hermano izquierdo
+            idx -= 1
         if idx < 0:
             return None
 
@@ -365,7 +334,7 @@ class BPlusTree(Index):
 
         extra = 0 if left.is_leaf else left.entry_size(parent.keys[idx])
         if left.byte_size() + right.byte_size() - HEADER_SIZE + extra > PAGE_SIZE:
-            return None  # no entran juntos; queda corto, que es legal
+            return None
 
         if left.is_leaf:
             left.keys += right.keys
@@ -376,13 +345,11 @@ class BPlusTree(Index):
                 after.prev_page = left_id
                 self._write_node(right.next_page, after)
         else:
-            # el separador del padre baja y se vuelve una clave mas
             left.append(parent.keys[idx], left.last_child)
             left.keys += right.keys
             left.payloads += right.payloads
             left.last_child = right.last_child
 
-        # sacar el separador del padre sin perder el hijo que sobrevive
         if idx == parent.count - 1:
             parent.remove(idx)
             parent.last_child = left_id
@@ -399,12 +366,9 @@ class BPlusTree(Index):
     @staticmethod
     def _pack(sizes: list[int], capacity: int, gap: int = 0) -> list[tuple[int, int]]:
         """Cuts consecutive items into runs that each fit in `capacity`.
-
-        `gap` is how many items are consumed at each boundary instead of going
-        into either run: 0 for leaves, 1 for inner levels, where the separator
-        between two parents belongs to neither and rises a level instead.
-
-        The last two runs are evened out when the last comes up short."""
+        `gap` items are dropped at every boundary: 0 for leaves, 1 for inner
+        levels, where the separator rises instead. The last two runs are
+        evened out when the last comes up short."""
         runs: list[tuple[int, int]] = []
         start = used = i = 0
         while i < len(sizes):
@@ -434,9 +398,7 @@ class BPlusTree(Index):
 
     def bulk_load(self, pairs) -> None:
         """Rebuilds the tree from (key, payload) pairs already in ascending
-        order, bottom up in one pass: no descent, no split, no page written
-        twice. Leaves fill to 100% because the clustered tree that uses this
-        is immutable between reorganizations."""
+        order, bottom up in one pass. Leaves fill to 100%."""
         self._truncate_to_meta()
         codec = self._leaf_codec
 
@@ -454,17 +416,15 @@ class BPlusTree(Index):
             keys.append(k)
             payloads.append(payload)
 
-        self._n_entries = len(keys)
         self._height = 1
 
-        if not keys:  # indice vacio: una hoja raiz y nada mas
+        if not keys:
             self._root = self._append_raw(
                 NodePage(is_leaf=True, leaf_codec=codec).to_bytes()
             )
             self._flush_meta()
             return
 
-        # nivel 0: hojas, con ids consecutivos y la cadena ya enlazada
         runs = self._pack([KEY_LEN_SIZE + codec.size + len(k) for k in keys], USABLE)
         first = self._page_count()
         level: list[tuple[bytes, int]] = []
@@ -475,11 +435,7 @@ class BPlusTree(Index):
             leaf.next_page = first + j + 1 if j < len(runs) - 1 else NIL
             level.append((keys[a], self._append_raw(leaf.to_bytes())))
 
-        # niveles superiores
-        # se agrupan los SEPARADORES, no los hijos: s separadores dan un nodo
-        # de s+1 hijos, asi que ninguno puede quedar sin claves
         while len(level) > 1:
-            # seps[t] = (minimo del hijo t+1, id del hijo t)
             seps = [(level[i][0], level[i - 1][1]) for i in range(1, len(level))]
             runs = self._pack([KEY_LEN_SIZE + CHILD_CODEC.size + len(k)
                                for k, _ in seps], USABLE, gap=1)
@@ -502,9 +458,8 @@ class BPlusTree(Index):
         self._free_list_head = NIL
 
     def floor(self, key: Any):
-        """Payload of the greatest entry whose key is <= `key`, or None. The
-        clustered lookup: its entries are page minimums, so this is "the last
-        page whose minimum does not exceed the key". Assumes unique keys."""
+        """Payload of the greatest entry whose key is <= `key`, or None.
+        Assumes unique keys."""
         k = encode(key, self._key_type)
         node = self._read_node(self._root)
         while not node.is_leaf:
@@ -518,13 +473,12 @@ class BPlusTree(Index):
                 return node.payloads[-1]
         return None
 
-    # ---------------------------------------------------------------- lectura
+    # ------------------------------------------------------------------ reads
 
     def _present(self, leaf: NodePage, i: int, k: bytes) -> bool:
         """Whether `k` is already in the index, given the leaf the descent
-        reached and `i = lower_bound(leaf, k)`. Checking `leaf.keys[i]` alone
-        is not enough: when `k` is itself a separator it sits at the front of
-        the *next* leaf, one past where the descent stops."""
+        reached and `i = lower_bound(leaf, k)`. A `k` that is a separator sits
+        at the front of the next leaf, one past where the descent stops."""
         if i < leaf.count:
             return leaf.keys[i] == k
         while leaf.next_page != NIL:
@@ -576,7 +530,7 @@ class BPlusTree(Index):
             node = self._read_node(page_id)
         return page_id
 
-    # ------------------------------------------------------------ paginas
+    # -------------------------------------------------------------- pages
 
     def _page_count(self) -> int:
         return os.path.getsize(self._path) // PAGE_SIZE
@@ -598,8 +552,7 @@ class BPlusTree(Index):
         return page_id
 
     def _alloc_page(self) -> int:
-        """Reuses a freed page before growing the file: merges free pages
-        mid-file, and truncating would invalidate every later page id."""
+        """Reuses a freed page before growing the file."""
         if self._free_list_head != NIL:
             page_id = self._free_list_head
             self._free_list_head = struct.unpack_from("<i", self._read_raw(page_id), 0)[0]
@@ -620,26 +573,25 @@ class BPlusTree(Index):
     def _write_node(self, page_id: int, node: NodePage) -> None:
         self._write_raw(page_id, node.to_bytes())
 
-    # ------------------------------------------------------------ metapagina
+    # -------------------------------------------------------------- metapage
 
     def _create(self, key_type: DataType, unique: bool, clustered: bool) -> None:
         self._key_type = key_type
-        self._unique = unique or clustered  # una PK agrupada es unica por definicion
+        self._unique = unique or clustered
         self._clustered = clustered
         self._leaf_codec = PAGE_ID_CODEC if clustered else RID_CODEC
         self._root = 1
         self._height = 1
         self._free_list_head = NIL
-        self._n_entries = 0
 
         with open(self._path, "wb") as f:
-            f.write(bytes(PAGE_SIZE))  # metapagina, se completa abajo
+            f.write(bytes(PAGE_SIZE))
             f.write(NodePage(is_leaf=True, leaf_codec=self._leaf_codec).to_bytes())
         self._flush_meta()
 
     def _load(self) -> None:
         (magic, version, flags, key_type, root, height,
-         payload_size, free_list_head, n_entries) = struct.unpack_from(
+         payload_size, free_list_head, _reserved) = struct.unpack_from(
             META_FORMAT, self._read_raw(META_PAGE), 0
         )
         if magic != MAGIC:
@@ -660,7 +612,6 @@ class BPlusTree(Index):
         self._root = root
         self._height = height
         self._free_list_head = free_list_head
-        self._n_entries = n_entries
 
     def _flush_meta(self) -> None:
         flags = (FLAG_UNIQUE if self._unique else 0) | (FLAG_CLUSTERED if self._clustered else 0)
@@ -669,6 +620,6 @@ class BPlusTree(Index):
             META_FORMAT, buf, 0,
             MAGIC, VERSION, flags, type_code(self._key_type),
             self._root, self._height, self._leaf_codec.size,
-            self._free_list_head, self._n_entries,
+            self._free_list_head, 0,
         )
         self._write_raw(META_PAGE, bytes(buf))

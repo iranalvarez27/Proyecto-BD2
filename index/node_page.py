@@ -65,8 +65,8 @@ PAGE_ID_CODEC = PageIdCodec()
 
 
 class NodePage:
-    """A B+ tree node: (key, payload) entries in key order. Keys are opaque
-    order-preserving bytes, so the node never knows what type it indexes."""
+    """A B+ tree node: (key, payload) entries in key order, keys as opaque
+    order-preserving bytes."""
 
     def __init__(self, is_leaf: bool, leaf_codec=RID_CODEC):
         self.is_leaf = is_leaf
@@ -101,22 +101,18 @@ class NodePage:
         return self.byte_size() - HEADER_SIZE < HALF
 
     def min_fill_ok(self) -> bool:
-        """QUARTER, not HALF: with variable-width keys a split cannot always
-        cut near the middle. Every node but the root."""
+        """QUARTER, not HALF: a variable-width split cannot always cut near
+        the middle."""
         return self.byte_size() - HEADER_SIZE >= QUARTER
 
     def can_lend(self, i: int) -> bool:
-        """Whether giving entry `i` away leaves this node still half full.
-        Takes the index: a left sibling lends its last, a right one its
-        first, and they are not the same size."""
+        """Whether giving entry `i` away leaves this node still half full."""
         if self.count == 0:
             return False
         return self.byte_size() - HEADER_SIZE - self.entry_size(self.keys[i]) >= HALF
 
     def can_replace(self, i: int, key: bytes) -> bool:
-        """Whether swapping entry `i`'s key for `key` still fits. A separator
-        raised to a child's new minimum can be wider than the one it
-        replaces."""
+        """Whether swapping entry `i`'s key for `key` still fits."""
         return (self.byte_size() - self.entry_size(self.keys[i])
                 + self.entry_size(key)) <= PAGE_SIZE
 
