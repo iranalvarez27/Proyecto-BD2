@@ -6,4 +6,7 @@ __pycache__/
 *.dat
 *.db
 *.bin
+*.idx
+data/
+node_modules/
 .DS_Store
