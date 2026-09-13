@@ -15,7 +15,6 @@ class UnhashableKeyType(Exception):
 
 def _tagged_bytes(key: Any) -> bytes:
     """Serialize with a type tag, so that 1 and "1" do not collide."""
-    # bool first: in Python bool subclasses int, so isinstance(True, int) is True
     if isinstance(key, bool):
         return b"b" + (b"\x01" if key else b"\x00")
     if isinstance(key, int):
@@ -28,8 +27,8 @@ def _tagged_bytes(key: Any) -> bytes:
 
 
 def stable_hash(key: Any) -> int:
-    """Not hash(): that one is randomized per process for str/bytes, so a
-    persisted index would lose its keys on restart."""
+    """Not hash(): that one is randomized per process, so the keys would not
+    survive a restart."""
     return int.from_bytes(
         hashlib.blake2b(_tagged_bytes(key), digest_size=8).digest(), "big"
     )

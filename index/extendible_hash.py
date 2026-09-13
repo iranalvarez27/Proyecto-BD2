@@ -32,8 +32,7 @@ NIL = -1
 
 
 class ExtendibleHash(Index):
-    """Non-clustered hash index: lossy (stores hash + RID, not the key), no
-    range queries."""
+    """Non-clustered hash index: lossy (hash + RID, not the key), no ranges."""
 
     def __init__(self, path: str, bucket_capacity: int = MAX_ENTRIES):
         self._path = path
@@ -103,9 +102,7 @@ class ExtendibleHash(Index):
             # retry: the target bucket is recomputed from scratch
 
     def _is_stuck(self, bucket: BucketPage, key_hash: int) -> bool:
-        """True if splitting would not make room for key_hash: the whole
-        primary falls on its side. The chain is not inspected: the primary is
-        already full on its own, so it settles the question."""
+        """True if splitting would not make room for key_hash."""
         if bucket.local_depth >= HASH_BITS:
             return True
         bit = 1 << bucket.local_depth
@@ -158,8 +155,7 @@ class ExtendibleHash(Index):
         local_depth: int,
         spare: list[int],
     ) -> None:
-        """Write `entries` as a primary at `head_id` plus overflow pages as
-        needed, reusing page ids from `spare` before allocating new ones."""
+        """Write `entries` at `head_id` plus overflow pages, reusing `spare`."""
         cap = self._capacity
         # `or [[]]` so an empty side still gets its primary page
         chunks = [entries[i:i + cap] for i in range(0, len(entries), cap)] or [[]]
@@ -224,9 +220,7 @@ class ExtendibleHash(Index):
     # ------------------------------------------------------------ maintenance
 
     def rebuild(self) -> None:
-        """Reload every entry into a fresh index, compacting it. Deletes never
-        fuse two buckets, so an emptied one keeps its page and its directory
-        slots until this runs."""
+        """Reload every entry into a fresh index, compacting it."""
         entries = [(h, rid) for _, page in self._iter_pages() for h, rid in page.entries]
         tmp_path = self._path + ".rebuild"
         fresh = ExtendibleHash(tmp_path, bucket_capacity=self._capacity)
@@ -269,8 +263,7 @@ class ExtendibleHash(Index):
         return page_id
 
     def _free_page(self, page_id: int) -> None:
-        """Freed pages sit mid-file: truncating would invalidate every later
-        page id, so they go on the list instead."""
+        """Freed pages go on the list: truncating would shift later page ids."""
         buf = bytearray(PAGE_SIZE)
         struct.pack_into("<i", buf, 0, self._free_list_head)
         self._write_raw(page_id, bytes(buf))
