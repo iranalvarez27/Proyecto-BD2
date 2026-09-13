@@ -19,6 +19,7 @@ from query.catalog import (
     STORAGE_SEQUENTIAL,
     INDEX_BPLUS,
     INDEX_HASH,
+    INDEX_CLUSTERED,
 )
 from query.conexion import Conexion
 
@@ -90,7 +91,9 @@ class EngineAdapter:
 
         # Clustered B+ Tree on cursos
         clustered_path = os.path.join(self.data_dir, "cursos_clustered.idx")
-        self.clustered_trees["cursos"] = ClusteredBPlusTree(seq_file, clustered_path)
+        clustered_tree = ClusteredBPlusTree(seq_file, clustered_path)
+        self.clustered_trees["cursos"] = clustered_tree
+        self.catalog.register_index("cursos", "codigo", clustered_tree, INDEX_CLUSTERED)
 
     def seed_data_if_empty(self):
         """Populate initial records and synchronize index entries if files are fresh."""
@@ -163,22 +166,14 @@ class EngineAdapter:
             ]
 
             idx_list = []
-            # List standard indexes
+            # List all registered indexes (including clustered)
             for col_name, (idx_obj, idx_type) in info.indices.items():
+                is_clustered = (idx_type == INDEX_CLUSTERED)
                 idx_list.append({
-                    "name": f"idx_{table_name}_{col_name}",
-                    "type": "BTREE" if idx_type == INDEX_BPLUS else "HASH",
+                    "name": f"idx_{table_name}_{col_name}" + ("_clustered" if is_clustered else ""),
+                    "type": "BTREE" if idx_type in (INDEX_BPLUS, INDEX_CLUSTERED) else "HASH",
                     "column": col_name,
-                    "clustered": False,
-                })
-
-            # List clustered indexes if present
-            if table_name in self.clustered_trees:
-                idx_list.append({
-                    "name": f"idx_{table_name}_clustered",
-                    "type": "BTREE",
-                    "column": info.key_column,
-                    "clustered": True,
+                    "clustered": is_clustered,
                 })
 
             stats = {
@@ -397,11 +392,27 @@ class EngineAdapter:
         nodes = []
         for step in plan_steps:
             step_lower = step.lower()
-            if "bplus" in step_lower:
+            if "agrupado" in step_lower and "no agrupado" not in step_lower:
+                nodes.append({
+                    "node_type": "IndexScan (B+ Tree Agrupado)",
+                    "method": step,
+                    "cost": 1.10,
+                    "rows_estimated": 5,
+                    "children": [],
+                })
+            elif "no agrupado" in step_lower:
+                nodes.append({
+                    "node_type": "IndexScan (B+ Tree No Agrupado)",
+                    "method": step,
+                    "cost": 1.25,
+                    "rows_estimated": 5,
+                    "children": [],
+                })
+            elif "bplus" in step_lower:
                 nodes.append({
                     "node_type": "IndexScan (B+ Tree)",
                     "method": step,
-                    "cost": 1.15,
+                    "cost": 1.20,
                     "rows_estimated": 5,
                     "children": [],
                 })
@@ -419,6 +430,14 @@ class EngineAdapter:
                     "method": step,
                     "cost": 1.25,
                     "rows_estimated": 1,
+                    "children": [],
+                })
+            elif "secuencial ordenada" in step_lower:
+                nodes.append({
+                    "node_type": "SequentialScan (Ordenado por PK)",
+                    "method": step,
+                    "cost": 1.10,
+                    "rows_estimated": 10,
                     "children": [],
                 })
             elif "escaneo" in step_lower or "heap" in step_lower:
