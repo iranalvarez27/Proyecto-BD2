@@ -2,22 +2,39 @@ import os
 import re
 import sys
 import time
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from common.types import Schema, Column, DataType
 from common.record import Record
-from backend.catalog import Catalog, IndexMeta, TableMeta
+from storage.heap_file import HeapFile
+from storage.sequential_file import SequentialFile
+from index.bplus_tree import BPlusTree
+from index.extendible_hash import ExtendibleHash
+from index.clustered_bplus_tree import ClusteredBPlusTree
+from query.catalog import (
+    Catalog,
+    TableInfo,
+    STORAGE_HEAP,
+    STORAGE_SEQUENTIAL,
+    INDEX_BPLUS,
+    INDEX_HASH,
+)
+from query.conexion import Conexion
 
 
 class EngineAdapter:
     def __init__(self, data_dir: str = "data"):
-        self.catalog = Catalog(data_dir=data_dir)
-        self.init_demo_tables()
+        self.data_dir = data_dir
+        os.makedirs(data_dir, exist_ok=True)
+        self.catalog = Catalog()
+        self.conexion = Conexion(self.catalog)
+        self.clustered_trees: Dict[str, ClusteredBPlusTree] = {}
+        self.init_database()
 
-    def init_demo_tables(self):
-        """Seed sample tables if not already registered."""
-        # 1. Table 'estudiantes' -> HEAP
+    def init_database(self):
+        """Initialize tables, storage files, and indexes in the real Catalog."""
+        # 1. Table 'estudiantes' -> HeapFile
         schema_estudiantes = Schema(
             table_name="estudiantes",
             columns=[
@@ -27,17 +44,27 @@ class EngineAdapter:
                 Column(name="promedio", type=DataType.FLOAT, size=4, is_pk=False),
             ],
         )
+        heap_path = os.path.join(self.data_dir, "estudiantes.bin")
+        heap_file = HeapFile(heap_path)
         self.catalog.register_table(
-            name="estudiantes",
-            storage_type="HEAP",
+            nombre="estudiantes",
             schema=schema_estudiantes,
+            storage=heap_file,
+            tipo_storage=STORAGE_HEAP,
             key_column="id",
-            indexes=[
-                IndexMeta(name="idx_estudiantes_pk", type="BTREE", column="id", clustered=False)
-            ],
         )
 
-        # 2. Table 'cursos' -> SEQUENTIAL
+        # Register B+ Tree Index on 'id'
+        bplus_path = os.path.join(self.data_dir, "estudiantes_id_bplus.idx")
+        bplus_idx = BPlusTree(bplus_path, DataType.INT)
+        self.catalog.register_index("estudiantes", "id", bplus_idx, INDEX_BPLUS)
+
+        # Register Extendible Hash Index on 'carrera'
+        hash_path = os.path.join(self.data_dir, "estudiantes_carrera_hash.idx")
+        hash_idx = ExtendibleHash(hash_path)
+        self.catalog.register_index("estudiantes", "carrera", hash_idx, INDEX_HASH)
+
+        # 2. Table 'cursos' -> SequentialFile
         schema_cursos = Schema(
             table_name="cursos",
             columns=[
@@ -47,41 +74,68 @@ class EngineAdapter:
                 Column(name="departamento", type=DataType.VARCHAR, size=20, is_pk=False),
             ],
         )
+        seq_data = os.path.join(self.data_dir, "cursos.bin")
+        seq_aux = os.path.join(self.data_dir, "cursos_aux.bin")
+        seq_file = SequentialFile(seq_data, seq_aux, schema_cursos, "codigo")
         self.catalog.register_table(
-            name="cursos",
-            storage_type="SEQUENTIAL",
+            nombre="cursos",
             schema=schema_cursos,
+            storage=seq_file,
+            tipo_storage=STORAGE_SEQUENTIAL,
             key_column="codigo",
-            indexes=[
-                IndexMeta(name="idx_cursos_codigo", type="BTREE", column="codigo", clustered=True),
-                IndexMeta(name="idx_cursos_hash", type="HASH", column="departamento", clustered=False),
-            ],
         )
 
+        # Seed initial data if files are empty & synchronize indexes
+        self.seed_data_if_empty()
+
+        # Clustered B+ Tree on cursos
+        clustered_path = os.path.join(self.data_dir, "cursos_clustered.idx")
+        self.clustered_trees["cursos"] = ClusteredBPlusTree(seq_file, clustered_path)
+
     def seed_data_if_empty(self):
-        """Populate demo tables on disk if empty."""
-        # Seed 'estudiantes'
-        heap = self.catalog.get_heap_file("estudiantes")
-        if heap and heap.page_count() == 0:
-            table = self.catalog.get_table("estudiantes")
-            assert table is not None
+        """Populate initial records and synchronize index entries if files are fresh."""
+        info_est = self.catalog.get_table("estudiantes")
+        heap: HeapFile = info_est.storage
+        if heap.page_count() == 0:
             sample_estudiantes = [
-                (1, "Ana Torres", "Ciencia de la Computación", 18.5),
-                (2, "Mateo Silva", "Ingeniería de Software", 16.2),
+                (1, "Ana Torres", "Ciencia de la Computacion", 18.5),
+                (2, "Mateo Silva", "Ingenieria de Software", 16.2),
                 (3, "Lucia Morales", "Ciencia de Datos", 17.8),
-                (4, "Diego Castro", "Ciencia de la Computación", 15.4),
-                (5, "Sofia Vargas", "Bioingeniería", 19.1),
-                (6, "Carlos Vega", "Ciencia de la Computación", 14.9),
-                (7, "Valeria Rivas", "Ingeniería Mecatrónica", 16.7),
+                (4, "Diego Castro", "Ciencia de la Computacion", 15.4),
+                (5, "Sofia Vargas", "Bioingenieria", 19.1),
+                (6, "Carlos Vega", "Ciencia de la Computacion", 14.9),
+                (7, "Valeria Rivas", "Ingenieria Mecatronica", 16.7),
                 (8, "Jorge Herrera", "Ciencia de Datos", 17.0),
             ]
             for vals in sample_estudiantes:
                 rec = Record(list(vals))
-                heap.insert(rec, table.schema)
+                rid = heap.insert(rec, info_est.schema)
+                self.conexion.actualizar_indices_insert("estudiantes", info_est, rec, rid)
+        else:
+            # Check if indexes need synchronization
+            bplus_idx, _ = self.catalog.get_indice("estudiantes", "id")
+            hash_idx, _ = self.catalog.get_indice("estudiantes", "carrera")
 
-        # Seed 'cursos'
-        seq = self.catalog.get_sequential_file("cursos")
-        if seq and seq.page_count(0) == 0:
+            # Check if BPlus index is empty
+            if getattr(bplus_idx, "_n_entries", 0) == 0:
+                for rid, rec in heap.scan_con_rid(info_est.schema):
+                    try:
+                        bplus_idx.insert(rec.values[0], rid)
+                    except Exception:
+                        pass
+
+            # Check if Hash index is empty
+            sample_res = hash_idx.search("Ciencia de la Computacion")
+            if len(sample_res) == 0:
+                for rid, rec in heap.scan_con_rid(info_est.schema):
+                    try:
+                        hash_idx.insert(rec.values[2], rid)
+                    except Exception:
+                        pass
+
+        info_cur = self.catalog.get_table("cursos")
+        seq: SequentialFile = info_cur.storage
+        if seq.page_count(0) == 0:
             sample_cursos = [
                 (101, "Base de Datos 1", 4, "Computacion"),
                 (102, "Algoritmos y Estructuras", 4, "Computacion"),
@@ -95,9 +149,9 @@ class EngineAdapter:
                 seq.insert(rec)
 
     def get_tables_metadata(self) -> List[Dict[str, Any]]:
-        self.seed_data_if_empty()
         result = []
-        for table in self.catalog.list_tables():
+        for table_name in self.catalog.listar_tablas():
+            info = self.catalog.get_table(table_name)
             cols = [
                 {
                     "name": col.name,
@@ -105,43 +159,53 @@ class EngineAdapter:
                     "size": col.size,
                     "is_pk": col.is_pk,
                 }
-                for col in table.schema.columns
-            ]
-            idx_list = [
-                {
-                    "name": idx.name,
-                    "type": idx.type,
-                    "column": idx.column,
-                    "clustered": idx.clustered,
-                }
-                for idx in table.indexes
+                for col in info.schema.columns
             ]
 
-            stats = {"page_count": 0, "record_count": 0, "wasted_ratio": 0.0, "needs_reorganization": False}
+            idx_list = []
+            # List standard indexes
+            for col_name, (idx_obj, idx_type) in info.indices.items():
+                idx_list.append({
+                    "name": f"idx_{table_name}_{col_name}",
+                    "type": "BTREE" if idx_type == INDEX_BPLUS else "HASH",
+                    "column": col_name,
+                    "clustered": False,
+                })
 
-            if table.storage_type == "HEAP":
-                heap = self.catalog.get_heap_file(table.name)
-                if heap:
-                    pages = heap.page_count()
-                    records = list(heap.scan(table.schema))
-                    stats["page_count"] = pages
-                    stats["record_count"] = len(records)
-                    stats["wasted_ratio"] = 0.0
-            elif table.storage_type == "SEQUENTIAL":
-                seq = self.catalog.get_sequential_file(table.name)
-                if seq:
-                    pages_main = seq.page_count(0)
-                    pages_aux = seq.page_count(1)
-                    records = list(seq.scan())
-                    stats["page_count"] = pages_main + pages_aux
-                    stats["record_count"] = len(records)
-                    stats["wasted_ratio"] = round(seq.wasted_ratio(), 3)
-                    stats["needs_reorganization"] = seq.needs_reorganization(threshold=0.30, max_aux_records=5)
+            # List clustered indexes if present
+            if table_name in self.clustered_trees:
+                idx_list.append({
+                    "name": f"idx_{table_name}_clustered",
+                    "type": "BTREE",
+                    "column": info.key_column,
+                    "clustered": True,
+                })
+
+            stats = {
+                "page_count": 0,
+                "record_count": 0,
+                "wasted_ratio": 0.0,
+                "needs_reorganization": False,
+            }
+
+            if info.tipo_storage == STORAGE_HEAP:
+                heap: HeapFile = info.storage
+                stats["page_count"] = heap.page_count()
+                stats["record_count"] = sum(1 for _ in heap.scan(info.schema))
+                stats["wasted_ratio"] = 0.0
+            elif info.tipo_storage == STORAGE_SEQUENTIAL:
+                seq: SequentialFile = info.storage
+                pages_main = seq.page_count(0)
+                pages_aux = seq.page_count(1)
+                stats["page_count"] = pages_main + pages_aux
+                stats["record_count"] = sum(1 for _ in seq.scan())
+                stats["wasted_ratio"] = round(seq.wasted_ratio(), 3)
+                stats["needs_reorganization"] = seq.needs_reorganization(threshold=0.30, max_aux_records=5)
 
             result.append({
-                "name": table.name,
-                "storage_type": table.storage_type,
-                "key_column": table.key_column,
+                "name": info.nombre,
+                "storage_type": info.tipo_storage.upper(),
+                "key_column": info.key_column,
                 "columns": cols,
                 "indexes": idx_list,
                 "stats": stats,
@@ -149,30 +213,33 @@ class EngineAdapter:
         return result
 
     def reorganize_table(self, table_name: str) -> Dict[str, Any]:
-        table = self.catalog.get_table(table_name)
-        if not table:
+        if not self.catalog.existe_tabla(table_name):
             raise ValueError(f"Tabla '{table_name}' no encontrada")
-        if table.storage_type != "SEQUENTIAL":
-            raise ValueError(f"La tabla '{table_name}' es de tipo {table.storage_type}; solo se reorganizan tablas SEQUENTIAL")
 
-        seq = self.catalog.get_sequential_file(table_name)
-        if not seq:
-            raise ValueError("No se pudo instanciar SequentialFile")
+        info = self.catalog.get_table(table_name)
+        if info.tipo_storage != STORAGE_SEQUENTIAL:
+            raise ValueError(f"La tabla '{table_name}' es {info.tipo_storage}; solo se reorganizan tablas SEQUENTIAL")
 
+        seq: SequentialFile = info.storage
         start_time = time.time()
         seq.reorganize()
+
+        # Rebuild clustered B+ tree if present
+        if table_name in self.clustered_trees:
+            self.clustered_trees[table_name]._rebuild()
+
         duration_ms = (time.time() - start_time) * 1000
 
         return {
             "success": True,
-            "message": f"Tabla '{table_name}' reorganizada con éxito.",
+            "message": f"Tabla '{table_name}' reorganizada y su árbol B+ agrupado reconstruido con éxito.",
             "duration_ms": round(duration_ms, 2),
             "new_wasted_ratio": round(seq.wasted_ratio(), 3),
         }
 
     def execute_query(self, sql: str) -> Dict[str, Any]:
         start_time = time.time()
-        sql_clean = sql.strip().rstrip(";").strip()
+        sql_clean = sql.strip()
 
         if not sql_clean:
             return {
@@ -182,13 +249,13 @@ class EngineAdapter:
                 "affected_rows": 0,
                 "columns": [],
                 "rows": [],
-                "error": "Consulta SQL vacía",
+                "error": "Consulta SQL vacía.",
                 "plan": None,
             }
 
-        # Check for Transaction control commands
-        upper_sql = sql_clean.upper()
-        if upper_sql in ["BEGIN", "BEGIN TRANSACTION", "START TRANSACTION"]:
+        # Transaction simulation commands (Section 2.1.4 placeholder)
+        upper = sql_clean.rstrip(";").strip().upper()
+        if upper in ["BEGIN", "BEGIN TRANSACTION", "START TRANSACTION"]:
             duration_ms = (time.time() - start_time) * 1000
             return {
                 "status": "success",
@@ -206,7 +273,7 @@ class EngineAdapter:
                     "children": [],
                 },
             }
-        if upper_sql in ["COMMIT", "END TRANSACTION", "COMMIT TRANSACTION"]:
+        if upper in ["COMMIT", "END TRANSACTION", "COMMIT TRANSACTION"]:
             duration_ms = (time.time() - start_time) * 1000
             return {
                 "status": "success",
@@ -214,7 +281,7 @@ class EngineAdapter:
                 "execution_time_ms": round(duration_ms, 2),
                 "affected_rows": 0,
                 "columns": ["Mensaje"],
-                "rows": [["Transacción confirmada exitosamente (COMMIT)"]],
+                "rows": [["Transacción confirmada (COMMIT)"]],
                 "error": None,
                 "plan": {
                     "node_type": "TransactionControl",
@@ -224,7 +291,7 @@ class EngineAdapter:
                     "children": [],
                 },
             }
-        if upper_sql in ["ROLLBACK", "ABORT"]:
+        if upper in ["ROLLBACK", "ABORT"]:
             duration_ms = (time.time() - start_time) * 1000
             return {
                 "status": "success",
@@ -243,281 +310,198 @@ class EngineAdapter:
                 },
             }
 
-        # Try basic matching for SELECT
-        select_match = re.match(r"^SELECT\s+(.+?)\s+FROM\s+([a-zA-Z0-9_]+)(.*)$", sql_clean, re.IGNORECASE | re.DOTALL)
-        if select_match:
-            cols_clause = select_match.group(1).strip()
-            table_name = select_match.group(2).strip()
-            rest_clause = select_match.group(3).strip()
+        # Execute using real Conexion (Lexer -> Parser -> Semantic -> Execution)
+        res = self.conexion.execute(sql_clean)
+        duration_ms = (time.time() - start_time) * 1000
 
-            table = self.catalog.get_table(table_name)
-            if not table:
-                duration_ms = (time.time() - start_time) * 1000
-                return {
-                    "status": "error",
-                    "query": sql,
-                    "execution_time_ms": round(duration_ms, 2),
-                    "affected_rows": 0,
-                    "columns": [],
-                    "rows": [],
-                    "error": f"La tabla '{table_name}' no existe en el catálogo.",
-                    "plan": None,
-                }
+        if not res.ok:
+            return {
+                "status": "error",
+                "query": sql,
+                "execution_time_ms": round(duration_ms, 2),
+                "affected_rows": 0,
+                "columns": [],
+                "rows": [],
+                "error": f"Error [{res.tipo_error.upper()}]: {res.error}",
+                "plan": None,
+            }
 
-            # Scan records from real file
-            records = []
-            if table.storage_type == "HEAP":
-                heap = self.catalog.get_heap_file(table_name)
-                if heap:
-                    records = list(heap.scan(table.schema))
-            elif table.storage_type == "SEQUENTIAL":
-                seq = self.catalog.get_sequential_file(table_name)
-                if seq:
-                    records = list(seq.scan())
+        # Format plan steps into visual hierarchy for PlanPanel
+        plan_tree = self._build_plan_tree(res.plan, sql_clean)
 
-            all_col_names = [col.name for col in table.schema.columns]
-            if cols_clause == "*":
-                selected_cols = all_col_names
-                col_indices = list(range(len(all_col_names)))
+        # Handle SELECT result (list of dicts)
+        if res.filas is not None:
+            if len(res.filas) > 0:
+                cols = list(res.filas[0].keys())
+                rows = []
+                for f in res.filas:
+                    row = []
+                    for c in cols:
+                        v = f.get(c)
+                        if isinstance(v, float):
+                            v = round(v, 2)
+                        row.append(v)
+                    rows.append(row)
             else:
-                raw_cols = [c.strip() for c in cols_clause.split(",")]
-                selected_cols = []
-                col_indices = []
-                for rc in raw_cols:
-                    if rc in all_col_names:
-                        selected_cols.append(rc)
-                        col_indices.append(all_col_names.index(rc))
-                    else:
-                        selected_cols.append(rc)
-                        col_indices.append(None)
+                cols = ["Resultado"]
+                rows = []
 
-            rows = []
-            for r in records:
-                row = []
-                for idx in col_indices:
-                    if idx is not None and idx < len(r.values):
-                        val = r.values[idx]
-                        if isinstance(val, float):
-                            val = round(val, 2)
-                        row.append(val)
-                    else:
-                        row.append(None)
-                rows.append(row)
-
-            # Check if WHERE clause or ORDER BY clause is present
-            has_where = bool(re.search(r"\bWHERE\b", rest_clause, re.IGNORECASE))
-            has_order_by = bool(re.search(r"\bORDER\s+BY\b", rest_clause, re.IGNORECASE))
-
-            # Generate realistic execution plan
-            plan = self.generate_execution_plan(table_name, cols_clause, rest_clause)
-
-            duration_ms = (time.time() - start_time) * 1000
             return {
                 "status": "success",
                 "query": sql,
                 "execution_time_ms": round(duration_ms, 2),
                 "affected_rows": len(rows),
-                "columns": selected_cols,
+                "columns": cols,
                 "rows": rows,
                 "error": None,
-                "plan": plan,
+                "plan": plan_tree,
             }
 
-        # Try INSERT INTO
-        insert_match = re.match(r"^INSERT\s+INTO\s+([a-zA-Z0-9_]+)\s+VALUES\s*\((.+)\)$", sql_clean, re.IGNORECASE)
-        if insert_match:
-            table_name = insert_match.group(1).strip()
-            values_str = insert_match.group(2).strip()
+        # Handle INSERT / DELETE summary
+        if res.resumen is not None:
+            operacion = res.resumen.get("operacion", "Operación")
+            filas_afectadas = res.resumen.get("filas_afectadas", 1)
+            return {
+                "status": "success",
+                "query": sql,
+                "execution_time_ms": round(duration_ms, 2),
+                "affected_rows": filas_afectadas,
+                "columns": ["Operación", "Filas Afectadas"],
+                "rows": [[operacion, filas_afectadas]],
+                "error": None,
+                "plan": plan_tree,
+            }
 
-            table = self.catalog.get_table(table_name)
-            if not table:
-                duration_ms = (time.time() - start_time) * 1000
-                return {
-                    "status": "error",
-                    "query": sql,
-                    "execution_time_ms": round(duration_ms, 2),
-                    "affected_rows": 0,
-                    "columns": [],
-                    "rows": [],
-                    "error": f"La tabla '{table_name}' no existe.",
-                    "plan": None,
-                }
-
-            # Parse simple literals: numbers, quoted strings
-            parsed_values = []
-            for part in values_str.split(","):
-                val = part.strip()
-                if (val.startswith("'") and val.endswith("'")) or (val.startswith('"') and val.endswith('"')):
-                    parsed_values.append(val[1:-1])
-                elif "." in val:
-                    try:
-                        parsed_values.append(float(val))
-                    except ValueError:
-                        parsed_values.append(val)
-                else:
-                    try:
-                        parsed_values.append(int(val))
-                    except ValueError:
-                        parsed_values.append(val)
-
-            try:
-                rec = Record(parsed_values)
-                if table.storage_type == "HEAP":
-                    heap = self.catalog.get_heap_file(table_name)
-                    assert heap is not None
-                    heap.insert(rec, table.schema)
-                elif table.storage_type == "SEQUENTIAL":
-                    seq = self.catalog.get_sequential_file(table_name)
-                    assert seq is not None
-                    seq.insert(rec)
-
-                duration_ms = (time.time() - start_time) * 1000
-                return {
-                    "status": "success",
-                    "query": sql,
-                    "execution_time_ms": round(duration_ms, 2),
-                    "affected_rows": 1,
-                    "columns": ["Resultado"],
-                    "rows": [["1 fila insertada correctamente"]],
-                    "error": None,
-                    "plan": {
-                        "node_type": "InsertTuple",
-                        "relation": table_name,
-                        "storage_type": table.storage_type,
-                        "cost": 1.0,
-                        "rows_estimated": 1,
-                        "children": [],
-                    },
-                }
-            except Exception as ex:
-                duration_ms = (time.time() - start_time) * 1000
-                return {
-                    "status": "error",
-                    "query": sql,
-                    "execution_time_ms": round(duration_ms, 2),
-                    "affected_rows": 0,
-                    "columns": [],
-                    "rows": [],
-                    "error": f"Error insertando registro: {str(ex)}",
-                    "plan": None,
-                }
-
-        # Mock fallback for other SQL syntax
-        duration_ms = (time.time() - start_time) * 1000
-        plan = self.generate_generic_plan(sql_clean)
         return {
             "status": "success",
             "query": sql,
-            "execution_time_ms": round(duration_ms + 1.5, 2),
-            "affected_rows": 3,
-            "columns": ["id", "resultado", "estado"],
-            "rows": [
-                [1, "Consulta simulada ejecutada", "OK"],
-                [2, "Sintaxis procesada por motor", "OK"],
-                [3, "Listo para parser SQL final", "OK"],
-            ],
+            "execution_time_ms": round(duration_ms, 2),
+            "affected_rows": 0,
+            "columns": ["Estado"],
+            "rows": [["Consulta ejecutada sin retorno de datos"]],
             "error": None,
-            "plan": plan,
+            "plan": plan_tree,
         }
 
-    def generate_execution_plan(self, table_name: str, cols: str, rest: str) -> Dict[str, Any]:
-        table = self.catalog.get_table(table_name)
-        storage_type = table.storage_type if table else "HEAP"
-
-        # Scan node
-        if storage_type == "SEQUENTIAL":
-            scan_node = {
-                "node_type": "SequentialFileScan",
-                "relation": table_name,
-                "method": "BinarySearch / Main+Aux Scan",
-                "cost": 1.25,
-                "rows_estimated": 10,
-                "children": [],
-            }
-        else:
-            scan_node = {
-                "node_type": "HeapFileScan",
-                "relation": table_name,
-                "method": "SlottedPage PageScan",
-                "cost": 2.50,
-                "rows_estimated": 10,
+    def _build_plan_tree(self, plan_steps: List[str], sql: str) -> Dict[str, Any]:
+        """Convert linear query plan steps from Conexion into a visual hierarchical tree."""
+        if not plan_steps:
+            return {
+                "node_type": "QueryPlan",
+                "query": sql,
+                "cost": 1.0,
+                "rows_estimated": 1,
                 "children": [],
             }
 
-        curr_top = scan_node
-
-        # Filter node if WHERE exists
-        where_match = re.search(r"\bWHERE\s+([^ORDER|GROUP|LIMIT]+)", rest, re.IGNORECASE)
-        if where_match:
-            cond = where_match.group(1).strip()
-            curr_top = {
-                "node_type": "FilterPredicate",
-                "condition": cond,
-                "cost": round(curr_top["cost"] + 0.3, 2),
-                "rows_estimated": 5,
-                "children": [curr_top],
-            }
-
-        # Sort node if ORDER BY exists
-        order_match = re.search(r"\bORDER\s+BY\s+(.+)$", rest, re.IGNORECASE)
-        if order_match:
-            order_expr = order_match.group(1).strip()
-            curr_top = {
-                "node_type": "ExternalSort",
-                "algorithm": "2-Way External Merge Sort (Disk)",
-                "order_by": order_expr,
-                "cost": round(curr_top["cost"] + 4.2, 2),
-                "rows_estimated": curr_top["rows_estimated"],
-                "children": [curr_top],
-            }
-
-        # Project node
-        root = {
-            "node_type": "Projection",
-            "columns": cols,
-            "cost": round(curr_top["cost"] + 0.1, 2),
-            "rows_estimated": curr_top["rows_estimated"],
-            "children": [curr_top],
-        }
-        return root
-
-    def generate_generic_plan(self, sql: str) -> Dict[str, Any]:
-        return {
-            "node_type": "QueryExecutionPlan",
-            "query": sql,
-            "cost": 3.45,
-            "rows_estimated": 5,
-            "children": [
-                {
-                    "node_type": "IndexScan",
-                    "index_name": "idx_bplus_clustered",
-                    "type": "B+ Tree Clustered Index",
+        nodes = []
+        for step in plan_steps:
+            step_lower = step.lower()
+            if "bplus" in step_lower:
+                nodes.append({
+                    "node_type": "IndexScan (B+ Tree)",
+                    "method": step,
                     "cost": 1.15,
                     "rows_estimated": 5,
                     "children": [],
-                },
-                {
-                    "node_type": "Filter",
-                    "condition": "Evalua predicados de busqueda",
-                    "cost": 0.30,
+                })
+            elif "hash" in step_lower:
+                nodes.append({
+                    "node_type": "IndexScan (Extendible Hash)",
+                    "method": step,
+                    "cost": 1.05,
                     "rows_estimated": 5,
                     "children": [],
-                },
-            ],
+                })
+            elif "binaria" in step_lower:
+                nodes.append({
+                    "node_type": "SequentialBinarySearch",
+                    "method": step,
+                    "cost": 1.25,
+                    "rows_estimated": 1,
+                    "children": [],
+                })
+            elif "escaneo" in step_lower or "heap" in step_lower:
+                nodes.append({
+                    "node_type": "FullTableScan",
+                    "method": step,
+                    "cost": 2.50,
+                    "rows_estimated": 10,
+                    "children": [],
+                })
+            elif "order by" in step_lower:
+                nodes.append({
+                    "node_type": "Sort (ORDER BY)",
+                    "method": step,
+                    "cost": 1.80,
+                    "rows_estimated": 10,
+                    "children": [],
+                })
+            elif "group by" in step_lower:
+                nodes.append({
+                    "node_type": "Aggregate (GROUP BY)",
+                    "method": step,
+                    "cost": 1.50,
+                    "rows_estimated": 5,
+                    "children": [],
+                })
+            elif "insert" in step_lower:
+                nodes.append({
+                    "node_type": "InsertTuple",
+                    "method": step,
+                    "cost": 1.0,
+                    "rows_estimated": 1,
+                    "children": [],
+                })
+            elif "delete" in step_lower:
+                nodes.append({
+                    "node_type": "DeleteTuple",
+                    "method": step,
+                    "cost": 1.5,
+                    "rows_estimated": 1,
+                    "children": [],
+                })
+            else:
+                nodes.append({
+                    "node_type": "ExecutionStep",
+                    "method": step,
+                    "cost": 1.0,
+                    "rows_estimated": 5,
+                    "children": [],
+                })
+
+        # Nest nodes into an execution tree: leaf (bottom) to root (top)
+        curr = nodes[0]
+        for next_node in nodes[1:]:
+            next_node["children"] = [curr]
+            next_node["cost"] = round(next_node["cost"] + curr["cost"], 2)
+            curr = next_node
+
+        # Wrap with a Projection root node
+        root = {
+            "node_type": "Projection",
+            "relation": "Resultado",
+            "cost": round(curr["cost"] + 0.1, 2),
+            "rows_estimated": curr.get("rows_estimated", 5),
+            "children": [curr],
         }
+        return root
 
     def explain_query(self, sql: str) -> Dict[str, Any]:
-        sql_clean = sql.strip().rstrip(";").strip()
-        select_match = re.match(r"^SELECT\s+(.+?)\s+FROM\s+([a-zA-Z0-9_]+)(.*)$", sql_clean, re.IGNORECASE | re.DOTALL)
-        if select_match:
-            cols = select_match.group(1).strip()
-            table_name = select_match.group(2).strip()
-            rest = select_match.group(3).strip()
+        """Runs the query to extract the real execution plan."""
+        res = self.conexion.execute(sql.strip())
+        if not res.ok:
             return {
                 "query": sql,
-                "root_node": self.generate_execution_plan(table_name, cols, rest),
+                "root_node": {
+                    "node_type": "ErrorInQuery",
+                    "error": f"{res.tipo_error}: {res.error}",
+                    "cost": 0.0,
+                    "rows_estimated": 0,
+                    "children": [],
+                },
             }
         return {
             "query": sql,
-            "root_node": self.generate_generic_plan(sql_clean),
+            "root_node": self._build_plan_tree(res.plan, sql),
         }

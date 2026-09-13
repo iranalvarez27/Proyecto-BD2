@@ -10,17 +10,19 @@ import {
 } from 'lucide-react';
 
 const SQL_TEMPLATES = [
-  { label: 'SELECT * Estudiantes (Heap)', sql: 'SELECT * FROM estudiantes;' },
-  { label: 'SELECT Columnas (Heap)', sql: 'SELECT id, nombre, promedio FROM estudiantes;' },
-  { label: 'SELECT con WHERE (Heap)', sql: 'SELECT * FROM estudiantes WHERE id > 3;' },
-  { label: 'SELECT con ORDER BY (Heap)', sql: 'SELECT id, nombre, carrera FROM estudiantes ORDER BY nombre;' },
-  { label: 'SELECT * Cursos (Secuencial)', sql: 'SELECT * FROM cursos;' },
-  { label: 'SELECT con WHERE (Secuencial)', sql: 'SELECT codigo, titulo FROM cursos WHERE codigo >= 200;' },
-  { label: 'INSERT nuevo Estudiante', sql: "INSERT INTO estudiantes VALUES (9, 'Camila Diaz', 'Bioingenieria', 18.2);" },
-  { label: 'INSERT nuevo Curso', sql: "INSERT INTO cursos VALUES (305, 'Compiladores', 4, 'Computacion');" },
+  { label: 'SELECT * Estudiantes (Heap Scan)', sql: 'SELECT * FROM estudiantes;' },
+  { label: 'B+ Tree Index Scan (Igualdad id=1)', sql: 'SELECT * FROM estudiantes WHERE id = 1;' },
+  { label: 'B+ Tree Range Search (id > 3)', sql: 'SELECT * FROM estudiantes WHERE id > 3;' },
+  { label: 'B+ Tree Lectura Ordenada (ORDER BY id DESC)', sql: 'SELECT * FROM estudiantes ORDER BY id DESC;' },
+  { label: 'Extendible Hash Scan (carrera)', sql: "SELECT * FROM estudiantes WHERE carrera = 'Ciencia de Datos';" },
+  { label: 'Sequential Binary Search (codigo=101)', sql: 'SELECT * FROM cursos WHERE codigo = 101;' },
+  { label: 'GROUP BY por carrera', sql: 'SELECT carrera FROM estudiantes GROUP BY carrera;' },
+  { label: 'INSERT en Heap + Actualización Índices', sql: "INSERT INTO estudiantes VALUES (12, 'Valeria Gomez', 'Bioingenieria', 19.5);" },
+  { label: 'DELETE en Heap + Limpieza de Índices', sql: 'DELETE FROM estudiantes WHERE id = 12;' },
   { label: 'Transacción: BEGIN', sql: 'BEGIN TRANSACTION;' },
   { label: 'Transacción: COMMIT', sql: 'COMMIT;' },
 ];
+
 
 export default function QueryPanel({ 
   query, 
