@@ -4,3 +4,4 @@ __pycache__/
 *.dat
 *.db
 *.bin
+.DS_Store
