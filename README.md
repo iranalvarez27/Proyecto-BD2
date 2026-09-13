@@ -95,7 +95,7 @@ python3 data/generate_data.py --reset       # Restaurar a datos de muestra inici
 python3 -m uvicorn backend.main:app --host 127.0.0.1 --port 8000 --reload
 
 # Terminal 2 - Frontend:
-cd frontend && npm run dev
+cd frontend && pnpm dev
 ```
 
 ---
@@ -177,7 +177,7 @@ API activa en: `http://127.0.0.1:8000` (Documentación Swagger interactiva en `h
 ### 2. Frontend (Vite + React)
 ```bash
 cd frontend
-npm install
-npm run dev
+pnpm install
+pnpm dev
 ```
 Aplicación disponible en: `http://127.0.0.1:5173`.
