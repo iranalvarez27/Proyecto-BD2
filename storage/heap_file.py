@@ -64,3 +64,11 @@ class HeapFile:
                 if data == b"":
                     continue
                 yield Record.unpack(data, schema)
+    def scan_con_rid(self, schema: Schema):
+        for page_id in range(self.page_count()):
+            page = self.read_page(page_id)
+            for slot_id in range(page.slot_count):
+                data = page.read(slot_id)
+                if data == b"":
+                    continue
+                yield RID(page_id=page_id, slot_id=slot_id), Record.unpack(data, schema)
