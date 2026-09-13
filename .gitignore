@@ -6,3 +6,8 @@ __pycache__/
 *.dat
 *.db
 *.bin
+*.idx
+data/*
+!data/generate_data.py
+node_modules/
+.DS_Store
