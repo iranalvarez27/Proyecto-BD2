@@ -1,12 +1,3 @@
-"""TransactionManager: sesiones, undo en RAM (sin WAL) y hook global de
-escritura (TX_HOOK) que los storages/indices invocan sin conocer este
-modulo.
-
-Alcance deliberado (ver TRANSACCIONES.md): sin WAL en disco, sin fsync y
-sin recuperacion ante fallos. El buffer de undo vive solo en memoria por
-sesion; si el proceso muere se pierde, y eso se acepta porque la rubrica
-pide aislamiento/concurrencia, no durabilidad.
-"""
 import os
 import threading
 import time
@@ -42,10 +33,6 @@ TX_HOOK = _no_op_hook
 
 
 class _BindContext:
-    """Asocia el hilo actual con la transaccion (si existe) de `session_id`
-    mientras dura el bloque `with`, para que TX_HOOK sepa si debe registrar
-    el 'before' de la pagina que esta a punto de escribirse."""
-
     __slots__ = ("_manager", "_session_id", "_previo")
 
     def __init__(self, manager: "TransactionManager", session_id: str):
@@ -157,10 +144,6 @@ class TransactionManager:
         return txn
 
     def abortar_por_deadlock_o_timeout(self, session_id: str) -> Transaction | None:
-        """Best-effort: si la sesion tiene una transaccion activa cuando el
-        LockManager le nego un lock (DeadlockError/LockTimeoutError), se le
-        hace ROLLBACK automatico. Si la sesion no tenia transaccion abierta
-        (sentencia autocommit), no hay nada que deshacer."""
         with self._lock:
             txn = self._sessions.get(session_id)
             if txn is None or not txn.active:

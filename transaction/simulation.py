@@ -1,9 +1,6 @@
 """Demo obligatoria con hilos: transacciones simultaneas, carrera de PK y
 deadlock real, con y sin el LockManager.
 
-No necesita HTTP ni frontend: monta su propio Catalog/storages temporales
-bajo data/sim_<pid>_<ts>/ y los borra al terminar.
-
 Uso:
     python -m transaction.simulation --threads 8 --mode locked
     python -m transaction.simulation --threads 8 --mode raceless
@@ -93,11 +90,6 @@ def verificar_pk_unicas(catalog: Catalog) -> list:
 
 
 def verificar_indices_coherentes(catalog: Catalog) -> int:
-    """Cuenta entradas del B+ de 'id' que son incoherentes: apuntan a un RID
-    sin registro vivo (huerfano) o a un registro cuya clave real ya no
-    coincide con la del indice (el slot fue sobrescrito por otro insert
-    concurrente sin coordinacion -- "lost update" clasico de escribir la
-    misma pagina desde dos hilos sin lock)."""
     info = catalog.get_table("estudiantes")
     bplus, _ = catalog.get_indice("estudiantes", "id")
     idx_pk = info.schema.column_index("id")
@@ -112,9 +104,6 @@ def verificar_indices_coherentes(catalog: Catalog) -> int:
 # --------------------------------------------------------- INSERT sin lock
 
 def raceless_insert(catalog: Catalog, tabla: str, valores: list, delay_s: float):
-    """Replica el patron check-then-write de ejecutar_insert SIN ningun
-    lock: el mismo comportamiento que tenia el motor antes del LockManager.
-    Sirve de baseline para exhibir la carrera de PK."""
     info = catalog.get_table(tabla)
     record = Record(valores)
     pk_col = next(c for c in info.schema.columns if c.is_pk)
@@ -139,12 +128,6 @@ def raceless_insert(catalog: Catalog, tabla: str, valores: list, delay_s: float)
 # --------------------------------------------------------------- escenarios
 
 def escenario_carrera(catalog, conexion, n_threads, n_claves, modo, delay_ms, seed):
-    """Cada hilo es una transaccion completa (BEGIN TRANSACTION -> INSERT ->
-    END TRANSACTION/ROLLBACK) que compite por la misma clave primaria con
-    otros hilos. En 'locked' esto deja ver, en una sola corrida: multiples
-    transacciones simultaneas (una por hilo, con su propio xact_id), la
-    carrera por la PK, y como el LockManager la resuelve (una gana, las
-    demas terminan con ROLLBACK limpio en vez de corromper el dato)."""
     random.seed(seed)
     barrera = threading.Barrier(n_threads)
     resultados = []

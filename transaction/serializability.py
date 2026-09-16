@@ -1,10 +1,3 @@
-"""Grafo de precedencia (conflict graph) para verificar serializabilidad.
-
-Un horario es conflict-serializable si y solo si su grafo de precedencia es
-aciclico (vertices = transacciones, arista Ti -> Tj si Ti accedio antes que
-Tj a un mismo recurso en un par de operaciones conflictivas: S-S no
-conflictua; S-X, X-S, X-X si).
-"""
 from collections import deque
 
 
@@ -35,7 +28,6 @@ class ConflictGraph:
         return adj
 
     def encontrar_ciclo(self):
-        """Devuelve el primer ciclo encontrado (lista de nodos) o None."""
         adj = self._adyacencia()
         estado = {}  # 0=no visitado, 1=en pila, 2=cerrado
 
@@ -65,8 +57,6 @@ class ConflictGraph:
         return self.encontrar_ciclo() is None
 
     def orden_serial(self):
-        """Orden topologico (Kahn) equivalente al horario serial, o None si
-        el grafo tiene ciclos."""
         indeg = {n: 0 for n in self._nodos}
         adj = self._adyacencia()
         for a, b in self._aristas:
@@ -88,11 +78,6 @@ class ConflictGraph:
 
 
 def construir_grafo_precedencia(historia) -> ConflictGraph:
-    """historia: iterable de (xact_id, recurso, modo, timestamp).
-
-    Recorre los accesos en orden temporal y, por cada recurso, conecta cada
-    acceso con todos los accesos anteriores de otras transacciones que
-    conflictuan con el (al menos uno de los dos es 'X')."""
     grafo = ConflictGraph()
     por_recurso: dict = {}
 

@@ -1,27 +1,7 @@
-"""LockManager: candados S/X de nivel tabla con 2PL estricto (SS2PL).
-
-- Compatibilidad: S-S compatible; S-X, X-S, X-X incompatibles.
-- Crecimiento monótono: una vez otorgado, un lock solo se libera con
-  release_all/release_resource (llamado por TransactionManager en
-  END TRANSACTION / ROLLBACK, o por Conexion al terminar una sentencia
-  autocommit).
-- Deadlocks: se mantiene un grafo wait-for (sesion -> sesiones de las que
-  espera un recurso). Si acquire() detecta que el grafo tiene un ciclo que
-  pasa por la sesion que esta pidiendo el lock, esa misma sesion se
-  convierte en la "victima": se le lanza DeadlockError sin otorgarle el
-  lock, para que TransactionManager haga ROLLBACK de inmediato. Esta es
-  una simplificacion deliberada: como cada sesion corre en su propio hilo
-  y las demas estan bloqueadas dentro de acquire(), solo el hilo que
-  detecta el ciclo puede abortar de forma sincrona; no hay forma de
-  interrumpir a otro hilo desde afuera.
-- Salvaguarda de timeout: si no hay ciclo pero el recurso lleva mas de
-  `timeout` segundos ocupado, la sesion que espera aborta igual.
-"""
 import threading
 import time
 
 _COMPAT_UPGRADE = {"S", "X"}
-
 
 class DeadlockError(Exception):
     def __init__(self, session_id: str, ciclo: list):
@@ -102,9 +82,6 @@ class LockManager:
         self._wait_for.pop(session_id, None)
 
     def _find_cycle(self, start: str):
-        """DFS desde `start` siguiendo aristas 'espera a'; devuelve el ciclo
-        (lista de session_id, cerrado en start) si `start` es alcanzable
-        desde si mismo, o None."""
         stack = [start]
         visitados_en_rama = {start}
 
@@ -155,7 +132,6 @@ class LockManager:
             self._cond.notify_all()
 
     def release_resource(self, session_id: str, resource: str) -> None:
-        """Libera un solo recurso (uso: sentencias autocommit fuera de txn)."""
         with self._cond:
             st = self._resource_state(resource)
             st["S"].discard(session_id)
@@ -168,7 +144,6 @@ class LockManager:
             self._cond.notify_all()
 
     def release_all(self, session_id: str) -> None:
-        """Libera todos los locks de la sesion (END TRANSACTION / ROLLBACK)."""
         with self._cond:
             recursos = self._held_by_session.pop(session_id, set())
             for resource in recursos:
@@ -185,7 +160,6 @@ class LockManager:
             return set(self._held_by_session.get(session_id, set()))
 
     def snapshot_estado(self) -> dict:
-        """Para reportes de la simulacion: copia superficial del estado."""
         with self._cond:
             return {
                 recurso: {"S": set(st["S"]), "X": st["X"]}
