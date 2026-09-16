@@ -106,10 +106,37 @@ class Conexion:
             raise ExecutionError(f"operador desconocido: {op}")
         return resultado
 
+    def _extraer_rango_columna(self, cond, col_name: str):
+        """Extrae (low, high) de una condición simple o compuesta con AND sobre col_name."""
+        if isinstance(cond, Condition):
+            if cond.columna == col_name:
+                if cond.operador in (TokenType.GT, TokenType.GTE):
+                    return (cond.valor, 999999999)
+                if cond.operador in (TokenType.LT, TokenType.LTE):
+                    return (-999999999, cond.valor)
+            return None
+
+        if isinstance(cond, BinaryCondition) and cond.operador == TokenType.AND:
+            r1 = self._extraer_rango_columna(cond.izquierda, col_name)
+            r2 = self._extraer_rango_columna(cond.derecha, col_name)
+            if r1 is not None and r2 is not None:
+                low = max(r1[0], r2[0])
+                high = min(r1[1], r2[1])
+                if low <= high:
+                    return (low, high)
+            elif r1 is not None:
+                return r1
+            elif r2 is not None:
+                return r2
+
+        return None
+
     def ejecutar_select(self, nodo: SelectNode) -> list:
         info = self.catalog.get_table(nodo.tabla)
         where = nodo.where
         orden_ya_resuelto = False
+        nombres_col = [c.name for c in info.schema.columns]
+
         if where is None:
             usa_indice_orden = (nodo.order_by is not None and info.tipo_storage == STORAGE_HEAP
                                 and self.catalog.tiene_indice(nodo.tabla, nodo.order_by.columna))
@@ -119,8 +146,7 @@ class Conexion:
                 indice, tipo_indice = None, None
 
             if usa_indice_orden and tipo_indice == "bplus":
-                self.plan.append(f"lectura ordenada por indice bplus sobre '{nodo.order_by.columna}'")
-                nombres_col = [c.name for c in info.schema.columns]
+                self.plan.append(f"lectura ordenada por indice bplus no agrupado sobre '{nodo.order_by.columna}'")
                 filas = []
                 for clave, rid in indice.scan():
                     record = info.storage.read(rid, info.schema)
@@ -129,71 +155,86 @@ class Conexion:
                 if nodo.order_by.descendente:
                     filas.reverse()
                 orden_ya_resuelto = True
+            elif nodo.order_by is not None and info.tipo_storage == STORAGE_SEQUENTIAL and nodo.order_by.columna == info.key_column:
+                self.plan.append(f"lectura secuencial ordenada de '{info.nombre}' por clave '{nodo.order_by.columna}'")
+                filas = list(self.leer_todo(info))
+                if nodo.order_by.descendente:
+                    filas.reverse()
+                orden_ya_resuelto = True
             else:
                 self.plan.append(f"escaneo completo de '{info.nombre}' ({info.tipo_storage})")
                 filas = list(self.leer_todo(info))
         else:
-            usa_indice_igualdad = (isinstance(where, Condition) and where.operador == TokenType.EQ
-                and info.tipo_storage == STORAGE_HEAP and self.catalog.tiene_indice(nodo.tabla, where.columna))
-            usa_indice_rango = (isinstance(where, Condition) and where.operador in (TokenType.GT, TokenType.GTE, TokenType.LT, TokenType.LTE)
-                and info.tipo_storage == STORAGE_HEAP and self.catalog.tiene_indice(nodo.tabla, where.columna))
-            es_por_clave = (isinstance(where, Condition) and where.operador == TokenType.EQ
-                            and where.columna == info.key_column and info.tipo_storage == STORAGE_SEQUENTIAL)
+            es_igualdad = isinstance(where, Condition) and where.operador == TokenType.EQ
 
-            if usa_indice_igualdad:
+            # Evaluar si aplica búsqueda por rango en algún índice (bplus o clustered)
+            rango_info = None
+            for col in info.indices:
+                ind, t_ind = self.catalog.get_indice(nodo.tabla, col)
+                if t_ind in ("bplus", "clustered"):
+                    bnds = self._extraer_rango_columna(where, col)
+                    if bnds is not None:
+                        rango_info = (col, ind, t_ind, bnds[0], bnds[1])
+                        break
+
+            if es_igualdad and self.catalog.tiene_indice(nodo.tabla, where.columna):
                 indice, tipo_indice = self.catalog.get_indice(nodo.tabla, where.columna)
-                self.plan.append(f"busqueda por indice {tipo_indice} en '{where.columna}={where.valor}'")
-                rids = indice.search(where.valor)
-                nombres_col = [c.name for c in info.schema.columns]
-                filas = []
-                for rid in rids:
-                    record = info.storage.read(rid, info.schema)
-                    if record is not None:
-                        filas.append(dict(zip(nombres_col, record.values)))
-
-            elif usa_indice_rango:
-                indice, tipo_indice = self.catalog.get_indice(nodo.tabla, where.columna)
-                if tipo_indice != "bplus":
-                    self.plan.append(f"escaneo completo de '{info.nombre}' ({info.tipo_storage}) + filtro WHERE")
-                    filas = []
-                    for fila in self.leer_todo(info):
-                        if self.cumple_where(where, fila):
-                            filas.append(fila)
-                else:
-                    if where.operador == TokenType.GT or where.operador == TokenType.GTE:
-                        low = where.valor
-                        high = 999999999
-                    else:
-                        low = -999999999
-                        high = where.valor
-
-                    self.plan.append(f"busqueda por rango en indice {tipo_indice} sobre '{where.columna}'")
-                    rids = indice.range_search(low, high)
-                    nombres_col = [c.name for c in info.schema.columns]
+                if tipo_indice == "clustered":
+                    self.plan.append(f"busqueda por indice bplus agrupado en '{where.columna}={where.valor}'")
+                    record = indice.search(where.valor)
+                    filas = [dict(zip(nombres_col, record.values))] if record is not None else []
+                elif tipo_indice == "bplus":
+                    self.plan.append(f"busqueda por indice bplus no agrupado en '{where.columna}={where.valor}'")
+                    rids = indice.search(where.valor)
                     filas = []
                     for rid in rids:
                         record = info.storage.read(rid, info.schema)
-                        if record is None:
-                            continue
-                        fila = dict(zip(nombres_col, record.values))
+                        if record is not None:
+                            filas.append(dict(zip(nombres_col, record.values)))
+                elif tipo_indice == "hash":
+                    self.plan.append(f"busqueda por indice hash en '{where.columna}={where.valor}'")
+                    rids = indice.search(where.valor)
+                    filas = []
+                    for rid in rids:
+                        record = info.storage.read(rid, info.schema)
+                        if record is not None:
+                            filas.append(dict(zip(nombres_col, record.values)))
+                else:
+                    self.plan.append(f"escaneo completo de '{info.nombre}' ({info.tipo_storage}) + filtro WHERE")
+                    filas = [f for f in self.leer_todo(info) if self.cumple_where(where, f)]
+
+            elif es_igualdad and info.tipo_storage == STORAGE_SEQUENTIAL and where.columna == info.key_column:
+                self.plan.append(f"busqueda binaria por clave '{info.key_column}={where.valor}' en '{info.nombre}'")
+                record = info.storage.search(where.valor)
+                filas = [dict(zip(nombres_col, record.values))] if record is not None else []
+
+            elif rango_info is not None:
+                col_r, indice_r, tipo_r, low, high = rango_info
+                if tipo_r == "clustered":
+                    self.plan.append(f"busqueda por rango en indice bplus agrupado sobre '{col_r}' [{low} a {high}]")
+                    records = indice_r.range_search(low, high)
+                    filas = []
+                    for r in records:
+                        fila = dict(zip(nombres_col, r.values))
                         if self.cumple_where(where, fila):
                             filas.append(fila)
-
-            elif es_por_clave:
-                clave = where.valor
-                self.plan.append(f"busqueda binaria por clave '{info.key_column}={clave}' en '{info.nombre}'")
-                record = info.storage.search(clave)
-                if record is None:
+                elif tipo_r == "bplus":
+                    self.plan.append(f"busqueda por rango en indice bplus no agrupado sobre '{col_r}' [{low} a {high}]")
+                    rids = indice_r.range_search(low, high)
                     filas = []
+                    for rid in rids:
+                        record = info.storage.read(rid, info.schema)
+                        if record is not None:
+                            fila = dict(zip(nombres_col, record.values))
+                            if self.cumple_where(where, fila):
+                                filas.append(fila)
                 else:
-                    nombres_col = [c.name for c in info.schema.columns]
-                    filas = [dict(zip(nombres_col, record.values))]
+                    self.plan.append(f"escaneo completo de '{info.nombre}' ({info.tipo_storage}) + filtro WHERE")
+                    filas = [f for f in self.leer_todo(info) if self.cumple_where(where, f)]
+
             else:
                 self.plan.append(f"escaneo completo de '{info.nombre}' ({info.tipo_storage}) + filtro WHERE")
-                filas = []
-                for fila in self.leer_todo(info):
-                    if self.cumple_where(where, fila):
-                        filas.append(fila)
+                filas = [f for f in self.leer_todo(info) if self.cumple_where(where, f)]
         if nodo.group_by is not None:
             filas = self.agrupar(filas, nodo.group_by)
             self.plan.append(f"GROUP BY {nodo.group_by}")
@@ -263,6 +304,8 @@ class Conexion:
     def actualizar_indices_insert(self, tabla: str, info: TableInfo, record: Record, rid) -> None:
         for columna in info.indices:
             indice, tipo_indice = self.catalog.get_indice(tabla, columna)
+            if tipo_indice == "clustered":
+                continue
             idx = info.schema.column_index(columna)
             valor = record.values[idx]
             indice.insert(valor, rid)
@@ -314,6 +357,8 @@ class Conexion:
     def actualizar_indices_delete(self, tabla: str, info: TableInfo, record: Record, rid) -> None:
         for columna in info.indices:
             indice, tipo_indice = self.catalog.get_indice(tabla, columna)
+            if tipo_indice == "clustered":
+                continue
             idx = info.schema.column_index(columna)
             valor = record.values[idx]
             indice.delete(valor, rid)
