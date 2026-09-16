@@ -425,3 +425,158 @@ heap.close()
 
 if os.path.exists("test_heap.dat"):
     os.remove("test_heap.dat")
+
+
+print("\n==============================")
+print("PRUEBA ESPACIO LIBRE SIN DELETED")
+print("==============================")
+
+if os.path.exists("test_heap.dat"):
+    os.remove("test_heap.dat")
+
+
+schema_free = Schema(
+    table_name="datos",
+    columns=[
+        Column("id", DataType.INT, 4, is_pk=True),
+        Column("texto", DataType.VARCHAR, 2000)
+    ]
+)
+
+
+heap = HeapFile(
+    "test_heap.dat"
+)
+
+
+# --------------------------------------------------
+# Página 0
+# Dos registros de 1500 bytes.
+# Debería quedar algo de espacio libre.
+# --------------------------------------------------
+
+rid1 = heap.insert(
+    Record([
+        1,
+        "A" * 1500
+    ]),
+    schema_free
+)
+
+rid2 = heap.insert(
+    Record([
+        2,
+        "B" * 1500
+    ]),
+    schema_free
+)
+
+
+# --------------------------------------------------
+# Página 1
+# Estos registros ya no entran en página 0.
+# Dos registros de 1900 casi llenan página 1.
+# --------------------------------------------------
+
+rid3 = heap.insert(
+    Record([
+        3,
+        "C" * 1900
+    ]),
+    schema_free
+)
+
+rid4 = heap.insert(
+    Record([
+        4,
+        "D" * 1900
+    ]),
+    schema_free
+)
+
+
+print(
+    "RID 1:",
+    rid1
+)
+
+print(
+    "RID 2:",
+    rid2
+)
+
+print(
+    "RID 3:",
+    rid3
+)
+
+print(
+    "RID 4:",
+    rid4
+)
+
+print(
+    "Paginas antes de cerrar:",
+    heap.page_count()
+)
+
+assert heap.page_count() == 2
+
+
+# --------------------------------------------------
+# Cerramos y reabrimos.
+# No existe ningún deleted slot.
+# --------------------------------------------------
+
+heap.close()
+
+heap = HeapFile(
+    "test_heap.dat"
+)
+
+print()
+print("ARCHIVO REABIERTO")
+
+
+# --------------------------------------------------
+# 500 bytes no deberían entrar en página 1,
+# pero sí deberían entrar en página 0.
+# --------------------------------------------------
+
+rid_pequeno = heap.insert(
+    Record([
+        5,
+        "E" * 500
+    ]),
+    schema_free
+)
+
+
+print(
+    "RID pequeño:",
+    rid_pequeno
+)
+
+print(
+    "Paginas despues:",
+    heap.page_count()
+)
+
+
+# Debería aprovechar la página 0.
+assert rid_pequeno.page_id == 0
+
+# No debería crear una tercera página.
+assert heap.page_count() == 2
+
+
+print()
+print(
+    "ESPACIO LIBRE SIN DELETED REUTILIZADO CORRECTAMENTE"
+)
+
+
+heap.close()
+
+if os.path.exists("test_heap.dat"):
+    os.remove("test_heap.dat")
