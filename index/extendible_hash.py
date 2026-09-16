@@ -17,11 +17,9 @@ from index.hash_utils import stable_hash
 
 HASH_BITS = 64  # stable_hash() returns a 64-bit value
 
-MAGIC = b"EHIX"
-VERSION = 1
 META_PAGE = 0
-# magic | version | global_depth | flags | bucket_capacity | pad | first_dir_page | free_list_head
-META_FORMAT = "<4sHBBHHii"
+# global_depth | flags | bucket_capacity | pad | first_dir_page | free_list_head
+META_FORMAT = "<BBHHii"
 
 # Directory pages: a next-page link, then a run of bucket page ids.
 DIR_HEADER_FORMAT = "<i"
@@ -282,7 +280,7 @@ class ExtendibleHash(Index):
         buf = bytearray(PAGE_SIZE)
         struct.pack_into(
             META_FORMAT, buf, 0,
-            MAGIC, VERSION, self._global_depth, 0,
+            self._global_depth, 0,
             self._capacity, 0,
             self._dir_pages[0], self._free_list_head,
         )
@@ -303,13 +301,9 @@ class ExtendibleHash(Index):
         self._flush_meta()
 
     def _load(self) -> None:
-        magic, version, global_depth, _flags, capacity, _pad, first_dir_page, free_head = (
+        global_depth, _flags, capacity, _pad, first_dir_page, free_head = (
             struct.unpack_from(META_FORMAT, self._read_raw(META_PAGE), 0)
         )
-        if magic != MAGIC:
-            raise ValueError(f"{self._path} is not an extendible hash index")
-        if version != VERSION:
-            raise ValueError(f"{self._path} has on-disk format v{version}, expected v{VERSION}")
 
         self._global_depth = global_depth
         self._capacity = capacity

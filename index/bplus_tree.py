@@ -21,13 +21,10 @@ from index.node_page import (
     NodePage,
 )
 
-MAGIC = b"BPIX"
-VERSION = 1
 META_PAGE = 0
 
-# magic | version | flags | key_type | root | height | payload_size | free_list_head | reserved
-META_FORMAT = "<4sHBBiHHiq"
-META_SIZE = struct.calcsize(META_FORMAT)  # 28
+# flags | key_type | root | height | payload_size | free_list_head
+META_FORMAT = "<BBiHHi"
 
 FLAG_UNIQUE = 1 << 0
 FLAG_CLUSTERED = 1 << 1
@@ -590,14 +587,9 @@ class BPlusTree(Index):
         self._flush_meta()
 
     def _load(self) -> None:
-        (magic, version, flags, key_type, root, height,
-         payload_size, free_list_head, _reserved) = struct.unpack_from(
+        flags, key_type, root, height, payload_size, free_list_head = struct.unpack_from(
             META_FORMAT, self._read_raw(META_PAGE), 0
         )
-        if magic != MAGIC:
-            raise ValueError(f"{self._path} is not a B+ tree index (magic {magic!r})")
-        if version != VERSION:
-            raise ValueError(f"{self._path} has format version {version}, expected {VERSION}")
 
         self._key_type = type_from_code(key_type)
         self._unique = bool(flags & FLAG_UNIQUE)
@@ -618,8 +610,8 @@ class BPlusTree(Index):
         buf = bytearray(PAGE_SIZE)
         struct.pack_into(
             META_FORMAT, buf, 0,
-            MAGIC, VERSION, flags, type_code(self._key_type),
+            flags, type_code(self._key_type),
             self._root, self._height, self._leaf_codec.size,
-            self._free_list_head, 0,
+            self._free_list_head,
         )
         self._write_raw(META_PAGE, bytes(buf))
