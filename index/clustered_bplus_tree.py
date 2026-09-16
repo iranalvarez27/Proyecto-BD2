@@ -92,6 +92,14 @@ class ClusteredBPlusTree:
         self._seq.reorganize()
         self._rebuild()
 
+    def reload(self) -> None:
+        """Tras un ROLLBACK, el undo en RAM restaura los bytes de la
+        metapagina del arbol B+ y del SequentialFile directamente; hay que
+        recargar el estado en memoria de ambos (root/height del arbol y el
+        contador `_n_main`) para que no quede desincronizado."""
+        self._tree.reload()
+        self._n_main = sum(1 for _ in self._main_rows())
+
     # --------------------------------------------------------------- policy
 
     def aux_limit(self) -> int:

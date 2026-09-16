@@ -7,6 +7,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from common.page import SlottedPage, PAGE_SIZE
 from common.record import Record
 from common.types import Schema
+from transaction import manager as tx_manager
 
 MAIN_FILE = 0
 AUX_FILE = 1
@@ -86,10 +87,14 @@ class SequentialFile:
             raise ValueError(f"Invalid page ID: {page_id}")
         with open(path, "r+b") as file:
             file.seek(page_id * PAGE_SIZE)
+            before = file.read(PAGE_SIZE)
+            tx_manager.TX_HOOK("WRITE", path, page_id, before)
+            file.seek(page_id * PAGE_SIZE)
             file.write(page.to_bytes())
     def append_page(self, file_type: int, page: SlottedPage) -> int:
         path = self._get_path(file_type)
         page_id = self.page_count(file_type)
+        tx_manager.TX_HOOK("APPEND", path, page_id, None)
         with open(path, "ab") as file:
             file.write(page.to_bytes())
         return page_id
@@ -365,6 +370,14 @@ class SequentialFile:
         return count
     def reorganize(self) -> None:
         records = list(self.scan())
+
+        with open(self._data_path, "rb") as f:
+            snapshot_main = f.read()
+        with open(self._aux_path, "rb") as f:
+            snapshot_aux = f.read()
+        tx_manager.TX_HOOK("SNAPSHOT", self._data_path, None, snapshot_main)
+        tx_manager.TX_HOOK("SNAPSHOT", self._aux_path, None, snapshot_aux)
+
         open(
             self._data_path,
             "wb"

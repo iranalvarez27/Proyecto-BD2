@@ -1,5 +1,6 @@
 import os
 import sys
+import uuid
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -28,6 +29,7 @@ engine = EngineAdapter()
 
 class QueryRequest(BaseModel):
     query: str
+    session_id: Optional[str] = None
 
 
 class ReorganizeRequest(BaseModel):
@@ -39,6 +41,13 @@ def health_check():
     return {"status": "ok", "message": "Minigestor Engine API is active"}
 
 
+@app.get("/api/session")
+def new_session():
+    """Genera un session_id nuevo para que el frontend identifique sus
+    transacciones (BEGIN TRANSACTION / END TRANSACTION / ROLLBACK)."""
+    return {"session_id": str(uuid.uuid4())}
+
+
 @app.get("/api/tables")
 def get_tables():
     """Returns all registered tables, columns, indexes and live storage metrics."""
@@ -47,8 +56,9 @@ def get_tables():
 
 @app.post("/api/query")
 def execute_query(req: QueryRequest):
-    """Executes or mocks a SQL query, returning result rows and execution plan."""
-    return engine.execute_query(req.query)
+    """Executes a SQL query for a session, returning result rows, execution plan
+    and transactional state (active/xact_id)."""
+    return engine.execute_query(req.query, req.session_id)
 
 
 @app.post("/api/explain")

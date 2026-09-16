@@ -5,6 +5,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from common.page import SlottedPage, PAGE_SIZE
 from common.record import Record
 from common.types import Schema, RID, Column, DataType
+from transaction import manager as tx_manager
 
 class HeapFile:
     def __init__(self, file_path: str):
@@ -26,9 +27,13 @@ class HeapFile:
             raise ValueError(f"Invalid page ID: {page_id}")
         with open(self._file_path, "r+b") as file:
             file.seek(page_id * PAGE_SIZE)
+            before = file.read(PAGE_SIZE)
+            tx_manager.TX_HOOK("WRITE", self._file_path, page_id, before)
+            file.seek(page_id * PAGE_SIZE)
             file.write(page.to_bytes())
     def append_page(self, page: SlottedPage) -> int:
         page_id = self.page_count()
+        tx_manager.TX_HOOK("APPEND", self._file_path, page_id, None)
         with open(self._file_path, "ab") as file:
             file.write(page.to_bytes())
         return page_id

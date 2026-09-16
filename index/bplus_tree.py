@@ -8,6 +8,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from common.types import RID, DataType
 from index.base import Index
 from index.key_codec import decode, encode, type_code, type_from_code
+from transaction import manager as tx_manager
 from index.node_page import (
     CHILD_CODEC,
     HEADER_SIZE,
@@ -399,6 +400,14 @@ class BPlusTree(Index):
     def bulk_load(self, pairs) -> None:
         """Rebuilds the tree from (key, payload) pairs already in ascending
         order, bottom up in one pass. Leaves fill to 100%."""
+        # _truncate_to_meta() discards every page below with a raw truncate
+        # that bypasses _write_raw/_append_raw; snapshot the whole file first
+        # so a ROLLBACK mid-transaction can restore it (see TRANSACCIONES.md,
+        # hueco corregido en la seccion 7.2).
+        if os.path.exists(self._path):
+            with open(self._path, "rb") as f:
+                snapshot = f.read()
+            tx_manager.TX_HOOK("SNAPSHOT", self._path, None, snapshot)
         self._truncate_to_meta()
         codec = self._leaf_codec
 
@@ -543,10 +552,14 @@ class BPlusTree(Index):
     def _write_raw(self, page_id: int, data: bytes) -> None:
         with open(self._path, "r+b") as f:
             f.seek(page_id * PAGE_SIZE)
+            before = f.read(PAGE_SIZE)
+            tx_manager.TX_HOOK("WRITE", self._path, page_id, before)
+            f.seek(page_id * PAGE_SIZE)
             f.write(data)
 
     def _append_raw(self, data: bytes) -> int:
         page_id = self._page_count()
+        tx_manager.TX_HOOK("APPEND", self._path, page_id, None)
         with open(self._path, "ab") as f:
             f.write(data)
         return page_id
@@ -612,6 +625,14 @@ class BPlusTree(Index):
         self._root = root
         self._height = height
         self._free_list_head = free_list_head
+
+    def reload(self) -> None:
+        """Vuelve a leer la metapagina de disco. Necesario tras un ROLLBACK:
+        el undo en RAM restaura los bytes del archivo directamente, sin
+        pasar por los metodos de este objeto, asi que su estado en memoria
+        (root/height/free_list_head) quedaria desactualizado si no se
+        recarga."""
+        self._load()
 
     def _flush_meta(self) -> None:
         flags = (FLAG_UNIQUE if self._unique else 0) | (FLAG_CLUSTERED if self._clustered else 0)

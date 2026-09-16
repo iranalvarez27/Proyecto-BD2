@@ -14,6 +14,7 @@ from index.bucket_page import (
     BucketPage,
 )
 from index.hash_utils import stable_hash
+from transaction import manager as tx_manager
 
 HASH_BITS = 64  # stable_hash() returns a 64-bit value
 
@@ -245,10 +246,14 @@ class ExtendibleHash(Index):
     def _write_raw(self, page_id: int, data: bytes) -> None:
         with open(self._path, "r+b") as f:
             f.seek(page_id * PAGE_SIZE)
+            before = f.read(PAGE_SIZE)
+            tx_manager.TX_HOOK("WRITE", self._path, page_id, before)
+            f.seek(page_id * PAGE_SIZE)
             f.write(data)
 
     def _append_raw(self, data: bytes) -> int:
         page_id = self._page_count()
+        tx_manager.TX_HOOK("APPEND", self._path, page_id, None)
         with open(self._path, "ab") as f:
             f.write(data)
         return page_id
@@ -315,6 +320,10 @@ class ExtendibleHash(Index):
         self._capacity = capacity
         self._free_list_head = free_head
         self._load_dir(first_dir_page)
+
+    def reload(self) -> None:
+        """Re-lee metapagina y directorio de disco (ver BPlusTree.reload)."""
+        self._load()
 
     # -------------------------------------------------------------- directory
 

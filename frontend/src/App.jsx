@@ -1,22 +1,36 @@
 import React, { useState, useEffect } from 'react';
-import { 
-  Database, 
-  Table2, 
-  GitBranch, 
-  RefreshCw, 
-  Sparkles, 
-  CheckCircle2, 
+import {
+  Database,
+  Table2,
+  GitBranch,
+  RefreshCw,
+  Sparkles,
+  CheckCircle2,
   XCircle,
   Terminal,
   Layers,
   HelpCircle,
-  RotateCcw
+  RotateCcw,
+  Lock
 } from 'lucide-react';
 
 import FilePanel from './components/FilePanel';
 import QueryPanel from './components/QueryPanel';
 import ResultsPanel from './components/ResultsPanel';
 import PlanPanel from './components/PlanPanel';
+
+function obtenerOCrearSessionId() {
+  try {
+    const existente = localStorage.getItem('bd2_session_id');
+    if (existente) return existente;
+    const nuevo = crypto.randomUUID();
+    localStorage.setItem('bd2_session_id', nuevo);
+    return nuevo;
+  } catch (err) {
+    // localStorage puede fallar (modo privado); usa un id solo para esta pestaña
+    return crypto.randomUUID();
+  }
+}
 
 export default function App() {
   const [tables, setTables] = useState([]);
@@ -33,6 +47,9 @@ export default function App() {
   const [loadingTables, setLoadingTables] = useState(false);
   const [loadingQuery, setLoadingQuery] = useState(false);
   const [engineConnected, setEngineConnected] = useState(true);
+
+  const [sessionId] = useState(obtenerOCrearSessionId);
+  const [transactionState, setTransactionState] = useState({ active: false, xact_id: null });
 
   // Initial load of tables
   useEffect(() => {
@@ -58,36 +75,52 @@ export default function App() {
     }
   };
 
+  const ejecutarUnaSentencia = async (sentencia) => {
+    const res = await fetch('/api/query', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ query: sentencia, session_id: sessionId }),
+    });
+    return res.json();
+  };
+
   const handleExecuteQuery = async (customQuery = null) => {
     const q = customQuery || query;
     if (!q.trim()) return;
 
-    setLoadingQuery(true);
-    try {
-      const res = await fetch('/api/query', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ query: q }),
-      });
-      const data = await res.json();
-      setQueryResult(data);
+    // Un script pegado (plantilla "Transacción completa") puede traer varias
+    // sentencias separadas por ';'; se ejecutan en orden sobre el mismo
+    // session_id y se detiene en el primer error.
+    const sentencias = q.split(';').map(s => s.trim()).filter(Boolean);
 
-      // If plan is returned, keep it ready
-      if (data.plan) {
-        setExecutionPlan(data.plan);
+    setLoadingQuery(true);
+    let data = null;
+    let activaAntes = transactionState.active;
+    try {
+      for (const sentencia of sentencias) {
+        data = await ejecutarUnaSentencia(sentencia + ';');
+        if (data.transaction) {
+          setTransactionState(data.transaction);
+        }
+        if (data.status !== 'success') break;
       }
 
-      // Switch to results tab
+      setQueryResult(data);
+      if (data && data.plan) {
+        setExecutionPlan(data.plan);
+      }
       setActiveBottomTab('results');
 
-      // Add to history if not duplicate of last
       setHistory(prev => {
         if (prev[prev.length - 1] === q) return prev;
         return [...prev, q];
       });
 
-      // Refresh tables if an INSERT or DELETE might have altered disk pages
-      if (q.trim().toUpperCase().startsWith('INSERT') || q.trim().toUpperCase().startsWith('DELETE')) {
+      // Refresh tables if an INSERT or DELETE might have altered disk pages,
+      // o si una transaccion activa se acaba de confirmar/revertir.
+      const terminoTransaccion = activaAntes && data && data.transaction && !data.transaction.active;
+      const qUpper = q.trim().toUpperCase();
+      if (qUpper.includes('INSERT') || qUpper.includes('DELETE') || terminoTransaccion) {
         fetchTables();
       }
     } catch (err) {
@@ -174,6 +207,16 @@ export default function App() {
 
         {/* Engine status and tools */}
         <div className="flex items-center gap-3 text-xs">
+          {transactionState.active && (
+            <div
+              className="flex items-center gap-1.5 px-2.5 py-1 bg-amber-950/60 rounded-full border border-amber-700/60 text-[11px] text-amber-300"
+              title={`session_id: ${sessionId}`}
+            >
+              <Lock className="w-3 h-3" />
+              <span>Transacción activa: {transactionState.xact_id}</span>
+            </div>
+          )}
+
           <button
             onClick={handleReseed}
             title="Reiniciar datos de demostración en disco"

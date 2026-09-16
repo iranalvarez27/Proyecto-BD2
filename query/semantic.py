@@ -1,4 +1,7 @@
-from query.ast import SelectNode, InsertNode, DeleteNode, Condition, BinaryCondition, OrderBy
+from query.ast import (
+    SelectNode, InsertNode, DeleteNode, Condition, BinaryCondition, OrderBy,
+    BeginNode, CommitNode, RollbackNode,
+)
 from query.catalog import Catalog
 from common.types import Schema, DataType
 
@@ -18,6 +21,8 @@ class SemanticAnalyzer:
             self.validar_insert(nodo)
         elif isinstance(nodo, DeleteNode):
             self.validar_delete(nodo)
+        elif isinstance(nodo, (BeginNode, CommitNode, RollbackNode)):
+            pass  # sin validaciones semanticas: solo control transaccional
         else:
             raise SemanticError(f"tipo de nodo desconocido: {type(nodo).__name__}")
 

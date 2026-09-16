@@ -37,3 +37,18 @@ class InsertNode:
 class DeleteNode:
     tabla: str
     where: object = None
+
+
+@dataclass
+class BeginNode:
+    pass
+
+
+@dataclass
+class CommitNode:
+    pass
+
+
+@dataclass
+class RollbackNode:
+    pass
