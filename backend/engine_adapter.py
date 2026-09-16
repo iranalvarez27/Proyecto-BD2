@@ -29,7 +29,10 @@ class EngineAdapter:
         self.data_dir = data_dir
         os.makedirs(data_dir, exist_ok=True)
         self.catalog = Catalog()
-        self.conexion = Conexion(self.catalog)
+        # /tmp suele ser tmpfs (RAM): los runs externos van a disco de verdad
+        tmp_dir = os.path.join(data_dir, "tmp")
+        os.makedirs(tmp_dir, exist_ok=True)
+        self.conexion = Conexion(self.catalog, tmp_dir=tmp_dir)
         self.clustered_trees: Dict[str, ClusteredBPlusTree] = {}
         self.init_database()
 
@@ -392,7 +395,24 @@ class EngineAdapter:
         nodes = []
         for step in plan_steps:
             step_lower = step.lower()
-            if "agrupado" in step_lower and "no agrupado" not in step_lower:
+            # antes que los indices: "external hash" contiene "hash"
+            if "order by" in step_lower:
+                nodes.append({
+                    "node_type": "Sort (ORDER BY)",
+                    "method": step,
+                    "cost": 1.80,
+                    "rows_estimated": 10,
+                    "children": [],
+                })
+            elif "group by" in step_lower:
+                nodes.append({
+                    "node_type": "Aggregate (GROUP BY)",
+                    "method": step,
+                    "cost": 1.50,
+                    "rows_estimated": 5,
+                    "children": [],
+                })
+            elif "agrupado" in step_lower and "no agrupado" not in step_lower:
                 nodes.append({
                     "node_type": "IndexScan (B+ Tree Agrupado)",
                     "method": step,
@@ -446,22 +466,6 @@ class EngineAdapter:
                     "method": step,
                     "cost": 2.50,
                     "rows_estimated": 10,
-                    "children": [],
-                })
-            elif "order by" in step_lower:
-                nodes.append({
-                    "node_type": "Sort (ORDER BY)",
-                    "method": step,
-                    "cost": 1.80,
-                    "rows_estimated": 10,
-                    "children": [],
-                })
-            elif "group by" in step_lower:
-                nodes.append({
-                    "node_type": "Aggregate (GROUP BY)",
-                    "method": step,
-                    "cost": 1.50,
-                    "rows_estimated": 5,
                     "children": [],
                 })
             elif "insert" in step_lower:
