@@ -844,3 +844,37 @@ print()
 print("==============================")
 print("TODAS LAS PRUEBAS PASARON")
 print("==============================")
+
+
+print("\n==============================")
+print("PRUEBA ARCHIVO LOGICAMENTE VACIO")
+print("==============================")
+
+clean_files(seq)
+
+seq = SequentialFile(
+    "test_datos.dat",
+    "test_aux.dat",
+    schema,
+    "id"
+)
+
+seq.insert(Record([10, "A", 20]))
+seq.insert(Record([20, "B", 20]))
+
+assert seq.delete(10) is True
+assert seq.delete(20) is True
+
+print("Insertando 5 después de eliminar todos...")
+
+seq.insert(
+    Record([5, "C", 20])
+)
+
+print("SCAN:", list(seq.scan()))
+print("SEARCH 5:", seq.search(5))
+
+assert seq.search(5) is not None
+assert seq.search(5).values[0] == 5
+
+seq.close()

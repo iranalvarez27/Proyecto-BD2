@@ -439,9 +439,22 @@ class SequentialFile:
 
     def insert(self, record: Record) -> FilePointer:
         new_key = record.values[self._key_index]
+
         if self._key_is_pk and self._duplicate_key(new_key):
             raise ValueError(f"Key {new_key} already exists")
+
+        last_main_key = self._last_main_key()
         if self._head is None:
+
+            if (
+                last_main_key is None
+                or new_key > last_main_key
+            ):
+                target_file = MAIN_FILE
+
+            else:
+                target_file = AUX_FILE
+
             entry = SequentialEntry(
                 record=record,
                 next_pointer=None,
@@ -449,23 +462,28 @@ class SequentialFile:
             )
 
             pointer = self._append_entry(
-                MAIN_FILE,
+                target_file,
                 entry
             )
 
             self._head = pointer
             self._tail = pointer
             self._tail_key = new_key
+
             self._n_live += 1
+
+            if target_file == AUX_FILE:
+                self._n_aux += 1
+
             self._mark_dirty()
 
             return pointer
-        last_main_key = self._last_main_key()
 
         if (
             self._tail is not None
             and self._tail_key is not None
             and last_main_key is not None
+            and new_key > self._tail_key
             and new_key > last_main_key
         ):
             new_entry = SequentialEntry(
@@ -473,6 +491,7 @@ class SequentialFile:
                 next_pointer=None,
                 deleted=False
             )
+
             new_pointer = self._append_entry(
                 MAIN_FILE,
                 new_entry
@@ -496,24 +515,48 @@ class SequentialFile:
 
             self._mark_dirty()
 
-            return new_pointer        
-        previous_pointer, current_pointer = self._find_insert_position(new_key)
-        new_entry = SequentialEntry(record=record, next_pointer=current_pointer, deleted=False)
-        new_pointer = self._append_entry(AUX_FILE, new_entry)
+            return new_pointer
+        previous_pointer, current_pointer = (
+            self._find_insert_position(new_key)
+        )
+
+        new_entry = SequentialEntry(
+            record=record,
+            next_pointer=current_pointer,
+            deleted=False
+        )
+
+        new_pointer = self._append_entry(
+            AUX_FILE,
+            new_entry
+        )
+
         if previous_pointer is not None:
-            previous_entry = self._read_entry(previous_pointer)
+            previous_entry = self._read_entry(
+                previous_pointer
+            )
+
             previous_entry.next_pointer = new_pointer
-            self._write_entry(previous_pointer, previous_entry)
+
+            self._write_entry(
+                previous_pointer,
+                previous_entry
+            )
+
         else:
             self._head = new_pointer
+
         if current_pointer is None:
             self._tail = new_pointer
             self._tail_key = new_key
+
         self._n_aux += 1
         self._n_live += 1
-        self._mark_dirty()
-        return new_pointer
 
+        self._mark_dirty()
+
+        return new_pointer
+    
     def scan(self):
         current_pointer = self._head
         while current_pointer is not None:
