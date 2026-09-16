@@ -71,8 +71,16 @@ class HeapFile:
     def write_page(self, page_id: int, page: SlottedPage) -> None:
         if page_id < 0 or page_id >= self._n_pages:
             raise ValueError(f"Invalid page ID: {page_id}")
-        self._write_page_disk(page_id, page)
-        self._page_cache = (page_id, page, False)
+        self._flush_page_cache()
+        self._write_page_disk(
+            page_id,
+            page
+        )
+        self._page_cache = (
+            page_id,
+            page,
+            False
+        )
 
     def append_page(self, page: SlottedPage) -> int:
         self._flush_page_cache()
@@ -88,42 +96,85 @@ class HeapFile:
         try:
             slot_id = page.insert(data)
         except ValueError:
-            self._reusable.discard(page_id)
-            return None
-        self._page_cache = (page_id, page, True)
-        self._reusable.add(page_id)
-        return RID(page_id=page_id, slot_id=slot_id)
+            has_deleted_slot = False
 
+            for slot_id in range(page.slot_count):
+                if page.read(slot_id) == b"":
+                    has_deleted_slot = True
+                    break
+
+            if not has_deleted_slot:
+                self._reusable.discard(page_id)
+            return None
+        self._page_cache = (
+            page_id,
+            page,
+            True
+        )
+        self._reusable.add(page_id)
+        return RID(
+            page_id=page_id,
+            slot_id=slot_id
+        )
+    def _discover_reusable_pages(self) -> None:
+        if self._holes_scanned:
+            return
+
+        for page_id in range(self._n_pages):
+            page = self.read_page(page_id)
+
+            for slot_id in range(page.slot_count):
+                if page.read(slot_id) == b"":
+                    self._reusable.add(page_id)
+                    break
+
+        self._holes_scanned = True
     def insert(self, record: Record, schema: Schema) -> RID:
         data = record.pack(schema)
         n = self._n_pages
-
         if n > 0:
-            rid = self._try_insert(n - 1, data)
+            rid = self._try_insert(
+                n - 1,
+                data
+            )
             if rid is not None:
                 return rid
-
         if self._reusable:
             for page_id in list(self._reusable):
                 if page_id == n - 1:
                     continue
-                rid = self._try_insert(page_id, data)
+                rid = self._try_insert(
+                    page_id,
+                    data
+                )
                 if rid is not None:
                     return rid
-        elif not self._holes_scanned and n > 1:
-            for page_id in range(n - 1):
-                rid = self._try_insert(page_id, data)
+        if (
+            not self._holes_scanned
+            and n > 1
+        ):
+            self._discover_reusable_pages()
+            for page_id in list(self._reusable):
+                if page_id == n - 1:
+                    continue
+                rid = self._try_insert(
+                    page_id,
+                    data
+                )
                 if rid is not None:
-                    self._holes_scanned = True
                     return rid
-            self._holes_scanned = True
-
         page = SlottedPage()
         slot_id = page.insert(data)
-        page_id = self.append_page(page)
-        self._reusable.add(page_id)
-        return RID(page_id=page_id, slot_id=slot_id)
-
+        page_id = self.append_page(
+            page
+        )
+        self._reusable.add(
+            page_id
+        )
+        return RID(
+            page_id=page_id,
+            slot_id=slot_id
+        )
     def read(self, rid: RID, schema: Schema) -> Record | None:
         page = self.read_page(rid.page_id)
         data = page.read(rid.slot_id)
