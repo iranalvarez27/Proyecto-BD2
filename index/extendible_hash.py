@@ -5,6 +5,8 @@ from typing import Any
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from common.types import RID
+from engine.buffer_pool import BufferPool
+from engine.segment import NIL, Segment
 from index.base import Index
 from index.bucket_page import (
     MAX_ENTRIES,
@@ -26,15 +28,13 @@ DIR_HEADER_FORMAT = "<i"
 DIR_HEADER_SIZE = struct.calcsize(DIR_HEADER_FORMAT)  # 4
 ENTRIES_PER_DIR_PAGE = (PAGE_SIZE - DIR_HEADER_SIZE) // 4  # 1023
 
-NIL = -1
-
 
 class ExtendibleHash(Index):
     """Non-clustered hash index: lossy (hash + RID, not the key), no ranges."""
 
-    def __init__(self, path: str, bucket_capacity: int = MAX_ENTRIES):
-        self._path = path
-        if os.path.exists(path) and os.path.getsize(path) >= PAGE_SIZE:
+    def __init__(self, pool: BufferPool, path: str, bucket_capacity: int = MAX_ENTRIES):
+        self._seg = Segment(pool, path)
+        if self._seg.page_count() > 0:
             self._load()
         else:
             if not 1 <= bucket_capacity <= MAX_ENTRIES:
@@ -220,11 +220,14 @@ class ExtendibleHash(Index):
     def rebuild(self) -> None:
         """Reload every entry into a fresh index, compacting it."""
         entries = [(h, rid) for _, page in self._iter_pages() for h, rid in page.entries]
-        tmp_path = self._path + ".rebuild"
-        fresh = ExtendibleHash(tmp_path, bucket_capacity=self._capacity)
+        pool, path = self._seg.pool, self._seg.path
+        tmp_path = path + ".rebuild"
+        # a leftover from an interrupted rebuild would be loaded instead of created
+        pool.truncate(tmp_path, 0)
+        fresh = ExtendibleHash(pool, tmp_path, bucket_capacity=self._capacity)
         for key_hash, rid in entries:
             fresh._insert_hash(key_hash, rid)
-        os.replace(tmp_path, self._path)
+        pool.replace(tmp_path, path)
         self._load()
 
     # ----------------------------------------------------------------- paging
@@ -232,47 +235,24 @@ class ExtendibleHash(Index):
     def _mask(self) -> int:
         return (1 << self._global_depth) - 1
 
-    def _page_count(self) -> int:
-        return os.path.getsize(self._path) // PAGE_SIZE
-
-    def _read_raw(self, page_id: int) -> bytes:
-        with open(self._path, "rb") as f:
-            f.seek(page_id * PAGE_SIZE)
-            return f.read(PAGE_SIZE)
-
-    def _write_raw(self, page_id: int, data: bytes) -> None:
-        with open(self._path, "r+b") as f:
-            f.seek(page_id * PAGE_SIZE)
-            f.write(data)
-
-    def _append_raw(self, data: bytes) -> int:
-        page_id = self._page_count()
-        with open(self._path, "ab") as f:
-            f.write(data)
-        return page_id
-
     def _alloc_page(self) -> int:
         """Pop the free list, or extend the file."""
-        if self._free_list_head == NIL:
-            return self._append_raw(bytes(PAGE_SIZE))
-        page_id = self._free_list_head
-        self._free_list_head = struct.unpack_from("<i", self._read_raw(page_id), 0)[0]
-        self._flush_meta()
+        reused = self._seg.free_head != NIL
+        page_id = self._seg.alloc()
+        if reused:
+            self._flush_meta()
         return page_id
 
     def _free_page(self, page_id: int) -> None:
         """Freed pages go on the list: truncating would shift later page ids."""
-        buf = bytearray(PAGE_SIZE)
-        struct.pack_into("<i", buf, 0, self._free_list_head)
-        self._write_raw(page_id, bytes(buf))
-        self._free_list_head = page_id
+        self._seg.free(page_id)
         self._flush_meta()
 
     def _read_bucket(self, page_id: int) -> BucketPage:
-        return BucketPage.from_bytes(self._read_raw(page_id))
+        return BucketPage.from_bytes(self._seg.read(page_id))
 
     def _write_bucket(self, page_id: int, page: BucketPage) -> None:
-        self._write_raw(page_id, page.to_bytes())
+        self._seg.write(page_id, page.to_bytes())
 
     # --------------------------------------------------------------- metapage
 
@@ -282,19 +262,17 @@ class ExtendibleHash(Index):
             META_FORMAT, buf, 0,
             self._global_depth, 0,
             self._capacity, 0,
-            self._dir_pages[0], self._free_list_head,
+            self._dir_pages[0], self._seg.free_head,
         )
-        self._write_raw(META_PAGE, bytes(buf))
+        self._seg.write(META_PAGE, bytes(buf))
 
     def _create(self, bucket_capacity: int) -> None:
-        open(self._path, "wb").close()
         self._global_depth = 0
         self._capacity = bucket_capacity
-        self._free_list_head = NIL
 
-        self._append_raw(bytes(PAGE_SIZE))                    # page 0: metapage
-        self._dir_pages = [self._append_raw(bytes(PAGE_SIZE))]  # page 1: directory
-        first_bucket = self._append_raw(BucketPage().to_bytes())
+        self._seg.append(bytes(PAGE_SIZE))                    # page 0: metapage
+        self._dir_pages = [self._seg.append(bytes(PAGE_SIZE))]  # page 1: directory
+        first_bucket = self._seg.append(BucketPage().to_bytes())
         self._dir = [first_bucket]
 
         self._flush_dir_pages()
@@ -302,12 +280,12 @@ class ExtendibleHash(Index):
 
     def _load(self) -> None:
         global_depth, _flags, capacity, _pad, first_dir_page, free_head = (
-            struct.unpack_from(META_FORMAT, self._read_raw(META_PAGE), 0)
+            struct.unpack_from(META_FORMAT, self._seg.read(META_PAGE), 0)
         )
 
         self._global_depth = global_depth
         self._capacity = capacity
-        self._free_list_head = free_head
+        self._seg.free_head = free_head
         self._load_dir(first_dir_page)
 
     # -------------------------------------------------------------- directory
@@ -317,7 +295,7 @@ class ExtendibleHash(Index):
         self._dir = []
         page_id = first_dir_page
         while page_id != NIL:
-            data = self._read_raw(page_id)
+            data = self._seg.read(page_id)
             self._dir_pages.append(page_id)
             self._dir.extend(
                 struct.unpack_from(f"<{ENTRIES_PER_DIR_PAGE}i", data, DIR_HEADER_SIZE)
@@ -340,7 +318,7 @@ class ExtendibleHash(Index):
         # tail beyond 2**D stays NIL so a reload can tell padding from a bucket
         padded = chunk + [NIL] * (ENTRIES_PER_DIR_PAGE - len(chunk))
         struct.pack_into(f"<{ENTRIES_PER_DIR_PAGE}i", buf, DIR_HEADER_SIZE, *padded)
-        self._write_raw(self._dir_pages[k], bytes(buf))
+        self._seg.write(self._dir_pages[k], bytes(buf))
 
     def _flush_dir_pages(self) -> None:
         """Whole-directory write. Only on doubling, which happens O(D) times."""

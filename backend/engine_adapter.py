@@ -7,6 +7,8 @@ from typing import Any, Dict, List, Optional
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from common.types import Schema, Column, DataType
 from common.record import Record
+from engine.buffer_pool import BufferPool
+from engine.file_manager import FileManager
 from storage.heap_file import HeapFile
 from storage.sequential_file import SequentialFile
 from index.bplus_tree import BPlusTree
@@ -29,6 +31,7 @@ class EngineAdapter:
         self.data_dir = data_dir
         os.makedirs(data_dir, exist_ok=True)
         self.catalog = Catalog()
+        self.pool = BufferPool(FileManager())
         # /tmp suele ser tmpfs (RAM): los runs externos van a disco de verdad
         tmp_dir = os.path.join(data_dir, "tmp")
         os.makedirs(tmp_dir, exist_ok=True)
@@ -65,7 +68,7 @@ class EngineAdapter:
 
         # Register Extendible Hash Index on 'carrera'
         hash_path = os.path.join(self.data_dir, "estudiantes_carrera_hash.idx")
-        hash_idx = ExtendibleHash(hash_path)
+        hash_idx = ExtendibleHash(self.pool, hash_path)
         self.catalog.register_index("estudiantes", "carrera", hash_idx, INDEX_HASH)
 
         # 2. Table 'cursos' -> SequentialFile
