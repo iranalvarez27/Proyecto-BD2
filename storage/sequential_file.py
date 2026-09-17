@@ -4,9 +4,11 @@ from dataclasses import dataclass
 import struct
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from common.page import SlottedPage, PAGE_SIZE
+from common.page import SlottedPage
 from common.record import Record
 from common.types import Schema
+from engine.buffer_pool import BufferPool
+from engine.segment import Segment
 
 MAIN_FILE = 0
 AUX_FILE = 1
@@ -66,20 +68,16 @@ def _unpack_pointer(file_type: int, page_id: int, slot_id: int) -> FilePointer |
 
 
 class SequentialFile:
-    def __init__(self, data_path: str, aux_path: str, schema: Schema, key_column: str):
+    def __init__(self, pool: BufferPool, data_path: str, aux_path: str, schema: Schema, key_column: str):
         self._data_path = data_path
         self._aux_path = aux_path
         self._schema = schema
         self._key_column = key_column
         self._key_index = schema.column_index(key_column)
         self._key_is_pk = schema.columns[self._key_index].is_pk
-        if not os.path.exists(data_path):
-            open(data_path, "wb").close()
-        if not os.path.exists(aux_path):
-            open(aux_path, "wb").close()
-        self._page_counts = {
-            MAIN_FILE: os.path.getsize(data_path) // PAGE_SIZE,
-            AUX_FILE: os.path.getsize(aux_path) // PAGE_SIZE,
+        self._segs = {
+            MAIN_FILE: Segment(pool, data_path),
+            AUX_FILE: Segment(pool, aux_path),
         }
         self._meta_path = os.path.splitext(data_path)[0] + ".meta.bin"
         self._head: FilePointer | None = None
@@ -88,48 +86,27 @@ class SequentialFile:
         self._n_aux = 0
         self._n_live = 0
         self._n_deleted = 0
-        self._page_cache: tuple[int, int, SlottedPage, bool] | None = None
         self._unsaved = 0
         self._dirty_path = os.path.splitext(data_path)[0] + ".dirty.bin"
-        self._fps = {}
-        self._open_handles()
+        self._closed = False
         self._load_state()
 
     def _empty_files(self) -> bool:
-        return self._page_counts[MAIN_FILE] == 0 and self._page_counts[AUX_FILE] == 0
-
-    def _open_handles(self) -> None:
-        self._fps = {
-            MAIN_FILE: open(self._data_path, "r+b"),
-            AUX_FILE: open(self._aux_path, "r+b"),
-        }
-
-    def _close_handles(self) -> None:
-        for file_type in list(self._fps):
-            fp = self._fps.pop(file_type)
-            try:
-                fp.flush()
-                fp.close()
-            except Exception:
-                pass
+        return self.page_count(MAIN_FILE) == 0 and self.page_count(AUX_FILE) == 0
 
     def close(self) -> None:
-        if not self._fps:
+        if self._closed:
             return
         self._save_state()
-        self._close_handles()
+        for seg in self._segs.values():
+            seg.close()
+        self._closed = True
 
     def __enter__(self):
         return self
 
     def __exit__(self, exc_type, exc, tb) -> None:
         self.close()
-
-    def __del__(self):
-        try:
-            self.close()
-        except Exception:
-            pass
 
     def _load_state(self) -> None:
         if self._empty_files():
@@ -154,7 +131,6 @@ class SequentialFile:
         self._save_state()
 
     def _save_state(self) -> None:
-        self._flush_page_cache()
         payload = struct.pack(
             META_FORMAT,
             *_pack_pointer(self._head),
@@ -207,66 +183,20 @@ class SequentialFile:
         raise ValueError(f"Invalid file type: {file_type}")
 
     def page_count(self, file_type: int) -> int:
-        return self._page_counts[file_type]
-
-    def _flush_page_cache(self) -> None:
-        if self._page_cache is None:
-            return
-        file_type, page_id, page, dirty = self._page_cache
-        if dirty:
-            self._write_page_disk(file_type, page_id, page)
-            self._page_cache = (file_type, page_id, page, False)
-
-    def _write_page_disk(self, file_type: int, page_id: int, page: SlottedPage) -> None:
-        fp = self._fps[file_type]
-        fp.seek(page_id * PAGE_SIZE)
-        fp.write(page.to_bytes())
-
-    def _read_page_disk(self, file_type: int, page_id: int) -> SlottedPage:
-        fp = self._fps[file_type]
-        fp.seek(page_id * PAGE_SIZE)
-        data = fp.read(PAGE_SIZE)
-        return SlottedPage.from_bytes(data)
-
-    def _cached_page(self, file_type: int, page_id: int) -> SlottedPage:
-        if (
-            self._page_cache is not None
-            and self._page_cache[0] == file_type
-            and self._page_cache[1] == page_id
-        ):
-            return self._page_cache[2]
-        self._flush_page_cache()
-        page = self._read_page_disk(file_type, page_id)
-        self._page_cache = (file_type, page_id, page, False)
-        return page
-
-    def _mark_cache_dirty(self) -> None:
-        if self._page_cache is None:
-            return
-        file_type, page_id, page, _ = self._page_cache
-        self._page_cache = (file_type, page_id, page, True)
+        return self._segs[file_type].page_count()
 
     def read_page(self, file_type: int, page_id: int) -> SlottedPage:
         if page_id < 0 or page_id >= self.page_count(file_type):
             raise ValueError(f"Invalid page ID: {page_id}")
-        return self._cached_page(file_type, page_id)
+        return SlottedPage.from_bytes(self._segs[file_type].read(page_id))
 
     def write_page(self, file_type: int, page_id: int, page: SlottedPage) -> None:
         if page_id < 0 or page_id >= self.page_count(file_type):
             raise ValueError(f"Invalid page ID: {page_id}")
-        self._flush_page_cache()
-        self._write_page_disk(file_type, page_id, page)
-        self._page_cache = (file_type, page_id, page, False)
+        self._segs[file_type].write(page_id, page.to_bytes())
 
     def append_page(self, file_type: int, page: SlottedPage) -> int:
-        self._flush_page_cache()
-        page_id = self.page_count(file_type)
-        fp = self._fps[file_type]
-        fp.seek(0, os.SEEK_END)
-        fp.write(page.to_bytes())
-        self._page_counts[file_type] = page_id + 1
-        self._page_cache = (file_type, page_id, page, False)
-        return page_id
+        return self._segs[file_type].append(page.to_bytes())
 
     def _append_entry(self, file_type: int, entry: SequentialEntry) -> FilePointer:
         data = entry.pack(self._schema)
@@ -277,10 +207,10 @@ class SequentialFile:
             page_id = self.append_page(file_type, page)
             return FilePointer(file_type=file_type, page_id=page_id, slot_id=slot_id)
         page_id = page_count - 1
-        page = self._cached_page(file_type, page_id)
+        page = self.read_page(file_type, page_id)
         try:
             slot_id = page.insert(data)
-            self._mark_cache_dirty()
+            self.write_page(file_type, page_id, page)
             return FilePointer(file_type=file_type, page_id=page_id, slot_id=slot_id)
         except ValueError:
             page = SlottedPage()
@@ -289,17 +219,17 @@ class SequentialFile:
             return FilePointer(file_type=file_type, page_id=page_id, slot_id=slot_id)
 
     def _read_entry(self, pointer: FilePointer) -> SequentialEntry:
-        page = self._cached_page(pointer.file_type, pointer.page_id)
+        page = self.read_page(pointer.file_type, pointer.page_id)
         data = page.read(pointer.slot_id)
         if data == b"":
             raise ValueError("Pointer references an empty slot")
         return SequentialEntry.unpack(data, self._schema)
 
     def _write_entry(self, pointer: FilePointer, entry: SequentialEntry) -> None:
-        page = self._cached_page(pointer.file_type, pointer.page_id)
+        page = self.read_page(pointer.file_type, pointer.page_id)
         data = entry.pack(self._schema)
         page.update(pointer.slot_id, data)
-        self._mark_cache_dirty()
+        self.write_page(pointer.file_type, pointer.page_id, page)
 
     def _get_key(self, entry: SequentialEntry):
         return entry.record.values[self._key_index]
@@ -721,13 +651,8 @@ class SequentialFile:
 
     def reorganize(self) -> None:
         records = list(self.scan())
-        self._page_cache = None
-        self._close_handles()
-        open(self._data_path, "wb").close()
-        open(self._aux_path, "wb").close()
-        self._page_counts[MAIN_FILE] = 0
-        self._page_counts[AUX_FILE] = 0
-        self._open_handles()
+        for seg in self._segs.values():
+            seg.truncate(0)
         pointers = []
         for record in records:
             entry = SequentialEntry(record=record, next_pointer=None, deleted=False)

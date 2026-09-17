@@ -13,6 +13,8 @@ sys.path.insert(
 from common.record import Record
 from common.types import Schema, Column, DataType
 
+from engine.buffer_pool import BufferPool
+from engine.file_manager import FileManager
 from sequential_file import (
     SequentialFile,
     MAIN_FILE,
@@ -64,6 +66,7 @@ schema = Schema(
 clean_files()
 
 seq = SequentialFile(
+    BufferPool(FileManager()),
     "test_datos.dat",
     "test_aux.dat",
     schema,
@@ -112,6 +115,7 @@ assert seq.search(30) is not None
 clean_files(seq)
 
 seq = SequentialFile(
+    BufferPool(FileManager()),
     "test_datos.dat",
     "test_aux.dat",
     schema,
@@ -154,6 +158,7 @@ assert seq.delete(999) is False
 clean_files(seq)
 
 seq = SequentialFile(
+    BufferPool(FileManager()),
     "test_datos.dat",
     "test_aux.dat",
     schema,
@@ -220,6 +225,7 @@ print("==============================")
 clean_files(seq)
 
 seq = SequentialFile(
+    BufferPool(FileManager()),
     "test_datos.dat",
     "test_aux.dat",
     schema,
@@ -339,6 +345,7 @@ seq.close()
 del seq
 
 seq2 = SequentialFile(
+    BufferPool(FileManager()),
     "test_datos.dat",
     "test_aux.dat",
     schema,
@@ -402,6 +409,7 @@ print("==============================")
 clean_files(seq2)
 
 seq = SequentialFile(
+    BufferPool(FileManager()),
     "test_datos.dat",
     "test_aux.dat",
     schema,
@@ -533,6 +541,7 @@ print("==============================")
 clean_files(seq)
 
 seq = SequentialFile(
+    BufferPool(FileManager()),
     "test_datos.dat",
     "test_aux.dat",
     schema,
@@ -707,6 +716,7 @@ print("==============================")
 clean_files(seq)
 
 seq = SequentialFile(
+    BufferPool(FileManager()),
     "test_datos.dat",
     "test_aux.dat",
     schema,
@@ -853,6 +863,7 @@ print("==============================")
 clean_files(seq)
 
 seq = SequentialFile(
+    BufferPool(FileManager()),
     "test_datos.dat",
     "test_aux.dat",
     schema,

@@ -52,7 +52,7 @@ class EngineAdapter:
             ],
         )
         heap_path = os.path.join(self.data_dir, "estudiantes.bin")
-        heap_file = HeapFile(heap_path)
+        heap_file = HeapFile(self.pool, heap_path)
         self.catalog.register_table(
             nombre="estudiantes",
             schema=schema_estudiantes,
@@ -83,7 +83,7 @@ class EngineAdapter:
         )
         seq_data = os.path.join(self.data_dir, "cursos.bin")
         seq_aux = os.path.join(self.data_dir, "cursos_aux.bin")
-        seq_file = SequentialFile(seq_data, seq_aux, schema_cursos, "codigo")
+        seq_file = SequentialFile(self.pool, seq_data, seq_aux, schema_cursos, "codigo")
         self.catalog.register_table(
             nombre="cursos",
             schema=schema_cursos,

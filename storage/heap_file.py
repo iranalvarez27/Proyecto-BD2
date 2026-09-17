@@ -2,34 +2,27 @@ import os
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from common.page import SlottedPage, PAGE_SIZE
+from common.page import SlottedPage
 from common.record import Record
 from common.types import Schema, RID
+from engine.buffer_pool import BufferPool
+from engine.segment import Segment
 
 
 class HeapFile:
-    def __init__(self, file_path: str):
+    def __init__(self, pool: BufferPool, file_path: str):
         self._file_path = file_path
-        if not os.path.exists(file_path):
-            open(file_path, "wb").close()
-        self._n_pages = os.path.getsize(file_path) // PAGE_SIZE
+        self._seg = Segment(pool, file_path)
         self._reusable: set[int] = set()
         self._free_space: dict[int, int] = {}
         self._deleted_pages: set[int] = set()
         self._holes_scanned = False
-        self._page_cache: tuple[int, SlottedPage, bool] | None = None
-        self._fp = open(file_path, "r+b")
 
     def page_count(self) -> int:
-        return self._n_pages
+        return self._seg.page_count()
 
     def close(self) -> None:
-        if self._fp is None:
-            return
-        self._flush_page_cache()
-        self._fp.flush()
-        self._fp.close()
-        self._fp = None
+        self._seg.close()
 
     def __enter__(self):
         return self
@@ -37,61 +30,18 @@ class HeapFile:
     def __exit__(self, exc_type, exc, tb) -> None:
         self.close()
 
-    def __del__(self):
-        try:
-            self.close()
-        except Exception:
-            pass
-
-    def _flush_page_cache(self) -> None:
-        if self._page_cache is None or self._fp is None:
-            return
-        page_id, page, dirty = self._page_cache
-        if dirty:
-            self._write_page_disk(page_id, page)
-            self._page_cache = (page_id, page, False)
-
-    def _write_page_disk(self, page_id: int, page: SlottedPage) -> None:
-        self._fp.seek(page_id * PAGE_SIZE)
-        self._fp.write(page.to_bytes())
-
-    def _read_page_disk(self, page_id: int) -> SlottedPage:
-        self._fp.seek(page_id * PAGE_SIZE)
-        data = self._fp.read(PAGE_SIZE)
-        return SlottedPage.from_bytes(data)
-
     def read_page(self, page_id: int) -> SlottedPage:
-        if page_id < 0 or page_id >= self._n_pages:
+        if page_id < 0 or page_id >= self.page_count():
             raise ValueError(f"Invalid page ID: {page_id}")
-        if self._page_cache is not None and self._page_cache[0] == page_id:
-            return self._page_cache[1]
-        self._flush_page_cache()
-        page = self._read_page_disk(page_id)
-        self._page_cache = (page_id, page, False)
-        return page
+        return SlottedPage.from_bytes(self._seg.read(page_id))
 
     def write_page(self, page_id: int, page: SlottedPage) -> None:
-        if page_id < 0 or page_id >= self._n_pages:
+        if page_id < 0 or page_id >= self.page_count():
             raise ValueError(f"Invalid page ID: {page_id}")
-        self._flush_page_cache()
-        self._write_page_disk(
-            page_id,
-            page
-        )
-        self._page_cache = (
-            page_id,
-            page,
-            False
-        )
+        self._seg.write(page_id, page.to_bytes())
 
     def append_page(self, page: SlottedPage) -> int:
-        self._flush_page_cache()
-        page_id = self._n_pages
-        self._fp.seek(0, os.SEEK_END)
-        self._fp.write(page.to_bytes())
-        self._n_pages = page_id + 1
-        self._page_cache = (page_id, page, False)
-        return page_id
+        return self._seg.append(page.to_bytes())
 
     def _try_insert(
         self,
@@ -134,11 +84,7 @@ class HeapFile:
 
             return None
 
-        self._page_cache = (
-            page_id,
-            page,
-            True
-        )
+        self.write_page(page_id, page)
 
         free = page.free_space()
 
@@ -160,7 +106,7 @@ class HeapFile:
         if self._holes_scanned:
             return
 
-        for page_id in range(self._n_pages):
+        for page_id in range(self.page_count()):
             page = self.read_page(page_id)
 
             free = page.free_space()
@@ -220,7 +166,7 @@ class HeapFile:
 
     def insert(self, record: Record, schema: Schema) -> RID:
         data = record.pack(schema)
-        n = self._n_pages
+        n = self.page_count()
         if n > 0:
             rid = self._try_insert(
                 n - 1,
@@ -296,11 +242,7 @@ class HeapFile:
             rid.slot_id
         )
 
-        self._page_cache = (
-            rid.page_id,
-            page,
-            True
-        )
+        self.write_page(rid.page_id, page)
 
         self._deleted_pages.add(
             rid.page_id
@@ -315,7 +257,7 @@ class HeapFile:
         )
 
     def scan(self, schema: Schema):
-        for page_id in range(self._n_pages):
+        for page_id in range(self.page_count()):
             page = self.read_page(page_id)
             for slot_id in range(page.slot_count):
                 data = page.read(slot_id)
@@ -324,7 +266,7 @@ class HeapFile:
                 yield Record.unpack(data, schema)
 
     def scan_con_rid(self, schema: Schema):
-        for page_id in range(self._n_pages):
+        for page_id in range(self.page_count()):
             page = self.read_page(page_id)
             for slot_id in range(page.slot_count):
                 data = page.read(slot_id)

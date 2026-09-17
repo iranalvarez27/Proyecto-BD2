@@ -11,6 +11,8 @@ sys.path.insert(
 )
 
 from heap_file import HeapFile
+from engine.buffer_pool import BufferPool
+from engine.file_manager import FileManager
 from common.record import Record
 from common.types import Schema, Column, DataType
 
@@ -31,6 +33,7 @@ if os.path.exists("test_heap.dat"):
     os.remove("test_heap.dat")
 
 heap = HeapFile(
+    BufferPool(FileManager()),
     "test_heap.dat"
 )
 
@@ -143,6 +146,7 @@ schema_variable = Schema(
 
 
 heap = HeapFile(
+    BufferPool(FileManager()),
     "test_heap.dat"
 )
 
@@ -295,6 +299,7 @@ schema_reopen = Schema(
 
 
 heap = HeapFile(
+    BufferPool(FileManager()),
     "test_heap.dat"
 )
 
@@ -359,6 +364,7 @@ heap.close()
 # --------------------------------------------------
 
 heap = HeapFile(
+    BufferPool(FileManager()),
     "test_heap.dat"
 )
 
@@ -445,6 +451,7 @@ schema_free = Schema(
 
 
 heap = HeapFile(
+    BufferPool(FileManager()),
     "test_heap.dat"
 )
 
@@ -531,6 +538,7 @@ assert heap.page_count() == 2
 heap.close()
 
 heap = HeapFile(
+    BufferPool(FileManager()),
     "test_heap.dat"
 )
 
