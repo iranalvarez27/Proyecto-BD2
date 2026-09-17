@@ -13,7 +13,7 @@ AUX_FILE = 1
 ENTRY_HEADER_FORMAT = "<bii?"
 ENTRY_HEADER_SIZE = struct.calcsize(ENTRY_HEADER_FORMAT)
 META_FORMAT = "<biibiiiii"
-META_SAVE_EVERY = 32
+META_SAVE_EVERY = 256
 
 
 @dataclass(frozen=True)
@@ -336,12 +336,35 @@ class SequentialFile:
         last_key = None
         for slot_id in range(page.slot_count):
             data = page.read(slot_id)
+
             if data == b"":
                 continue
-            key = self._get_key(SequentialEntry.unpack(data, self._schema))
-            if first_key is None:
-                first_key = key
-            last_key = key
+
+            entry = SequentialEntry.unpack(
+                data,
+                self._schema
+            )
+
+            first_key = self._get_key(entry)
+            break
+        for slot_id in range(
+            page.slot_count - 1,
+            -1,
+            -1
+        ):
+            data = page.read(slot_id)
+
+            if data == b"":
+                continue
+
+            entry = SequentialEntry.unpack(
+                data,
+                self._schema
+            )
+
+            last_key = self._get_key(entry)
+            break
+
         return first_key, last_key
 
     def _last_live_before(self, page: SlottedPage, page_id: int, key) -> FilePointer | None:
@@ -723,6 +746,14 @@ class SequentialFile:
         self._n_deleted = 0
         self._save_state()
 
-    def needs_reorganization(self, threshold: float = 0.30, max_aux_records: int = 100) -> bool:
-        return self.wasted_ratio() > threshold or self._n_aux >= max_aux_records
+    def needs_reorganization(
+        self,
+        threshold: float = 0.30,
+        max_aux_records: int = 100
+    ) -> bool:
+
+        if self._n_aux >= max_aux_records:
+            return True
+
+        return self.wasted_ratio() > threshold
 
