@@ -10,6 +10,8 @@ from engine.buffer_pool import BufferPool
 from index.bplus_tree import BPlusTree, DuplicateKey
 from storage.sequential_file import AUX_FILE, MAIN_FILE, SequentialEntry, SequentialFile
 
+DELETED_LIMIT = 0.30
+
 
 class ClusteredBPlusTree:
     """Clustered B+ tree over a SequentialFile's primary key."""
@@ -22,11 +24,8 @@ class ClusteredBPlusTree:
 
         fresh = pool.page_count(index_path) == 0
         self._tree = BPlusTree(pool, index_path, key_type, clustered=True)
-        self._n_main = 0
         if fresh:
             self._rebuild()
-        else:
-            self._n_main = sum(1 for _ in self._main_rows())
 
     # ----------------------------------------------------------------- reads
 
@@ -74,17 +73,15 @@ class ClusteredBPlusTree:
         key = record.values[self._key_index]
         if self.search(key) is not None:
             raise DuplicateKey(key)
-        before = self._main_extent()
-        self._seq.insert(record)
-        if self._main_extent() != before:
-            self._rebuild()
-        elif self.aux_count() > self.aux_limit():
+        pointer = self._seq.insert(record)
+        self._track(key, pointer)
+        if self.needs_reorganization():
             self.reorganize()
 
     def delete(self, key) -> bool:
         if not self._seq.delete(key):
             return False
-        if self._seq.needs_reorganization():
+        if self.needs_reorganization():
             self.reorganize()
         return True
 
@@ -95,23 +92,33 @@ class ClusteredBPlusTree:
     # --------------------------------------------------------------- policy
 
     def aux_limit(self) -> int:
-        return max(1, int(math.log2(max(self._n_main, 2))))
+        """AUX pages tolerated: what the binary search over MAIN already costs.
+        Both halves of a search are page reads, so the bound is in pages: a
+        half-empty AUX page is never a reason to rewrite the whole file."""
+        return max(1, int(math.log2(max(self._seq.page_count(MAIN_FILE), 2))))
 
-    def aux_count(self) -> int:
-        return sum(1 for _ in self._aux_rows())
+    def aux_pages(self) -> int:
+        return self._seq.page_count(AUX_FILE)
+
+    def needs_reorganization(self) -> bool:
+        return (
+            self.aux_pages() > self.aux_limit()
+            or self._seq.deleted_ratio() > DELETED_LIMIT
+        )
 
     # ------------------------------------------------------------- internals
 
     def _key_of(self, entry: SequentialEntry):
         return entry.record.values[self._key_index]
 
-    def _main_extent(self) -> tuple[int, int]:
-        """Page count plus the last page's slot count: detects a write to
-        MAIN using only the sequential file's public API."""
-        pages = self._seq.page_count(MAIN_FILE)
-        if pages == 0:
-            return (0, 0)
-        return (pages, self._seq.read_page(MAIN_FILE, pages - 1).slot_count)
+    def _track(self, key, pointer) -> None:
+        """One tree entry per MAIN page. A row in AUX is reached by scanning
+        it, and MAIN only grows at the end, so the tree changes at most once
+        per new page: floor() already resolves everything else."""
+        if pointer.file_type != MAIN_FILE:
+            return
+        if self._tree.floor(key) != pointer.page_id:
+            self._tree.insert(key, pointer.page_id)
 
     def _live_in_page(self, page_id: int):
         page = self._seq.read_page(MAIN_FILE, page_id)
@@ -142,4 +149,3 @@ class ClusteredBPlusTree:
     def _rebuild(self) -> None:
         pairs = list(self._page_minimums())
         self._tree.bulk_load(pairs)
-        self._n_main = sum(1 for _ in self._main_rows())

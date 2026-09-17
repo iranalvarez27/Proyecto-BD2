@@ -649,6 +649,14 @@ class SequentialFile:
     def aux_record_count(self) -> int:
         return self._n_aux
 
+    def deleted_ratio(self) -> float:
+        # por registro y con los contadores en memoria: wasted_ratio() recorre
+        # los dos archivos y no sirve para decidir en cada operacion
+        total = self._n_live + self._n_deleted
+        if total == 0:
+            return 0.0
+        return self._n_deleted / total
+
     def reorganize(self) -> None:
         records = list(self.scan())
         for seg in self._segs.values():
