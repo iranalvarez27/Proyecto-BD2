@@ -4,9 +4,9 @@ import os
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from common.page import PAGE_SIZE
 from common.record import Record
 from common.types import DataType
+from engine.buffer_pool import BufferPool
 from index.bplus_tree import BPlusTree, DuplicateKey
 from storage.sequential_file import AUX_FILE, MAIN_FILE, SequentialEntry, SequentialFile
 
@@ -14,14 +14,14 @@ from storage.sequential_file import AUX_FILE, MAIN_FILE, SequentialEntry, Sequen
 class ClusteredBPlusTree:
     """Clustered B+ tree over a SequentialFile's primary key."""
 
-    def __init__(self, seq: SequentialFile, index_path: str):
+    def __init__(self, pool: BufferPool, seq: SequentialFile, index_path: str):
         self._seq = seq
         self._schema = seq._schema
         self._key_index = seq._key_index
         key_type = self._schema.columns[self._key_index].type
 
-        fresh = not (os.path.exists(index_path) and os.path.getsize(index_path) >= PAGE_SIZE)
-        self._tree = BPlusTree(index_path, key_type, clustered=True)
+        fresh = pool.page_count(index_path) == 0
+        self._tree = BPlusTree(pool, index_path, key_type, clustered=True)
         self._n_main = 0
         if fresh:
             self._rebuild()

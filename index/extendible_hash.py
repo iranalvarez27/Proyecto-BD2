@@ -74,6 +74,9 @@ class ExtendibleHash(Index):
             page_id = page.overflow_page_id
         return False
 
+    def is_empty(self) -> bool:
+        return all(not page.entries for _, page in self._iter_pages())
+
     # -------------------------------------------------------------- insertion
 
     def _insert_hash(self, key_hash: int, rid: RID) -> None:

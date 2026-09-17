@@ -63,7 +63,7 @@ class EngineAdapter:
 
         # Register B+ Tree Index on 'id'
         bplus_path = os.path.join(self.data_dir, "estudiantes_id_bplus.idx")
-        bplus_idx = BPlusTree(bplus_path, DataType.INT)
+        bplus_idx = BPlusTree(self.pool, bplus_path, DataType.INT)
         self.catalog.register_index("estudiantes", "id", bplus_idx, INDEX_BPLUS)
 
         # Register Extendible Hash Index on 'carrera'
@@ -97,7 +97,7 @@ class EngineAdapter:
 
         # Clustered B+ Tree on cursos
         clustered_path = os.path.join(self.data_dir, "cursos_clustered.idx")
-        clustered_tree = ClusteredBPlusTree(seq_file, clustered_path)
+        clustered_tree = ClusteredBPlusTree(self.pool, seq_file, clustered_path)
         self.clustered_trees["cursos"] = clustered_tree
         self.catalog.register_index("cursos", "codigo", clustered_tree, INDEX_CLUSTERED)
 
@@ -126,7 +126,7 @@ class EngineAdapter:
             hash_idx, _ = self.catalog.get_indice("estudiantes", "carrera")
 
             # Check if BPlus index is empty
-            if getattr(bplus_idx, "_n_entries", 0) == 0:
+            if bplus_idx.is_empty():
                 for rid, rec in heap.scan_con_rid(info_est.schema):
                     try:
                         bplus_idx.insert(rec.values[0], rid)
@@ -134,8 +134,7 @@ class EngineAdapter:
                         pass
 
             # Check if Hash index is empty
-            sample_res = hash_idx.search("Ciencia de la Computacion")
-            if len(sample_res) == 0:
+            if hash_idx.is_empty():
                 for rid, rec in heap.scan_con_rid(info_est.schema):
                     try:
                         hash_idx.insert(rec.values[2], rid)
