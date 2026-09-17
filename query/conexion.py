@@ -9,12 +9,16 @@ from query.tokens import TokenType
 from common.record import Record
 from common.types import Column, DataType, Schema
 from engine.external import external_group_by, external_sort
+from index.bplus_tree import DuplicateKey
+from index.hash_utils import UnhashableKeyType
+from index.key_codec import INT64_MAX, INT64_MIN, KeyTooLong, KeyTypeMismatch, UnorderableKey
 
 BUFFER_PAGES = 64
 
 class ExecutionError(Exception):
     pass
 
+ERRORES_EJECUCION = (ExecutionError, DuplicateKey, UnhashableKeyType, KeyTooLong, KeyTypeMismatch, UnorderableKey,)
 class QueryResult:
     def __init__(self, filas=None, resumen=None, plan=None, error=None, tipo_error=None):
         self.filas = filas
@@ -69,7 +73,7 @@ class Conexion:
                 resumen = self.ejecutar_delete(nodo)
                 return QueryResult(resumen=resumen, plan=self.plan)
             return QueryResult(error=f"nodo no ejecutable: {type(nodo).__name__}", tipo_error="ejecucion")
-        except ExecutionError as e:
+        except ERRORES_EJECUCION as e:
             return QueryResult(error=str(e), tipo_error="ejecucion", plan=self.plan)
 
     def leer_todo(self, info: TableInfo):
@@ -114,19 +118,33 @@ class Conexion:
             raise ExecutionError(f"operador desconocido: {op}")
         return resultado
 
-    def _extraer_rango_columna(self, cond, col_name: str):
-        """Extrae (low, high) de una condición simple o compuesta con AND sobre col_name."""
+    def _limite_inferior(self, tipo: DataType):
+        if tipo in (DataType.SMALLINT, DataType.INT, DataType.BIGINT):
+            return INT64_MIN
+        if tipo in (DataType.FLOAT, DataType.DOUBLE):
+            return float("-inf")
+        return ""  
+
+    def _limite_superior(self, tipo: DataType):
+        if tipo in (DataType.SMALLINT, DataType.INT, DataType.BIGINT):
+            return INT64_MAX
+        if tipo in (DataType.FLOAT, DataType.DOUBLE):
+            return float("inf")
+        return "\U0010FFFF" * 64  # máximo code point válido de Unicode
+
+    def _extraer_rango_columna(self, cond, col_name: str, schema: Schema):
         if isinstance(cond, Condition):
             if cond.columna == col_name:
+                tipo = schema.columns[schema.column_index(col_name)].type
                 if cond.operador in (TokenType.GT, TokenType.GTE):
-                    return (cond.valor, 999999999)
+                    return (cond.valor, self._limite_superior(tipo))
                 if cond.operador in (TokenType.LT, TokenType.LTE):
-                    return (-999999999, cond.valor)
+                    return (self._limite_inferior(tipo), cond.valor)
             return None
 
         if isinstance(cond, BinaryCondition) and cond.operador == TokenType.AND:
-            r1 = self._extraer_rango_columna(cond.izquierda, col_name)
-            r2 = self._extraer_rango_columna(cond.derecha, col_name)
+            r1 = self._extraer_rango_columna(cond.izquierda, col_name, schema)
+            r2 = self._extraer_rango_columna(cond.derecha, col_name, schema)
             if r1 is not None and r2 is not None:
                 low = max(r1[0], r2[0])
                 high = min(r1[1], r2[1])
@@ -136,7 +154,6 @@ class Conexion:
                 return r1
             elif r2 is not None:
                 return r2
-
         return None
 
     def ejecutar_select(self, nodo: SelectNode) -> list:
@@ -180,7 +197,7 @@ class Conexion:
             for col in info.indices:
                 ind, t_ind = self.catalog.get_indice(nodo.tabla, col)
                 if t_ind in ("bplus", "clustered"):
-                    bnds = self._extraer_rango_columna(where, col)
+                    bnds = self._extraer_rango_columna(where, col, info.schema)
                     if bnds is not None:
                         rango_info = (col, ind, t_ind, bnds[0], bnds[1])
                         break
@@ -242,8 +259,7 @@ class Conexion:
 
             else:
                 self.plan.append(f"escaneo completo de '{info.nombre}' ({info.tipo_storage}) + filtro WHERE")
-                filas = [f for f in self.leer_todo(info) if self.cumple_where(where, f)]
-        # external_sort devuelve un iterador perezoso: materializar antes de salir del with
+                filas = [f for f in self.leer_todo(info) if self.cumple_where(where, f)]   
         with tempfile.TemporaryDirectory(dir=self.tmp_dir) as tmp:
             schema = info.schema
             if nodo.group_by is not None:
@@ -295,9 +311,14 @@ class Conexion:
             if pk_col is not None:
                 idx_pk = info.schema.column_index(pk_col.name)
                 nueva_pk = record.values[idx_pk]
-                for fila in self.leer_todo(info):
-                    if fila[pk_col.name] == nueva_pk:
+                if self.catalog.tiene_indice(nodo.tabla, pk_col.name):
+                    indice_pk, _ = self.catalog.get_indice(nodo.tabla, pk_col.name)
+                    if indice_pk.search(nueva_pk):
                         raise ExecutionError(f"no se pudo insertar: clave {nueva_pk} ya existe")
+                else:
+                    for fila in self.leer_todo(info):
+                        if fila[pk_col.name] == nueva_pk:
+                            raise ExecutionError(f"no se pudo insertar: clave {nueva_pk} ya existe")
         try:
             if info.tipo_storage == STORAGE_HEAP:
                 rid = info.storage.insert(record, info.schema)
