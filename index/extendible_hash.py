@@ -220,16 +220,16 @@ class ExtendibleHash(Index):
 
     # ------------------------------------------------------------ maintenance
 
-    def rebuild(self) -> None:
-        """Reload every entry into a fresh index, compacting it."""
-        entries = [(h, rid) for _, page in self._iter_pages() for h, rid in page.entries]
+    def bulk_load(self, pairs) -> None:
+        """Load (key, rid) pairs into a fresh index. It is how a table rebuilds
+        its indexes after a reorganization, where every rid changed."""
         pool, path = self._seg.pool, self._seg.path
         tmp_path = path + ".rebuild"
-        # a leftover from an interrupted rebuild would be loaded instead of created
+        # a leftover from an interrupted load would be opened instead of created
         pool.truncate(tmp_path, 0)
         fresh = ExtendibleHash(pool, tmp_path, bucket_capacity=self._capacity)
-        for key_hash, rid in entries:
-            fresh._insert_hash(key_hash, rid)
+        for key, rid in pairs:
+            fresh.insert(key, rid)
         pool.replace(tmp_path, path)
         self._load()
 

@@ -6,7 +6,7 @@ import struct
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from common.page import SlottedPage
 from common.record import Record
-from common.types import Schema
+from common.types import Schema, RID
 from engine.buffer_pool import BufferPool
 from engine.segment import Segment
 
@@ -23,6 +23,19 @@ class FilePointer:
     file_type: int
     page_id: int
     slot_id: int
+
+    def to_rid(self) -> RID:
+        # los indices guardan (page_id, slot_id) y no distinguen archivos:
+        # AUX viaja en el signo, MAIN >= 0 y AUX < 0
+        if self.file_type == MAIN_FILE:
+            return RID(page_id=self.page_id, slot_id=self.slot_id)
+        return RID(page_id=-(self.page_id + 1), slot_id=self.slot_id)
+
+    @classmethod
+    def from_rid(cls, rid: RID) -> "FilePointer":
+        if rid.page_id >= 0:
+            return cls(file_type=MAIN_FILE, page_id=rid.page_id, slot_id=rid.slot_id)
+        return cls(file_type=AUX_FILE, page_id=-rid.page_id - 1, slot_id=rid.slot_id)
 
 
 @dataclass
@@ -390,7 +403,7 @@ class SequentialFile:
 
         return None
 
-    def insert(self, record: Record) -> FilePointer:
+    def insert(self, record: Record) -> RID:
         new_key = record.values[self._key_index]
 
         if self._key_is_pk and self._duplicate_key(new_key):
@@ -430,7 +443,7 @@ class SequentialFile:
 
             self._mark_dirty()
 
-            return pointer
+            return pointer.to_rid()
 
         if (
             self._tail is not None
@@ -468,7 +481,7 @@ class SequentialFile:
 
             self._mark_dirty()
 
-            return new_pointer
+            return new_pointer.to_rid()
         previous_pointer, current_pointer = (
             self._find_insert_position(new_key)
         )
@@ -508,8 +521,30 @@ class SequentialFile:
 
         self._mark_dirty()
 
-        return new_pointer
-    
+        return new_pointer.to_rid()
+
+    def read(self, rid: RID, schema: Schema | None = None) -> Record | None:
+        # schema se acepta para que la capa de tabla llame igual al heap y al
+        # sequential; el sequential ya tiene el suyo
+        pointer = FilePointer.from_rid(rid)
+        if pointer.page_id >= self.page_count(pointer.file_type):
+            return None
+        page = self.read_page(pointer.file_type, pointer.page_id)
+        data = page.read(pointer.slot_id)
+        if data == b"":
+            return None
+        entry = SequentialEntry.unpack(data, self._schema)
+        if entry.deleted:
+            return None
+        return entry.record
+
+    def scan_con_rid(self, schema: Schema | None = None):
+        for file_type in (MAIN_FILE, AUX_FILE):
+            for pointer, entry in self._iter_file_entries(file_type):
+                if entry.deleted:
+                    continue
+                yield pointer.to_rid(), entry.record
+
     def scan(self):
         current_pointer = self._head
         while current_pointer is not None:
@@ -591,10 +626,12 @@ class SequentialFile:
             return entry.record
         return None
 
-    def delete(self, key) -> bool:
+    def delete(self, key) -> tuple[RID, Record] | None:
+        """El RID y la fila borrada, para que la capa de tabla pueda sacarla de
+        los indices secundarios; None si la clave no estaba."""
         previous_pointer, current_pointer, current_entry = self._find_by_key(key)
         if current_pointer is None:
-            return False
+            return None
         next_pointer = current_entry.next_pointer
         current_entry.deleted = True
         self._write_entry(current_pointer, current_entry)
@@ -612,7 +649,7 @@ class SequentialFile:
         self._n_live -= 1
         self._n_deleted += 1
         self._mark_dirty()
-        return True
+        return current_pointer.to_rid(), current_entry.record
 
     def wasted_ratio(self) -> float:
         total_bytes = 0

@@ -148,7 +148,7 @@ print(
 )
 
 assert seq.search(30) is None
-assert seq.delete(999) is False
+assert seq.delete(999) is None
 
 
 # ==========================================================
@@ -628,7 +628,7 @@ print(
 
 assert (
     seq.delete(150)
-    is True
+    is not None
 )
 
 seq.insert(
@@ -680,7 +680,7 @@ print(
 
 assert (
     seq.delete(100)
-    is True
+    is not None
 )
 
 print(
@@ -767,7 +767,7 @@ print(
 
 assert (
     seq.delete(40)
-    is True
+    is not None
 )
 
 
@@ -873,8 +873,8 @@ seq = SequentialFile(
 seq.insert(Record([10, "A", 20]))
 seq.insert(Record([20, "B", 20]))
 
-assert seq.delete(10) is True
-assert seq.delete(20) is True
+assert seq.delete(10) is not None
+assert seq.delete(20) is not None
 
 print("Insertando 5 después de eliminar todos...")
 

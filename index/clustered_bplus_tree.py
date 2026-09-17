@@ -73,8 +73,8 @@ class ClusteredBPlusTree:
         key = record.values[self._key_index]
         if self.search(key) is not None:
             raise DuplicateKey(key)
-        pointer = self._seq.insert(record)
-        self._track(key, pointer)
+        rid = self._seq.insert(record)
+        self._track(key, rid)
         if self.needs_reorganization():
             self.reorganize()
 
@@ -111,14 +111,14 @@ class ClusteredBPlusTree:
     def _key_of(self, entry: SequentialEntry):
         return entry.record.values[self._key_index]
 
-    def _track(self, key, pointer) -> None:
+    def _track(self, key, rid) -> None:
         """One tree entry per MAIN page. A row in AUX is reached by scanning
         it, and MAIN only grows at the end, so the tree changes at most once
         per new page: floor() already resolves everything else."""
-        if pointer.file_type != MAIN_FILE:
+        if rid.page_id < 0:   # AUX
             return
-        if self._tree.floor(key) != pointer.page_id:
-            self._tree.insert(key, pointer.page_id)
+        if self._tree.floor(key) != rid.page_id:
+            self._tree.insert(key, rid.page_id)
 
     def _live_in_page(self, page_id: int):
         page = self._seq.read_page(MAIN_FILE, page_id)
