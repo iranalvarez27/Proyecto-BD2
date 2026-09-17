@@ -8,7 +8,6 @@ class FileManager:
 
     def __init__(self):
         self._files = {}
-        # the handles are buffered, so os.path.getsize can lag behind appends
         self._pages = {}
         self.reads = 0
         self.writes = 0
@@ -33,6 +32,8 @@ class FileManager:
         fp = self._handle(path)
         fp.seek(page_id * PAGE_SIZE)
         fp.write(data)
+        # out of the handle buffer: the page must survive the process dying
+        fp.flush()
         self.writes += 1
 
     def append_page(self, path: str, data: bytes) -> int:
@@ -41,6 +42,7 @@ class FileManager:
         page_id = self._pages[path]
         fp.seek(page_id * PAGE_SIZE)
         fp.write(data)
+        fp.flush()
         self._pages[path] = page_id + 1
         self.writes += 1
         return page_id
