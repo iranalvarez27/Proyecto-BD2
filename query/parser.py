@@ -1,5 +1,5 @@
 from query.tokens import Token, TokenType
-from query.ast import SelectNode, InsertNode, DeleteNode, Condition, BinaryCondition, OrderBy
+from query.ast import SelectNode, InsertNode, DeleteNode, Condition, BinaryCondition, OrderBy, JoinClause
 
 class ParserError(Exception):
     pass
@@ -52,6 +52,10 @@ class Parser:
         self.esperar(TokenType.FROM)
         tabla = self.esperar(TokenType.IDENT).value
 
+        join = None
+        if self.coincide(TokenType.JOIN):
+            join = self.parse_join()
+
         where = None
         order_by = None
         group_by = None
@@ -66,22 +70,39 @@ class Parser:
             else:
                 group_by = self.parse_group_by()
 
-        return SelectNode(cols, tabla, where, order_by, group_by)
+        return SelectNode(cols, tabla, where, order_by, group_by, join)
+
+    def parse_join(self):
+        self.esperar(TokenType.JOIN)
+        tabla = self.esperar(TokenType.IDENT).value
+        self.esperar(TokenType.ON)
+        col_izq = self.parse_columna_ref()
+        self.esperar(TokenType.EQ)
+        col_der = self.parse_columna_ref()
+        return JoinClause(tabla, col_izq, col_der)
+
+    def parse_columna_ref(self):
+        nombre = self.esperar(TokenType.IDENT).value
+        if self.coincide(TokenType.DOT):
+            self.avanzar()
+            campo = self.esperar(TokenType.IDENT).value
+            return f"{nombre}.{campo}"
+        return nombre
 
     def parse_columnas(self):
         if self.coincide(TokenType.STAR):
             self.avanzar()
             return ["*"]
-        cols = [self.esperar(TokenType.IDENT).value]
+        cols = [self.parse_columna_ref()]
         while self.coincide(TokenType.COMMA):
             self.avanzar()
-            cols.append(self.esperar(TokenType.IDENT).value)
+            cols.append(self.parse_columna_ref())
         return cols
 
     def parse_order_by(self):
         self.esperar(TokenType.ORDER)
         self.esperar(TokenType.BY)
-        col = self.esperar(TokenType.IDENT).value
+        col = self.parse_columna_ref()
         desc = False
         if self.coincide(TokenType.DESC):
             self.avanzar()
@@ -93,7 +114,7 @@ class Parser:
     def parse_group_by(self):
         self.esperar(TokenType.GROUP)
         self.esperar(TokenType.BY)
-        return self.esperar(TokenType.IDENT).value
+        return self.parse_columna_ref()
 
     def parse_insert(self):
         self.esperar(TokenType.INSERT)
@@ -148,7 +169,7 @@ class Parser:
             self.esperar(TokenType.RPAREN)
             return expr
 
-        col = self.esperar(TokenType.IDENT).value
+        col = self.parse_columna_ref()
         if self.actual().type not in OPERADORES_COMP:
             raise ParserError(f"pos {self.actual().pos}: falta operador de comparacion")
         op = self.avanzar().type

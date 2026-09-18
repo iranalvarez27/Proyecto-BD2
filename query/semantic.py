@@ -48,6 +48,74 @@ class SemanticAnalyzer:
             return isinstance(valor, bool)
         return False
 
+    def _tipos_unificables(self, a: DataType, b: DataType) -> bool:
+        numericos = {DataType.SMALLINT, DataType.INT, DataType.BIGINT, DataType.FLOAT, DataType.DOUBLE}
+        textos = {DataType.CHAR, DataType.VARCHAR}
+        if a == b:
+            return True
+        if a in numericos and b in numericos:
+            return True
+        if a in textos and b in textos:
+            return True
+        return False
+
+    def _resolver_columna_join(self, columna: str, tabla1: str, schema1: Schema, tabla2: str, schema2: Schema):
+        if "." not in columna:
+            raise SemanticError(f"la columna '{columna}' debe calificarse con su tabla (ej. '{tabla1}.{columna}') "
+                "en una consulta con JOIN")
+        tabla_ref, col = columna.split(".", 1)
+        if tabla_ref == tabla1:
+            schema = schema1
+        elif tabla_ref == tabla2:
+            schema = schema2
+        else:
+            raise SemanticError(f"'{tabla_ref}' no es ninguna de las tablas de este JOIN ({tabla1}, {tabla2})")
+        self.validar_columna_existe(schema, col)
+        return schema, col
+
+    def _validar_where_join(self, condicion, tabla1: str, schema1: Schema, tabla2: str, schema2: Schema) -> None:
+        if isinstance(condicion, BinaryCondition):
+            self._validar_where_join(condicion.izquierda, tabla1, schema1, tabla2, schema2)
+            self._validar_where_join(condicion.derecha, tabla1, schema1, tabla2, schema2)
+        elif isinstance(condicion, Condition):
+            schema, col = self._resolver_columna_join(condicion.columna, tabla1, schema1, tabla2, schema2)
+            campo = schema.columns[schema.column_index(col)]
+            if not self.tipo_compatible(campo.type, condicion.valor):
+                raise SemanticError(f"tipo incompatible en WHERE: la columna '{condicion.columna}' "
+                    f"es {campo.type.value} pero se comparo con '{condicion.valor}' ({type(condicion.valor).__name__})")
+        else:
+            raise SemanticError("condicion WHERE erronea")
+
+    def validar_join(self, nodo: SelectNode, schema: Schema) -> None:
+        if nodo.join.tabla == nodo.tabla:
+            raise SemanticError("un JOIN no puede unir una tabla consigo misma")
+        schema2 = self.get_schema(nodo.join.tabla)
+
+        schema_izq, col_izq = self._resolver_columna_join(
+            nodo.join.columna_izquierda, nodo.tabla, schema, nodo.join.tabla, schema2)
+        schema_der, col_der = self._resolver_columna_join(
+            nodo.join.columna_derecha, nodo.tabla, schema, nodo.join.tabla, schema2)
+        if schema_izq is schema_der:
+            raise SemanticError("la condicion ON de un JOIN debe comparar una columna de cada tabla")
+
+        tipo_izq = schema_izq.columns[schema_izq.column_index(col_izq)].type
+        tipo_der = schema_der.columns[schema_der.column_index(col_der)].type
+        if not self._tipos_unificables(tipo_izq, tipo_der):
+            raise SemanticError(f"JOIN ON con tipos incompatibles: '{nodo.join.columna_izquierda}' es {tipo_izq.value} y '{nodo.join.columna_derecha}' es {tipo_der.value}")
+
+        if nodo.columnas != ["*"]:
+            for columna in nodo.columnas:
+                self._resolver_columna_join(columna, nodo.tabla, schema, nodo.join.tabla, schema2)
+
+        if nodo.where is not None:
+            self._validar_where_join(nodo.where, nodo.tabla, schema, nodo.join.tabla, schema2)
+
+        if nodo.order_by is not None:
+            self._resolver_columna_join(nodo.order_by.columna, nodo.tabla, schema, nodo.join.tabla, schema2)
+
+        if nodo.group_by is not None:
+            self._resolver_columna_join(nodo.group_by, nodo.tabla, schema, nodo.join.tabla, schema2)
+
     def validar_where(self, schema: Schema, condicion) -> None:
         if isinstance(condicion, BinaryCondition):
             self.validar_where(schema, condicion.izquierda)
@@ -64,6 +132,10 @@ class SemanticAnalyzer:
 
     def validar_select(self, nodo: SelectNode) -> None:
         schema = self.get_schema(nodo.tabla)
+
+        if nodo.join is not None:
+            self.validar_join(nodo, schema)
+            return
 
         if nodo.columnas != ["*"]:
             for columna in nodo.columnas:

@@ -36,11 +36,16 @@ class TokenType(Enum):
     SEMICOLON = 28
     EOF = 29
 
+    JOIN = 30
+    ON = 31
+    DOT = 32
+
 KEYWORDS = {"select": TokenType.SELECT, "from": TokenType.FROM, "where": TokenType.WHERE,
             "insert": TokenType.INSERT, "into": TokenType.INTO, "values": TokenType.VALUES,
             "delete": TokenType.DELETE, "order": TokenType.ORDER, "by": TokenType.BY,
-            "group": TokenType.GROUP, "asc": TokenType.ASC, "desc": TokenType.DESC, 
-            "and": TokenType.AND, "or": TokenType.OR,}
+            "group": TokenType.GROUP, "asc": TokenType.ASC, "desc": TokenType.DESC,
+            "and": TokenType.AND, "or": TokenType.OR,
+            "join": TokenType.JOIN, "on": TokenType.ON,}
 
 @dataclass
 class Token:
