@@ -39,8 +39,6 @@ class DuplicateKey(Exception):
 
 
 class BPlusTree(Index):
-    """B+ tree over one file: page 0 is the metapage, nodes and free pages after it."""
-
     def __init__(
         self,
         pool: BufferPool,
@@ -70,7 +68,6 @@ class BPlusTree(Index):
         return self.range_search(key, key)
 
     def range_search(self, low: Any, high: Any) -> list:
-        """Inclusive [low, high]. search(k) is just the range [k, k]."""
         k_lo = encode(low, self._key_type)
         k_hi = encode(high, self._key_type)
         if k_lo > k_hi:
@@ -383,7 +380,6 @@ class BPlusTree(Index):
         return runs
 
     def bulk_load(self, pairs) -> None:
-        """Rebuilds the tree from (key, payload) pairs already in ascending order."""
         self._seg.truncate(1)
         codec = self._leaf_codec
 
@@ -438,7 +434,6 @@ class BPlusTree(Index):
         self._flush_meta()
 
     def floor(self, key: Any):
-        """Payload of the greatest entry whose key is <= `key`, or None."""
         k = encode(key, self._key_type)
         node = self._read_node(self._root)
         while not node.is_leaf:
@@ -489,7 +484,6 @@ class BPlusTree(Index):
         return out
 
     def scan(self):
-        """Every (key, payload) in key order, walking the leaf chain."""
         node = self._read_node(self._leftmost_leaf())
         while True:
             for k, p in zip(node.keys, node.payloads):
@@ -559,8 +553,6 @@ class BPlusTree(Index):
         self._seg.free_head = free_list_head
 
     def reload(self) -> None:
-        """Re-reads the metapage. After a ROLLBACK the undo restores the file's
-        bytes behind this object's back, so root/height/free list would be stale."""
         self._load()
 
     def _flush_meta(self) -> None:

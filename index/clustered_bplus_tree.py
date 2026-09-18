@@ -14,8 +14,6 @@ DELETED_LIMIT = 0.30
 
 
 class ClusteredBPlusTree:
-    """Clustered B+ tree over a SequentialFile's primary key."""
-
     def __init__(self, pool: BufferPool, seq: SequentialFile, index_path: str):
         self._seq = seq
         self._schema = seq._schema
@@ -30,7 +28,6 @@ class ClusteredBPlusTree:
     # ----------------------------------------------------------------- reads
 
     def search(self, key):
-        """Two sources: the MAIN page the tree points at, then AUX."""
         page_id = self._tree.floor(key)
         if page_id is not None:
             for entry in self._live_in_page(page_id):
@@ -42,7 +39,6 @@ class ClusteredBPlusTree:
         return None
 
     def range_search(self, low, high) -> list[Record]:
-        """Inclusive [low, high]."""
         if low > high:
             return []
         start = self._tree.floor(low)
@@ -84,14 +80,11 @@ class ClusteredBPlusTree:
         self._rebuild()
 
     def reload(self) -> None:
-        """After a ROLLBACK the tree's metapage was restored behind its back
-        (the SequentialFile reloads itself, it is the table's storage)."""
         self._tree.reload()
 
     # --------------------------------------------------------------- policy
 
     def aux_limit(self) -> int:
-        """AUX pages tolerated, bounded by what a binary search over MAIN costs."""
         return max(1, int(math.log2(max(self._seq.page_count(MAIN_FILE), 2))))
 
     def aux_pages(self) -> int:

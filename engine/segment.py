@@ -7,8 +7,6 @@ NIL = -1
 
 
 class Segment:
-    """The pages of one file, allocated and freed through a free list."""
-
     def __init__(self, pool: BufferPool, path: str):
         self.pool = pool
         self.path = path

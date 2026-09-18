@@ -5,8 +5,6 @@ from transaction import manager as tx_manager
 
 
 class FileManager:
-    """Page-sized reads and writes on OS files, with open handles and I/O counters."""
-
     def __init__(self):
         self._files = {}
         self._pages = {}
@@ -94,7 +92,6 @@ class FileManager:
 
     @staticmethod
     def _snapshot(path: str) -> None:
-        """Whole-file before-image, for operations that drop pages wholesale."""
         if tx_manager.TX_ACTIVE():
             with open(path, "rb") as fp:
                 tx_manager.TX_HOOK("SNAPSHOT", path, None, fp.read())

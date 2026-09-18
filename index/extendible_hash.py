@@ -30,8 +30,6 @@ ENTRIES_PER_DIR_PAGE = (PAGE_SIZE - DIR_HEADER_SIZE) // 4  # 1023
 
 
 class ExtendibleHash(Index):
-    """Non-clustered hash index: lossy (hash + RID, not the key), no ranges."""
-
     def __init__(self, pool: BufferPool, path: str, bucket_capacity: int = MAX_ENTRIES):
         self._seg = Segment(pool, path)
         if self._seg.page_count() > 0:
@@ -47,7 +45,6 @@ class ExtendibleHash(Index):
         self._insert_hash(stable_hash(key), rid)
 
     def search(self, key: Any) -> list[RID]:
-        """Candidates, not matches: the caller must recheck against the row."""
         key_hash = stable_hash(key)
         out: list[RID] = []
         page_id = self._dir[key_hash & self._mask()]
@@ -214,7 +211,6 @@ class ExtendibleHash(Index):
     # ------------------------------------------------------------ maintenance
 
     def bulk_load(self, pairs) -> None:
-        """Load (key, rid) pairs into a fresh index."""
         pool, path = self._seg.pool, self._seg.path
         tmp_path = path + ".rebuild"
         # a leftover from an interrupted load would be opened instead of created
@@ -283,7 +279,6 @@ class ExtendibleHash(Index):
         self._load_dir(first_dir_page)
 
     def reload(self) -> None:
-        """Re-reads metapage and directory (see BPlusTree.reload)."""
         self._load()
 
     # -------------------------------------------------------------- directory

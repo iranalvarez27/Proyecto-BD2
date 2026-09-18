@@ -36,7 +36,6 @@ _TYPE_BY_CODE = {code: dtype for dtype, code in _TYPE_CODES.items()}
 
 
 class UnorderableKey(Exception):
-
     def __init__(self, value: Any):
         self.value = value
         super().__init__(
@@ -63,7 +62,6 @@ class KeyTypeMismatch(Exception):
 
 
 def type_code(dtype: DataType) -> int:
-    """The byte the metapage stores for this column type."""
     try:
         return _TYPE_CODES[dtype]
     except KeyError:
@@ -78,7 +76,6 @@ def type_from_code(code: int) -> DataType:
 
 
 def encode(value: Any, dtype: DataType) -> bytes:
-    """Order-preserving: encode(a) < encode(b) as bytes iff a < b as values."""
     raw = _encode(value, dtype)
     if len(raw) > MAX_KEY_SIZE:
         raise KeyTooLong(len(raw))
@@ -125,7 +122,6 @@ def _encode(value: Any, dtype: DataType) -> bytes:
 
 
 def decode(raw: bytes, dtype: DataType) -> Any:
-    """Inverse of encode(). Diagnostics only: the hot path never decodes."""
     if dtype == DataType.BOOL:
         return raw != b"\x00"
 

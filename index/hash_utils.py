@@ -4,7 +4,6 @@ from typing import Any
 
 
 class UnhashableKeyType(Exception):
-
     def __init__(self, value: Any):
         self.value = value
         super().__init__(
@@ -27,7 +26,6 @@ def _tagged_bytes(key: Any) -> bytes:
 
 
 def stable_hash(key: Any) -> int:
-    """Not hash(): that one is randomized per process and would not survive a restart."""
     return int.from_bytes(
         hashlib.blake2b(_tagged_bytes(key), digest_size=8).digest(), "big"
     )

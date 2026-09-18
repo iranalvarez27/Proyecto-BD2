@@ -22,8 +22,6 @@ MAX_ENTRIES = (PAGE_SIZE - HEADER_SIZE) // ENTRY_SIZE  # 255
 
 
 class BucketPage:
-    """Fixed-size hash bucket: a dense array of (hash, RID) entries."""
-
     def __init__(self, local_depth: int = 0, page_kind: int = PAGE_KIND_PRIMARY):
         self.local_depth = local_depth
         self.page_kind = page_kind
@@ -38,7 +36,6 @@ class BucketPage:
         self.entries.append((key_hash, rid))
 
     def remove(self, key_hash: int, rid: RID) -> bool:
-        """Removes one occurrence, not all matches."""
         for i, (h, r) in enumerate(self.entries):
             if h == key_hash and r == rid:
                 self.entries.pop(i)

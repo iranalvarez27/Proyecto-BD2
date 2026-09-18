@@ -14,7 +14,6 @@ class Index(ABC):
 
     @abstractmethod
     def range_search(self, low: Any, high: Any) -> list[RID]:
-        """Inclusive [low, high]. ExtendibleHash raises NotImplementedError."""
         ...
 
     @abstractmethod

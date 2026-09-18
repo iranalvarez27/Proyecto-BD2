@@ -6,8 +6,6 @@ POOL_FRAMES = 256
 
 
 class BufferPool:
-    """LRU cache of pages over a FileManager; writes go straight to the file, so every frame matches it."""
-
     def __init__(self, fm: FileManager, frames: int = POOL_FRAMES):
         if frames < 1:
             raise ValueError("a buffer pool needs at least one frame")

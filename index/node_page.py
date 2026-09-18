@@ -23,8 +23,6 @@ NIL = -1
 
 
 class ChildCodec:
-    """Inner slot payload: the page id of its left child."""
-
     size = 4
 
     def pack(self, page_id: int) -> bytes:
@@ -35,8 +33,6 @@ class ChildCodec:
 
 
 class RIDCodec:
-    """Unclustered leaf payload: where the row lives."""
-
     size = 8
 
     def pack(self, rid: RID) -> bytes:
@@ -48,8 +44,6 @@ class RIDCodec:
 
 
 class PageIdCodec:
-    """Clustered leaf payload: a MAIN page, one entry per page not per row."""
-
     size = 4
 
     def pack(self, page_id: int) -> bytes:
@@ -65,8 +59,6 @@ PAGE_ID_CODEC = PageIdCodec()
 
 
 class NodePage:
-    """A B+ tree node: (key, payload) entries in key order, keys as opaque bytes."""
-
     def __init__(self, is_leaf: bool, leaf_codec=RID_CODEC):
         self.is_leaf = is_leaf
         self.leaf_codec = leaf_codec
@@ -96,21 +88,17 @@ class NodePage:
         return self.byte_size() + self.entry_size(key) <= PAGE_SIZE
 
     def is_underfull(self) -> bool:
-        """Below half the usable space: triggers borrow/merge."""
         return self.byte_size() - HEADER_SIZE < HALF
 
     def min_fill_ok(self) -> bool:
-        """QUARTER, not HALF: a variable-width split cannot always cut near the middle."""
         return self.byte_size() - HEADER_SIZE >= QUARTER
 
     def can_lend(self, i: int) -> bool:
-        """Whether giving entry `i` away leaves this node still half full."""
         if self.count == 0:
             return False
         return self.byte_size() - HEADER_SIZE - self.entry_size(self.keys[i]) >= HALF
 
     def can_replace(self, i: int, key: bytes) -> bool:
-        """Whether swapping entry `i`'s key for `key` still fits."""
         return (self.byte_size() - self.entry_size(self.keys[i])
                 + self.entry_size(key)) <= PAGE_SIZE
 
@@ -130,7 +118,6 @@ class NodePage:
     # --------------------------------------------------------------- children
 
     def child(self, i: int) -> int:
-        """Child i of an inner node, where child(count) is the last child."""
         if self.is_leaf:
             raise ValueError("a leaf has no children")
         return self.last_child if i == self.count else self.payloads[i]
@@ -146,7 +133,6 @@ class NodePage:
     # -------------------------------------------------------------- split
 
     def split_index(self, keys: list[bytes], min_left: int = 1, min_right: int = 1) -> int:
-        """Where to cut `keys` (already overflowing) so both halves fit."""
         sizes = [self.entry_size(k) for k in keys]
         total = sum(sizes)
 
