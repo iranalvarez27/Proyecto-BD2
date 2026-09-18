@@ -2,11 +2,14 @@ import os
 import re
 import sys
 import time
+import uuid
 from typing import Any, Dict, List, Optional
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from common.types import Schema, Column, DataType
 from common.record import Record
+from engine.buffer_pool import BufferPool
+from engine.file_manager import FileManager
 from storage.heap_file import HeapFile
 from storage.sequential_file import SequentialFile
 from index.bplus_tree import BPlusTree
@@ -22,6 +25,7 @@ from query.catalog import (
     INDEX_CLUSTERED,
 )
 from query.conexion import Conexion
+from transaction.manager import TransactionManager
 
 
 class EngineAdapter:
@@ -29,7 +33,12 @@ class EngineAdapter:
         self.data_dir = data_dir
         os.makedirs(data_dir, exist_ok=True)
         self.catalog = Catalog()
-        self.conexion = Conexion(self.catalog)
+        self.pool = BufferPool(FileManager())
+        self.txn_manager = TransactionManager(pool=self.pool)
+        # /tmp suele ser tmpfs (RAM): los runs externos van a disco de verdad
+        tmp_dir = os.path.join(data_dir, "tmp")
+        os.makedirs(tmp_dir, exist_ok=True)
+        self.conexion = Conexion(self.catalog, self.txn_manager, tmp_dir=tmp_dir)
         self.clustered_trees: Dict[str, ClusteredBPlusTree] = {}
         self.init_database()
 
@@ -46,7 +55,7 @@ class EngineAdapter:
             ],
         )
         heap_path = os.path.join(self.data_dir, "estudiantes.bin")
-        heap_file = HeapFile(heap_path)
+        heap_file = HeapFile(self.pool, heap_path)
         self.catalog.register_table(
             nombre="estudiantes",
             schema=schema_estudiantes,
@@ -57,12 +66,12 @@ class EngineAdapter:
 
         # Register B+ Tree Index on 'id'
         bplus_path = os.path.join(self.data_dir, "estudiantes_id_bplus.idx")
-        bplus_idx = BPlusTree(bplus_path, DataType.INT)
+        bplus_idx = BPlusTree(self.pool, bplus_path, DataType.INT)
         self.catalog.register_index("estudiantes", "id", bplus_idx, INDEX_BPLUS)
 
         # Register Extendible Hash Index on 'carrera'
         hash_path = os.path.join(self.data_dir, "estudiantes_carrera_hash.idx")
-        hash_idx = ExtendibleHash(hash_path)
+        hash_idx = ExtendibleHash(self.pool, hash_path)
         self.catalog.register_index("estudiantes", "carrera", hash_idx, INDEX_HASH)
 
         # 2. Table 'cursos' -> SequentialFile
@@ -77,7 +86,7 @@ class EngineAdapter:
         )
         seq_data = os.path.join(self.data_dir, "cursos.bin")
         seq_aux = os.path.join(self.data_dir, "cursos_aux.bin")
-        seq_file = SequentialFile(seq_data, seq_aux, schema_cursos, "codigo")
+        seq_file = SequentialFile(self.pool, seq_data, seq_aux, schema_cursos, "codigo")
         self.catalog.register_table(
             nombre="cursos",
             schema=schema_cursos,
@@ -91,7 +100,7 @@ class EngineAdapter:
 
         # Clustered B+ Tree on cursos
         clustered_path = os.path.join(self.data_dir, "cursos_clustered.idx")
-        clustered_tree = ClusteredBPlusTree(seq_file, clustered_path)
+        clustered_tree = ClusteredBPlusTree(self.pool, seq_file, clustered_path)
         self.clustered_trees["cursos"] = clustered_tree
         self.catalog.register_index("cursos", "codigo", clustered_tree, INDEX_CLUSTERED)
 
@@ -120,7 +129,7 @@ class EngineAdapter:
             hash_idx, _ = self.catalog.get_indice("estudiantes", "carrera")
 
             # Check if BPlus index is empty
-            if getattr(bplus_idx, "_n_entries", 0) == 0:
+            if bplus_idx.is_empty():
                 for rid, rec in heap.scan_con_rid(info_est.schema):
                     try:
                         bplus_idx.insert(rec.values[0], rid)
@@ -128,8 +137,7 @@ class EngineAdapter:
                         pass
 
             # Check if Hash index is empty
-            sample_res = hash_idx.search("Ciencia de la Computacion")
-            if len(sample_res) == 0:
+            if hash_idx.is_empty():
                 for rid, rec in heap.scan_con_rid(info_est.schema):
                     try:
                         hash_idx.insert(rec.values[2], rid)
@@ -232,9 +240,16 @@ class EngineAdapter:
             "new_wasted_ratio": round(seq.wasted_ratio(), 3),
         }
 
-    def execute_query(self, sql: str) -> Dict[str, Any]:
+    def execute_query(self, sql: str, session_id: Optional[str] = None) -> Dict[str, Any]:
         start_time = time.time()
         sql_clean = sql.strip()
+        # Cada request sin session_id explicito (curl suelto, o el cliente
+        # que aun no llamo a /api/session) recibe una identidad propia y
+        # unica: si dos de esas peticiones comparten un mismo id constante,
+        # dejarian de excluirse mutuamente entre si (acquire() ve el lock ya
+        # otorgado a "la misma sesion" y no espera), rompiendo el aislamiento
+        # justo entre los clientes que mas lo necesitan.
+        session_id = session_id or str(uuid.uuid4())
 
         if not sql_clean:
             return {
@@ -246,68 +261,15 @@ class EngineAdapter:
                 "rows": [],
                 "error": "Consulta SQL vacía.",
                 "plan": None,
+                "transaction": {"active": False, "xact_id": None},
             }
 
-        # Transaction simulation commands (Section 2.1.4 placeholder)
-        upper = sql_clean.rstrip(";").strip().upper()
-        if upper in ["BEGIN", "BEGIN TRANSACTION", "START TRANSACTION"]:
-            duration_ms = (time.time() - start_time) * 1000
-            return {
-                "status": "success",
-                "query": sql,
-                "execution_time_ms": round(duration_ms, 2),
-                "affected_rows": 0,
-                "columns": ["Mensaje"],
-                "rows": [["Transacción iniciada (BEGIN TRANSACTION)"]],
-                "error": None,
-                "plan": {
-                    "node_type": "TransactionControl",
-                    "action": "BEGIN",
-                    "cost": 0.0,
-                    "rows_estimated": 0,
-                    "children": [],
-                },
-            }
-        if upper in ["COMMIT", "END TRANSACTION", "COMMIT TRANSACTION"]:
-            duration_ms = (time.time() - start_time) * 1000
-            return {
-                "status": "success",
-                "query": sql,
-                "execution_time_ms": round(duration_ms, 2),
-                "affected_rows": 0,
-                "columns": ["Mensaje"],
-                "rows": [["Transacción confirmada (COMMIT)"]],
-                "error": None,
-                "plan": {
-                    "node_type": "TransactionControl",
-                    "action": "COMMIT",
-                    "cost": 0.0,
-                    "rows_estimated": 0,
-                    "children": [],
-                },
-            }
-        if upper in ["ROLLBACK", "ABORT"]:
-            duration_ms = (time.time() - start_time) * 1000
-            return {
-                "status": "success",
-                "query": sql,
-                "execution_time_ms": round(duration_ms, 2),
-                "affected_rows": 0,
-                "columns": ["Mensaje"],
-                "rows": [["Transacción revertida (ROLLBACK)"]],
-                "error": None,
-                "plan": {
-                    "node_type": "TransactionControl",
-                    "action": "ROLLBACK",
-                    "cost": 0.0,
-                    "rows_estimated": 0,
-                    "children": [],
-                },
-            }
-
-        # Execute using real Conexion (Lexer -> Parser -> Semantic -> Execution)
-        res = self.conexion.execute(sql_clean)
+        # Ejecuta via Conexion real (Lexer -> Parser -> Semantico -> Ejecucion),
+        # incluidos BEGIN TRANSACTION / END TRANSACTION / ROLLBACK, que ahora
+        # pasan por TransactionManager/LockManager en vez de ser un mock.
+        res = self.conexion.execute(sql_clean, session_id)
         duration_ms = (time.time() - start_time) * 1000
+        transaction_info = {"active": res.transaccion_activa, "xact_id": res.xact_id}
 
         if not res.ok:
             return {
@@ -319,6 +281,7 @@ class EngineAdapter:
                 "rows": [],
                 "error": f"Error [{res.tipo_error.upper()}]: {res.error}",
                 "plan": None,
+                "transaction": transaction_info,
             }
 
         # Format plan steps into visual hierarchy for PlanPanel
@@ -350,10 +313,23 @@ class EngineAdapter:
                 "rows": rows,
                 "error": None,
                 "plan": plan_tree,
+                "transaction": transaction_info,
             }
 
-        # Handle INSERT / DELETE summary
+        # Handle BEGIN / COMMIT / ROLLBACK (mensaje) y INSERT / DELETE (resumen)
         if res.resumen is not None:
+            if "mensaje" in res.resumen:
+                return {
+                    "status": "success",
+                    "query": sql,
+                    "execution_time_ms": round(duration_ms, 2),
+                    "affected_rows": 0,
+                    "columns": ["Mensaje"],
+                    "rows": [[res.resumen["mensaje"]]],
+                    "error": None,
+                    "plan": plan_tree,
+                    "transaction": transaction_info,
+                }
             operacion = res.resumen.get("operacion", "Operación")
             filas_afectadas = res.resumen.get("filas_afectadas", 1)
             return {
@@ -365,6 +341,7 @@ class EngineAdapter:
                 "rows": [[operacion, filas_afectadas]],
                 "error": None,
                 "plan": plan_tree,
+                "transaction": transaction_info,
             }
 
         return {
@@ -376,6 +353,7 @@ class EngineAdapter:
             "rows": [["Consulta ejecutada sin retorno de datos"]],
             "error": None,
             "plan": plan_tree,
+            "transaction": transaction_info,
         }
 
     def _build_plan_tree(self, plan_steps: List[str], sql: str) -> Dict[str, Any]:
@@ -392,7 +370,32 @@ class EngineAdapter:
         nodes = []
         for step in plan_steps:
             step_lower = step.lower()
-            if "agrupado" in step_lower and "no agrupado" not in step_lower:
+            if "begin transaction" in step_lower or "end transaction" in step_lower or "rollback" in step_lower:
+                nodes.append({
+                    "node_type": "TransactionControl",
+                    "method": step,
+                    "cost": 0.0,
+                    "rows_estimated": 0,
+                    "children": [],
+                })
+            # antes que los indices: "external hash" contiene "hash"
+            elif "order by" in step_lower:
+                nodes.append({
+                    "node_type": "Sort (ORDER BY)",
+                    "method": step,
+                    "cost": 1.80,
+                    "rows_estimated": 10,
+                    "children": [],
+                })
+            elif "group by" in step_lower:
+                nodes.append({
+                    "node_type": "Aggregate (GROUP BY)",
+                    "method": step,
+                    "cost": 1.50,
+                    "rows_estimated": 5,
+                    "children": [],
+                })
+            elif "agrupado" in step_lower and "no agrupado" not in step_lower:
                 nodes.append({
                     "node_type": "IndexScan (B+ Tree Agrupado)",
                     "method": step,
@@ -446,22 +449,6 @@ class EngineAdapter:
                     "method": step,
                     "cost": 2.50,
                     "rows_estimated": 10,
-                    "children": [],
-                })
-            elif "order by" in step_lower:
-                nodes.append({
-                    "node_type": "Sort (ORDER BY)",
-                    "method": step,
-                    "cost": 1.80,
-                    "rows_estimated": 10,
-                    "children": [],
-                })
-            elif "group by" in step_lower:
-                nodes.append({
-                    "node_type": "Aggregate (GROUP BY)",
-                    "method": step,
-                    "cost": 1.50,
-                    "rows_estimated": 5,
                     "children": [],
                 })
             elif "insert" in step_lower:

@@ -1,5 +1,8 @@
 from query.tokens import Token, TokenType
-from query.ast import SelectNode, InsertNode, DeleteNode, Condition, BinaryCondition, OrderBy
+from query.ast import (
+    SelectNode, InsertNode, DeleteNode, Condition, BinaryCondition, OrderBy, JoinClause,
+    BeginNode, CommitNode, RollbackNode,
+)
 
 class ParserError(Exception):
     pass
@@ -38,6 +41,12 @@ class Parser:
             nodo = self.parse_insert()
         elif self.coincide(TokenType.DELETE):
             nodo = self.parse_delete()
+        elif self.coincide(TokenType.BEGIN) or self.coincide(TokenType.START):
+            nodo = self.parse_begin()
+        elif self.coincide(TokenType.COMMIT) or self.coincide(TokenType.END):
+            nodo = self.parse_commit()
+        elif self.coincide(TokenType.ROLLBACK) or self.coincide(TokenType.ABORT):
+            nodo = self.parse_rollback()
         else:
             raise ParserError(f"error en la consulta, empieza con {self.actual().value}")
 
@@ -46,11 +55,34 @@ class Parser:
         self.esperar(TokenType.EOF)
         return nodo
 
+    def parse_begin(self):
+        # BEGIN [TRANSACTION] | START TRANSACTION
+        self.avanzar()  # BEGIN o START
+        if self.coincide(TokenType.TRANSACTION):
+            self.avanzar()
+        return BeginNode()
+
+    def parse_commit(self):
+        # COMMIT [TRANSACTION] | END TRANSACTION
+        self.avanzar()  # COMMIT o END
+        if self.coincide(TokenType.TRANSACTION):
+            self.avanzar()
+        return CommitNode()
+
+    def parse_rollback(self):
+        # ROLLBACK | ABORT
+        self.avanzar()
+        return RollbackNode()
+
     def parse_select(self):
         self.esperar(TokenType.SELECT)
         cols = self.parse_columnas()
         self.esperar(TokenType.FROM)
         tabla = self.esperar(TokenType.IDENT).value
+
+        join = None
+        if self.coincide(TokenType.JOIN):
+            join = self.parse_join()
 
         where = None
         order_by = None
@@ -66,22 +98,39 @@ class Parser:
             else:
                 group_by = self.parse_group_by()
 
-        return SelectNode(cols, tabla, where, order_by, group_by)
+        return SelectNode(cols, tabla, where, order_by, group_by, join)
+
+    def parse_join(self):
+        self.esperar(TokenType.JOIN)
+        tabla = self.esperar(TokenType.IDENT).value
+        self.esperar(TokenType.ON)
+        col_izq = self.parse_columna_ref()
+        self.esperar(TokenType.EQ)
+        col_der = self.parse_columna_ref()
+        return JoinClause(tabla, col_izq, col_der)
+
+    def parse_columna_ref(self):
+        nombre = self.esperar(TokenType.IDENT).value
+        if self.coincide(TokenType.DOT):
+            self.avanzar()
+            campo = self.esperar(TokenType.IDENT).value
+            return f"{nombre}.{campo}"
+        return nombre
 
     def parse_columnas(self):
         if self.coincide(TokenType.STAR):
             self.avanzar()
             return ["*"]
-        cols = [self.esperar(TokenType.IDENT).value]
+        cols = [self.parse_columna_ref()]
         while self.coincide(TokenType.COMMA):
             self.avanzar()
-            cols.append(self.esperar(TokenType.IDENT).value)
+            cols.append(self.parse_columna_ref())
         return cols
 
     def parse_order_by(self):
         self.esperar(TokenType.ORDER)
         self.esperar(TokenType.BY)
-        col = self.esperar(TokenType.IDENT).value
+        col = self.parse_columna_ref()
         desc = False
         if self.coincide(TokenType.DESC):
             self.avanzar()
@@ -93,7 +142,7 @@ class Parser:
     def parse_group_by(self):
         self.esperar(TokenType.GROUP)
         self.esperar(TokenType.BY)
-        return self.esperar(TokenType.IDENT).value
+        return self.parse_columna_ref()
 
     def parse_insert(self):
         self.esperar(TokenType.INSERT)
@@ -148,7 +197,7 @@ class Parser:
             self.esperar(TokenType.RPAREN)
             return expr
 
-        col = self.esperar(TokenType.IDENT).value
+        col = self.parse_columna_ref()
         if self.actual().type not in OPERADORES_COMP:
             raise ParserError(f"pos {self.actual().pos}: falta operador de comparacion")
         op = self.avanzar().type

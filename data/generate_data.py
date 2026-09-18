@@ -38,6 +38,8 @@ if PROJECT_ROOT not in sys.path:
 
 from common.types import Schema, Column, DataType, RID
 from common.record import Record
+from engine.buffer_pool import BufferPool
+from engine.file_manager import FileManager
 from storage.heap_file import HeapFile
 from storage.sequential_file import (
     SequentialFile,
@@ -145,6 +147,7 @@ def _clean_data_files():
         "estudiantes_carrera_hash.idx",
         "cursos.bin",
         "cursos_aux.bin",
+        "cursos.meta.bin",
         "cursos_clustered.idx",
     ]:
         fpath = os.path.join(DATA_DIR, fname)
@@ -192,9 +195,10 @@ def build_estudiantes(n: int):
     bplus_path = os.path.join(DATA_DIR, "estudiantes_id_bplus.idx")
     hash_path = os.path.join(DATA_DIR, "estudiantes_carrera_hash.idx")
 
-    heap = HeapFile(heap_path)
-    bplus = BPlusTree(bplus_path, DataType.INT)
-    eh = ExtendibleHash(hash_path)
+    pool = BufferPool(FileManager())
+    heap = HeapFile(pool, heap_path)
+    bplus = BPlusTree(pool, bplus_path, DataType.INT)
+    eh = ExtendibleHash(pool, hash_path)
 
     # 1. Inserción en HeapFile
     t0 = time.perf_counter()
@@ -244,29 +248,17 @@ def build_cursos(n: int):
     aux_path = os.path.join(DATA_DIR, "cursos_aux.bin")
     clustered_path = os.path.join(DATA_DIR, "cursos_clustered.idx")
 
-    seq = SequentialFile(data_path, aux_path, SCHEMA_CURSOS, "codigo")
+    pool = BufferPool(FileManager())
+    seq = SequentialFile(pool, data_path, aux_path, SCHEMA_CURSOS, "codigo")
 
-    # Para SequentialFile, poblar de forma estructurada en MAIN (igual que reorganize())
-    # garantiza orden físico perfecto O(N) sin degradar por inserciones individuales
     t0 = time.perf_counter()
-    records = [Record(list(row)) for row in data]
-    pointers = []
-    for rec in records:
-        entry = SequentialEntry(record=rec, next_pointer=None, deleted=False)
-        p = seq._append_entry(MAIN_FILE, entry)
-        pointers.append(p)
-
-    # Enlazar punteros secuenciales contiguos
-    for i in range(len(pointers) - 1):
-        entry = seq._read_entry(pointers[i])
-        entry.next_pointer = pointers[i + 1]
-        seq._write_entry(pointers[i], entry)
-
+    for row in data:
+        seq.insert(Record(list(row)))
     t_seq = time.perf_counter() - t0
 
     # Construcción de Clustered B+ Tree sobre SequentialFile
     t0 = time.perf_counter()
-    clustered = ClusteredBPlusTree(seq, clustered_path)
+    clustered = ClusteredBPlusTree(pool, seq, clustered_path)
     t_clustered = time.perf_counter() - t0
 
     sz_data = os.path.getsize(data_path) if os.path.exists(data_path) else 0
@@ -300,9 +292,10 @@ def reset_to_initial():
         (7, "Valeria Rivas", "Ingenieria Mecatronica", 16.7),
         (8, "Jorge Herrera", "Ciencia de Datos", 17.0),
     ]
-    heap = HeapFile(os.path.join(DATA_DIR, "estudiantes.bin"))
-    bplus = BPlusTree(os.path.join(DATA_DIR, "estudiantes_id_bplus.idx"), DataType.INT)
-    eh = ExtendibleHash(os.path.join(DATA_DIR, "estudiantes_carrera_hash.idx"))
+    pool = BufferPool(FileManager())
+    heap = HeapFile(pool, os.path.join(DATA_DIR, "estudiantes.bin"))
+    bplus = BPlusTree(pool, os.path.join(DATA_DIR, "estudiantes_id_bplus.idx"), DataType.INT)
+    eh = ExtendibleHash(pool, os.path.join(DATA_DIR, "estudiantes_carrera_hash.idx"))
 
     for row in sample_estudiantes:
         rec = Record(list(row))
@@ -320,6 +313,7 @@ def reset_to_initial():
         (405, "Redes y Comunicaciones", 3, "Electronica"),
     ]
     seq = SequentialFile(
+        pool,
         os.path.join(DATA_DIR, "cursos.bin"),
         os.path.join(DATA_DIR, "cursos_aux.bin"),
         SCHEMA_CURSOS,
@@ -328,7 +322,7 @@ def reset_to_initial():
     for row in sample_cursos:
         seq.insert(Record(list(row)))
 
-    ClusteredBPlusTree(seq, os.path.join(DATA_DIR, "cursos_clustered.idx"))
+    ClusteredBPlusTree(pool, seq, os.path.join(DATA_DIR, "cursos_clustered.idx"))
     print("✓ Datos iniciales restaurados con éxito (8 estudiantes, 6 cursos).")
 
 
@@ -343,6 +337,7 @@ def print_stats():
         ("estudiantes_carrera_hash.idx", "Hash Dinámico en 'carrera'"),
         ("cursos.bin", "SequentialFile MAIN (datos)"),
         ("cursos_aux.bin", "SequentialFile AUX (overflow)"),
+        ("cursos.meta.bin", "SequentialFile METADATA"),
         ("cursos_clustered.idx", "B+ Tree agrupado en 'codigo'"),
     ]
     total_size = 0

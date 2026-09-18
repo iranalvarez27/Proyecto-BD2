@@ -104,7 +104,7 @@ class Lexer:
 
         simple = {"=": TokenType.EQ, "<": TokenType.LT, ">": TokenType.GT,
                  "*": TokenType.STAR, ",": TokenType.COMMA, "(": TokenType.LPAREN,
-                 ")": TokenType.RPAREN, ";": TokenType.SEMICOLON}
+                 ")": TokenType.RPAREN, ";": TokenType.SEMICOLON, ".": TokenType.DOT}
 
         if c in simple:
             self.avanzar()
