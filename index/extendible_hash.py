@@ -291,6 +291,10 @@ class ExtendibleHash(Index):
         self._seg.free_head = free_head
         self._load_dir(first_dir_page)
 
+    def reload(self) -> None:
+        """Re-reads metapage and directory (see BPlusTree.reload)."""
+        self._load()
+
     # -------------------------------------------------------------- directory
 
     def _load_dir(self, first_dir_page: int) -> None:

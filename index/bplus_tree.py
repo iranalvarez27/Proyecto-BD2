@@ -581,6 +581,11 @@ class BPlusTree(Index):
         self._height = height
         self._seg.free_head = free_list_head
 
+    def reload(self) -> None:
+        """Re-reads the metapage. After a ROLLBACK the undo restores the file's
+        bytes behind this object's back, so root/height/free list would be stale."""
+        self._load()
+
     def _flush_meta(self) -> None:
         flags = (FLAG_UNIQUE if self._unique else 0) | (FLAG_CLUSTERED if self._clustered else 0)
         buf = bytearray(PAGE_SIZE)

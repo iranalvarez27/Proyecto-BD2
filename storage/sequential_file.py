@@ -143,6 +143,12 @@ class SequentialFile:
         self._recover_state()
         self._save_state()
 
+    def reload(self) -> None:
+        """Rebuilds head, tail and counters from the files: after a ROLLBACK
+        they were restored behind this object's back."""
+        self._recover_state()
+        self._save_state()
+
     def _save_state(self) -> None:
         payload = struct.pack(
             META_FORMAT,

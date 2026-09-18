@@ -2,6 +2,7 @@ import os
 import re
 import sys
 import time
+import uuid
 from typing import Any, Dict, List, Optional
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -24,6 +25,7 @@ from query.catalog import (
     INDEX_CLUSTERED,
 )
 from query.conexion import Conexion
+from transaction.manager import TransactionManager
 
 
 class EngineAdapter:
@@ -32,10 +34,11 @@ class EngineAdapter:
         os.makedirs(data_dir, exist_ok=True)
         self.catalog = Catalog()
         self.pool = BufferPool(FileManager())
+        self.txn_manager = TransactionManager(pool=self.pool)
         # /tmp suele ser tmpfs (RAM): los runs externos van a disco de verdad
         tmp_dir = os.path.join(data_dir, "tmp")
         os.makedirs(tmp_dir, exist_ok=True)
-        self.conexion = Conexion(self.catalog, tmp_dir=tmp_dir)
+        self.conexion = Conexion(self.catalog, self.txn_manager, tmp_dir=tmp_dir)
         self.clustered_trees: Dict[str, ClusteredBPlusTree] = {}
         self.init_database()
 
@@ -237,9 +240,16 @@ class EngineAdapter:
             "new_wasted_ratio": round(seq.wasted_ratio(), 3),
         }
 
-    def execute_query(self, sql: str) -> Dict[str, Any]:
+    def execute_query(self, sql: str, session_id: Optional[str] = None) -> Dict[str, Any]:
         start_time = time.time()
         sql_clean = sql.strip()
+        # Cada request sin session_id explicito (curl suelto, o el cliente
+        # que aun no llamo a /api/session) recibe una identidad propia y
+        # unica: si dos de esas peticiones comparten un mismo id constante,
+        # dejarian de excluirse mutuamente entre si (acquire() ve el lock ya
+        # otorgado a "la misma sesion" y no espera), rompiendo el aislamiento
+        # justo entre los clientes que mas lo necesitan.
+        session_id = session_id or str(uuid.uuid4())
 
         if not sql_clean:
             return {
@@ -251,68 +261,15 @@ class EngineAdapter:
                 "rows": [],
                 "error": "Consulta SQL vacía.",
                 "plan": None,
+                "transaction": {"active": False, "xact_id": None},
             }
 
-        # Transaction simulation commands (Section 2.1.4 placeholder)
-        upper = sql_clean.rstrip(";").strip().upper()
-        if upper in ["BEGIN", "BEGIN TRANSACTION", "START TRANSACTION"]:
-            duration_ms = (time.time() - start_time) * 1000
-            return {
-                "status": "success",
-                "query": sql,
-                "execution_time_ms": round(duration_ms, 2),
-                "affected_rows": 0,
-                "columns": ["Mensaje"],
-                "rows": [["Transacción iniciada (BEGIN TRANSACTION)"]],
-                "error": None,
-                "plan": {
-                    "node_type": "TransactionControl",
-                    "action": "BEGIN",
-                    "cost": 0.0,
-                    "rows_estimated": 0,
-                    "children": [],
-                },
-            }
-        if upper in ["COMMIT", "END TRANSACTION", "COMMIT TRANSACTION"]:
-            duration_ms = (time.time() - start_time) * 1000
-            return {
-                "status": "success",
-                "query": sql,
-                "execution_time_ms": round(duration_ms, 2),
-                "affected_rows": 0,
-                "columns": ["Mensaje"],
-                "rows": [["Transacción confirmada (COMMIT)"]],
-                "error": None,
-                "plan": {
-                    "node_type": "TransactionControl",
-                    "action": "COMMIT",
-                    "cost": 0.0,
-                    "rows_estimated": 0,
-                    "children": [],
-                },
-            }
-        if upper in ["ROLLBACK", "ABORT"]:
-            duration_ms = (time.time() - start_time) * 1000
-            return {
-                "status": "success",
-                "query": sql,
-                "execution_time_ms": round(duration_ms, 2),
-                "affected_rows": 0,
-                "columns": ["Mensaje"],
-                "rows": [["Transacción revertida (ROLLBACK)"]],
-                "error": None,
-                "plan": {
-                    "node_type": "TransactionControl",
-                    "action": "ROLLBACK",
-                    "cost": 0.0,
-                    "rows_estimated": 0,
-                    "children": [],
-                },
-            }
-
-        # Execute using real Conexion (Lexer -> Parser -> Semantic -> Execution)
-        res = self.conexion.execute(sql_clean)
+        # Ejecuta via Conexion real (Lexer -> Parser -> Semantico -> Ejecucion),
+        # incluidos BEGIN TRANSACTION / END TRANSACTION / ROLLBACK, que ahora
+        # pasan por TransactionManager/LockManager en vez de ser un mock.
+        res = self.conexion.execute(sql_clean, session_id)
         duration_ms = (time.time() - start_time) * 1000
+        transaction_info = {"active": res.transaccion_activa, "xact_id": res.xact_id}
 
         if not res.ok:
             return {
@@ -324,6 +281,7 @@ class EngineAdapter:
                 "rows": [],
                 "error": f"Error [{res.tipo_error.upper()}]: {res.error}",
                 "plan": None,
+                "transaction": transaction_info,
             }
 
         # Format plan steps into visual hierarchy for PlanPanel
@@ -355,10 +313,23 @@ class EngineAdapter:
                 "rows": rows,
                 "error": None,
                 "plan": plan_tree,
+                "transaction": transaction_info,
             }
 
-        # Handle INSERT / DELETE summary
+        # Handle BEGIN / COMMIT / ROLLBACK (mensaje) y INSERT / DELETE (resumen)
         if res.resumen is not None:
+            if "mensaje" in res.resumen:
+                return {
+                    "status": "success",
+                    "query": sql,
+                    "execution_time_ms": round(duration_ms, 2),
+                    "affected_rows": 0,
+                    "columns": ["Mensaje"],
+                    "rows": [[res.resumen["mensaje"]]],
+                    "error": None,
+                    "plan": plan_tree,
+                    "transaction": transaction_info,
+                }
             operacion = res.resumen.get("operacion", "Operación")
             filas_afectadas = res.resumen.get("filas_afectadas", 1)
             return {
@@ -370,6 +341,7 @@ class EngineAdapter:
                 "rows": [[operacion, filas_afectadas]],
                 "error": None,
                 "plan": plan_tree,
+                "transaction": transaction_info,
             }
 
         return {
@@ -381,6 +353,7 @@ class EngineAdapter:
             "rows": [["Consulta ejecutada sin retorno de datos"]],
             "error": None,
             "plan": plan_tree,
+            "transaction": transaction_info,
         }
 
     def _build_plan_tree(self, plan_steps: List[str], sql: str) -> Dict[str, Any]:
@@ -397,8 +370,16 @@ class EngineAdapter:
         nodes = []
         for step in plan_steps:
             step_lower = step.lower()
+            if "begin transaction" in step_lower or "end transaction" in step_lower or "rollback" in step_lower:
+                nodes.append({
+                    "node_type": "TransactionControl",
+                    "method": step,
+                    "cost": 0.0,
+                    "rows_estimated": 0,
+                    "children": [],
+                })
             # antes que los indices: "external hash" contiene "hash"
-            if "order by" in step_lower:
+            elif "order by" in step_lower:
                 nodes.append({
                     "node_type": "Sort (ORDER BY)",
                     "method": step,
