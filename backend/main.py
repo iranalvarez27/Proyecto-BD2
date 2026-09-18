@@ -5,8 +5,14 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Optional
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from backend.engine_adapter import EngineAdapter
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
+
+try:
+    from backend.engine_adapter import EngineAdapter
+except ModuleNotFoundError:
+    from engine_adapter import EngineAdapter
 
 app = FastAPI(
     title="Minigestor Multimodal API",
