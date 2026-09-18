@@ -22,8 +22,6 @@ class HeapFile:
         return self._seg.page_count()
 
     def reload(self) -> None:
-        """Forgets the free-space caches: after a ROLLBACK the pages changed
-        behind this object's back. They are rebuilt on the next insert."""
         self._reusable.clear()
         self._free_space.clear()
         self._deleted_pages.clear()

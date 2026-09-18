@@ -25,8 +25,6 @@ class FilePointer:
     slot_id: int
 
     def to_rid(self) -> RID:
-        # los indices guardan (page_id, slot_id) y no distinguen archivos:
-        # AUX viaja en el signo, MAIN >= 0 y AUX < 0
         if self.file_type == MAIN_FILE:
             return RID(page_id=self.page_id, slot_id=self.slot_id)
         return RID(page_id=-(self.page_id + 1), slot_id=self.slot_id)
@@ -530,8 +528,6 @@ class SequentialFile:
         return new_pointer.to_rid()
 
     def read(self, rid: RID, schema: Schema | None = None) -> Record | None:
-        # schema se acepta para que la capa de tabla llame igual al heap y al
-        # sequential; el sequential ya tiene el suyo
         pointer = FilePointer.from_rid(rid)
         if pointer.page_id >= self.page_count(pointer.file_type):
             return None
@@ -633,8 +629,6 @@ class SequentialFile:
         return None
 
     def delete(self, key) -> tuple[RID, Record] | None:
-        """El RID y la fila borrada, para que la capa de tabla pueda sacarla de
-        los indices secundarios; None si la clave no estaba."""
         previous_pointer, current_pointer, current_entry = self._find_by_key(key)
         if current_pointer is None:
             return None
@@ -693,8 +687,6 @@ class SequentialFile:
         return self._n_aux
 
     def deleted_ratio(self) -> float:
-        # por registro y con los contadores en memoria: wasted_ratio() recorre
-        # los dos archivos y no sirve para decidir en cada operacion
         total = self._n_live + self._n_deleted
         if total == 0:
             return 0.0
