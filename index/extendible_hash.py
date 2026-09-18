@@ -85,25 +85,21 @@ class ExtendibleHash(Index):
             page_id = self._dir[idx]
             bucket = self._read_bucket(page_id)
 
-            # case 1: it fits
             if len(bucket.entries) < self._capacity:
                 bucket.add(key_hash, rid)
                 self._write_bucket(page_id, bucket)
                 return
 
-            # case 2: full, and splitting cannot help
             if self._is_stuck(bucket, key_hash):
                 self._add_to_overflow(page_id, bucket, key_hash, rid)
                 return
 
-            # case 3: full, and splitting does help
             if bucket.local_depth == self._global_depth:
                 self._double_directory()
             self._split_bucket(idx, page_id, bucket)
-            # retry: the target bucket is recomputed from scratch
+            # the mask changed: the next turn recomputes the target bucket
 
     def _is_stuck(self, bucket: BucketPage, key_hash: int) -> bool:
-        """True if splitting would not make room for key_hash."""
         if bucket.local_depth >= HASH_BITS:
             return True
         bit = 1 << bucket.local_depth
@@ -156,7 +152,6 @@ class ExtendibleHash(Index):
         local_depth: int,
         spare: list[int],
     ) -> None:
-        """Write `entries` at `head_id` plus overflow pages, reusing `spare`."""
         cap = self._capacity
         # `or [[]]` so an empty side still gets its primary page
         chunks = [entries[i:i + cap] for i in range(0, len(entries), cap)] or [[]]
@@ -185,7 +180,6 @@ class ExtendibleHash(Index):
     def _add_to_overflow(
         self, primary_id: int, primary: BucketPage, key_hash: int, rid: RID
     ) -> None:
-        """Insert at the head of the chain."""
         first_id = primary.overflow_page_id
 
         if first_id != NIL:
@@ -206,7 +200,6 @@ class ExtendibleHash(Index):
         self._write_bucket(primary_id, primary)
 
     def _consolidate(self, page_id: int, page: BucketPage) -> None:
-        """Pulls the next link up when it fits. At most one page per delete."""
         next_id = page.overflow_page_id
         if next_id == NIL:
             return
@@ -221,8 +214,7 @@ class ExtendibleHash(Index):
     # ------------------------------------------------------------ maintenance
 
     def bulk_load(self, pairs) -> None:
-        """Load (key, rid) pairs into a fresh index. It is how a table rebuilds
-        its indexes after a reorganization, where every rid changed."""
+        """Load (key, rid) pairs into a fresh index."""
         pool, path = self._seg.pool, self._seg.path
         tmp_path = path + ".rebuild"
         # a leftover from an interrupted load would be opened instead of created
@@ -239,7 +231,6 @@ class ExtendibleHash(Index):
         return (1 << self._global_depth) - 1
 
     def _alloc_page(self) -> int:
-        """Pop the free list, or extend the file."""
         reused = self._seg.free_head != NIL
         page_id = self._seg.alloc()
         if reused:
@@ -247,7 +238,7 @@ class ExtendibleHash(Index):
         return page_id
 
     def _free_page(self, page_id: int) -> None:
-        """Freed pages go on the list: truncating would shift later page ids."""
+        # truncating instead of chaining would shift later page ids
         self._seg.free(page_id)
         self._flush_meta()
 
@@ -328,12 +319,10 @@ class ExtendibleHash(Index):
         self._seg.write(self._dir_pages[k], bytes(buf))
 
     def _flush_dir_pages(self) -> None:
-        """Whole-directory write. Only on doubling, which happens O(D) times."""
         for k in range(len(self._dir_pages)):
             self._write_dir_page(k)
 
     def _iter_pages(self):
-        """Every live page reachable from the directory, primaries first."""
         for page_id in dict.fromkeys(self._dir):  # dedup, keep order
             while page_id != NIL:
                 page = self._read_bucket(page_id)

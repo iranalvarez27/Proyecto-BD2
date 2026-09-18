@@ -299,7 +299,7 @@ class Conexion:
         nombres_col = [c.name for c in info.schema.columns]
 
         if where is None:
-            usa_indice_orden = (nodo.order_by is not None and info.tipo_storage == STORAGE_HEAP
+            usa_indice_orden = (nodo.order_by is not None
                                 and self.catalog.tiene_indice(nodo.tabla, nodo.order_by.columna))
             if usa_indice_orden:
                 indice, tipo_indice = self.catalog.get_indice(nodo.tabla, nodo.order_by.columna)
@@ -551,7 +551,52 @@ class Conexion:
             raise ExecutionError(f"no se pudo insertar: {e}")
 
         self.plan.append(f"INSERT en '{info.nombre}' ({info.tipo_storage})")
+        self._reorganizar_si_hace_falta(nodo.tabla, info)
         return {"operacion": "INSERT", "filas_afectadas": 1}
+
+    def necesita_reorganizar(self, tabla: str) -> bool:
+        info = self.catalog.get_table(tabla)
+        if info.tipo_storage != STORAGE_SEQUENTIAL:
+            return False
+        indice_clustered = self._indice_clustered(tabla, info.key_column)
+        if indice_clustered is not None:
+            return indice_clustered.needs_reorganization()
+        return info.storage.needs_reorganization()
+
+    def reorganizar_tabla(self, tabla: str) -> None:
+        """Reorganiza el archivo y reconstruye todos los indices de la tabla."""
+        info = self.catalog.get_table(tabla)
+        indice_clustered = self._indice_clustered(tabla, info.key_column)
+        if indice_clustered is not None:
+            indice_clustered.reorganize()
+        else:
+            info.storage.reorganize()
+        self._recargar_indices(tabla, info)
+
+    def _recargar_indices(self, tabla: str, info: TableInfo) -> None:
+        # el reorganize mueve todas las filas: los RID viejos ya no valen
+        secundarios = []
+        for columna in info.indices:
+            indice, tipo_indice = self.catalog.get_indice(tabla, columna)
+            if tipo_indice != "clustered":
+                secundarios.append((columna, indice, tipo_indice))
+        if not secundarios:
+            return
+
+        filas = list(info.storage.scan_con_rid(info.schema))
+        for columna, indice, tipo_indice in secundarios:
+            idx = info.schema.column_index(columna)
+            pares = [(record.values[idx], rid) for rid, record in filas]
+            if tipo_indice == "bplus":
+                pares.sort(key=lambda p: (p[0], p[1].page_id, p[1].slot_id))
+            indice.bulk_load(pares)
+
+    def _reorganizar_si_hace_falta(self, tabla: str, info: TableInfo) -> None:
+        if not self.necesita_reorganizar(tabla):
+            return
+        self.reorganizar_tabla(tabla)
+        self.plan.append(
+            f"reorganize de '{info.nombre}' + reconstruccion de sus indices")
 
     def _indice_clustered(self, tabla: str, key_column: str):
         if self.catalog.tiene_indice(tabla, key_column):
@@ -590,6 +635,7 @@ class Conexion:
                 if borrado is not None:
                     rid, record = borrado
                     self.actualizar_indices_delete(nodo.tabla, info, record, rid)
+                    self._reorganizar_si_hace_falta(nodo.tabla, info)
                     return {"operacion": "DELETE", "filas_afectadas": 1}
                 else:
                     return {"operacion": "DELETE", "filas_afectadas": 0}
@@ -611,6 +657,7 @@ class Conexion:
                     self.actualizar_indices_delete(nodo.tabla, info, record, rid)
                     borradas += 1
             self.plan.append(f"escaneo + DELETE por clave en '{info.nombre}'")
+            self._reorganizar_si_hace_falta(nodo.tabla, info)
             return {"operacion": "DELETE", "filas_afectadas": borradas}
 
         if info.tipo_storage == STORAGE_HEAP:

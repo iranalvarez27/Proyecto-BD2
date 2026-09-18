@@ -39,9 +39,7 @@ class DuplicateKey(Exception):
 
 
 class BPlusTree(Index):
-    """B+ tree over one file: page 0 is the metapage, nodes and free pages
-    interleaved after it. Keys are variable width, so a node splits by bytes
-    and not by an order M."""
+    """B+ tree over one file: page 0 is the metapage, nodes and free pages after it."""
 
     def __init__(
         self,
@@ -129,8 +127,6 @@ class BPlusTree(Index):
         self._flush_meta()
 
     def _split_leaf(self, page_id: int, leaf: NodePage, i: int, k: bytes, payload):
-        """Returns (separator, right_page_id). The separator is copied, not
-        lifted: it is a datum and stays in the right half too."""
         keys = leaf.keys[:i] + [k] + leaf.keys[i:]
         payloads = leaf.payloads[:i] + [payload] + leaf.payloads[i:]
         m = leaf.split_index(keys)
@@ -155,8 +151,6 @@ class BPlusTree(Index):
         return keys[m], right_id
 
     def _split_inner(self, page_id: int, node: NodePage):
-        """Returns (separator, right_page_id). The middle key is lifted: it
-        is a signpost, so it leaves both children."""
         m = node.split_index(node.keys, min_right=2)
         mid_key = node.keys[m]
         mid_child = node.payloads[m]
@@ -213,8 +207,6 @@ class BPlusTree(Index):
         return True
 
     def _find_payload(self, page_id: int, leaf: NodePage, i: int, k: bytes, payload):
-        """Finds this exact payload from (leaf, i) forward, while the key
-        matches. Returns (page_id, node, slot) or None."""
         node_id, node, j = page_id, leaf, i
         while True:
             if j == node.count:
@@ -231,7 +223,6 @@ class BPlusTree(Index):
             j += 1
 
     def _advance(self, path: list[tuple[int, int]]):
-        """Steps one leaf right keeping the parent path valid."""
         while path:
             parent_id, idx = path[-1]
             parent = self._read_node(parent_id)
@@ -282,8 +273,6 @@ class BPlusTree(Index):
             self._flush_meta()
 
     def _borrow(self, parent: NodePage, idx: int, node_id: int, node: NodePage) -> bool:
-        """Takes one entry from a sibling that can spare it, left one first.
-        False if neither side works, and then the caller merges."""
         for side in (-1, +1):
             sib_idx = idx + side
             if not 0 <= sib_idx <= parent.count:
@@ -325,8 +314,6 @@ class BPlusTree(Index):
         return False
 
     def _merge(self, parent: NodePage, idx: int) -> int | None:
-        """Merges child idx with the one to its right, or into its left
-        sibling when it is the last child."""
         if idx == parent.count:
             idx -= 1
         if idx < 0:
@@ -368,10 +355,6 @@ class BPlusTree(Index):
 
     @staticmethod
     def _pack(sizes: list[int], capacity: int, gap: int = 0) -> list[tuple[int, int]]:
-        """Cuts consecutive items into runs that each fit in `capacity`.
-        `gap` items are dropped at every boundary: 0 for leaves, 1 for inner
-        levels, where the separator rises instead. The last two runs are
-        evened out when the last comes up short."""
         runs: list[tuple[int, int]] = []
         start = used = i = 0
         while i < len(sizes):
@@ -400,8 +383,7 @@ class BPlusTree(Index):
         return runs
 
     def bulk_load(self, pairs) -> None:
-        """Rebuilds the tree from (key, payload) pairs already in ascending
-        order, bottom up in one pass. Leaves fill to 100%."""
+        """Rebuilds the tree from (key, payload) pairs already in ascending order."""
         self._seg.truncate(1)
         codec = self._leaf_codec
 
@@ -456,8 +438,7 @@ class BPlusTree(Index):
         self._flush_meta()
 
     def floor(self, key: Any):
-        """Payload of the greatest entry whose key is <= `key`, or None.
-        Assumes unique keys."""
+        """Payload of the greatest entry whose key is <= `key`, or None."""
         k = encode(key, self._key_type)
         node = self._read_node(self._root)
         while not node.is_leaf:
@@ -474,9 +455,6 @@ class BPlusTree(Index):
     # ------------------------------------------------------------------ reads
 
     def _present(self, leaf: NodePage, i: int, k: bytes) -> bool:
-        """Whether `k` is already in the index, given the leaf the descent
-        reached and `i = lower_bound(leaf, k)`. A `k` that is a separator sits
-        at the front of the next leaf, one past where the descent stops."""
         if i < leaf.count:
             return leaf.keys[i] == k
         while leaf.next_page != NIL:
@@ -531,7 +509,6 @@ class BPlusTree(Index):
     # -------------------------------------------------------------- pages
 
     def _alloc_page(self) -> int:
-        """Reuses a freed page before growing the file."""
         reused = self._seg.free_head != NIL
         page_id = self._seg.alloc()
         if reused:

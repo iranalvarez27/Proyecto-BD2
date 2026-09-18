@@ -42,8 +42,7 @@ class ClusteredBPlusTree:
         return None
 
     def range_search(self, low, high) -> list[Record]:
-        """Inclusive [low, high]. MAIN pages are walked by consecutive page
-        id, since logical and physical order match here."""
+        """Inclusive [low, high]."""
         if low > high:
             return []
         start = self._tree.floor(low)
@@ -75,17 +74,10 @@ class ClusteredBPlusTree:
             raise DuplicateKey(key)
         rid = self._seq.insert(record)
         self._track(key, rid)
-        if self.needs_reorganization():
-            self.reorganize()
         return rid
 
     def delete(self, key):
-        borrado = self._seq.delete(key)
-        if borrado is None:
-            return None
-        if self.needs_reorganization():
-            self.reorganize()
-        return borrado
+        return self._seq.delete(key)
 
     def reorganize(self) -> None:
         self._seq.reorganize()
@@ -99,9 +91,7 @@ class ClusteredBPlusTree:
     # --------------------------------------------------------------- policy
 
     def aux_limit(self) -> int:
-        """AUX pages tolerated: what the binary search over MAIN already costs.
-        Both halves of a search are page reads, so the bound is in pages: a
-        half-empty AUX page is never a reason to rewrite the whole file."""
+        """AUX pages tolerated, bounded by what a binary search over MAIN costs."""
         return max(1, int(math.log2(max(self._seq.page_count(MAIN_FILE), 2))))
 
     def aux_pages(self) -> int:
@@ -119,9 +109,6 @@ class ClusteredBPlusTree:
         return entry.record.values[self._key_index]
 
     def _track(self, key, rid) -> None:
-        """One tree entry per MAIN page. A row in AUX is reached by scanning
-        it, and MAIN only grows at the end, so the tree changes at most once
-        per new page: floor() already resolves everything else."""
         if rid.page_id < 0:   # AUX
             return
         if self._tree.floor(key) != rid.page_id:
@@ -147,7 +134,6 @@ class ClusteredBPlusTree:
                 yield entry
 
     def _page_minimums(self):
-        """(minimum, page_id) for every MAIN page that still has a live row."""
         for page_id in range(self._seq.page_count(MAIN_FILE)):
             keys = [self._key_of(e) for e in self._live_in_page(page_id)]
             if keys:

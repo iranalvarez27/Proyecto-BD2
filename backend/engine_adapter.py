@@ -203,7 +203,7 @@ class EngineAdapter:
                 stats["page_count"] = pages_main + pages_aux
                 stats["record_count"] = sum(1 for _ in seq.scan())
                 stats["wasted_ratio"] = round(seq.wasted_ratio(), 3)
-                stats["needs_reorganization"] = seq.needs_reorganization(threshold=0.30, max_aux_records=5)
+                stats["needs_reorganization"] = self.conexion.necesita_reorganizar(table_name)
 
             result.append({
                 "name": info.nombre,
@@ -225,17 +225,13 @@ class EngineAdapter:
 
         seq: SequentialFile = info.storage
         start_time = time.time()
-        seq.reorganize()
-
-        # Rebuild clustered B+ tree if present
-        if table_name in self.clustered_trees:
-            self.clustered_trees[table_name]._rebuild()
+        self.conexion.reorganizar_tabla(table_name)
 
         duration_ms = (time.time() - start_time) * 1000
 
         return {
             "success": True,
-            "message": f"Tabla '{table_name}' reorganizada y su árbol B+ agrupado reconstruido con éxito.",
+            "message": f"Tabla '{table_name}' reorganizada y sus índices reconstruidos con éxito.",
             "duration_ms": round(duration_ms, 2),
             "new_wasted_ratio": round(seq.wasted_ratio(), 3),
         }

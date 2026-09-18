@@ -65,8 +65,7 @@ PAGE_ID_CODEC = PageIdCodec()
 
 
 class NodePage:
-    """A B+ tree node: (key, payload) entries in key order, keys as opaque
-    order-preserving bytes."""
+    """A B+ tree node: (key, payload) entries in key order, keys as opaque bytes."""
 
     def __init__(self, is_leaf: bool, leaf_codec=RID_CODEC):
         self.is_leaf = is_leaf
@@ -101,8 +100,7 @@ class NodePage:
         return self.byte_size() - HEADER_SIZE < HALF
 
     def min_fill_ok(self) -> bool:
-        """QUARTER, not HALF: a variable-width split cannot always cut near
-        the middle."""
+        """QUARTER, not HALF: a variable-width split cannot always cut near the middle."""
         return self.byte_size() - HEADER_SIZE >= QUARTER
 
     def can_lend(self, i: int) -> bool:
