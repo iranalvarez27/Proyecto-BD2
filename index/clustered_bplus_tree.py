@@ -69,7 +69,7 @@ class ClusteredBPlusTree:
 
     # ---------------------------------------------------------------- writes
 
-    def insert(self, record: Record) -> None:
+    def insert(self, record: Record):
         key = record.values[self._key_index]
         if self.search(key) is not None:
             raise DuplicateKey(key)
@@ -77,13 +77,15 @@ class ClusteredBPlusTree:
         self._track(key, rid)
         if self.needs_reorganization():
             self.reorganize()
+        return rid
 
-    def delete(self, key) -> bool:
-        if not self._seq.delete(key):
-            return False
+    def delete(self, key):
+        borrado = self._seq.delete(key)
+        if borrado is None:
+            return None
         if self.needs_reorganization():
             self.reorganize()
-        return True
+        return borrado
 
     def reorganize(self) -> None:
         self._seq.reorganize()

@@ -8,7 +8,6 @@ MAX_REPARTITION = 4
 
 
 def external_sort(rows, key, schema, buffer_pages, tmp_dir, reverse=False, stats=None):
-    """Runs of buffer_pages pages, merged (buffer_pages - 1) at a time."""
     if stats is None:
         stats = {}
     columns = [c.name for c in schema.columns]
@@ -48,7 +47,6 @@ def external_sort(rows, key, schema, buffer_pages, tmp_dir, reverse=False, stats
 
 
 def external_group_by(rows, key, agg, schema, buffer_pages, tmp_dir, stats=None, _depth=0):
-    """Hash into (buffer_pages - 1) partitions, then fold each with agg(acc, row)."""
     if stats is None:
         stats = {}
     if _depth == 0:
@@ -85,7 +83,73 @@ def external_group_by(rows, key, agg, schema, buffer_pages, tmp_dir, stats=None,
     return result
 
 
-# ------------------------------------------------------------------ runs
+def external_hash_join(left, key_left, right, key_right, schema_left, schema_right,
+                        buffer_pages, tmp_dir, combine, stats=None, _depth=0):
+    if stats is None:
+        stats = {}
+    if _depth == 0:
+        stats.update(partitions=0, repartitions=0)
+    columns_left = [c.name for c in schema_left.columns]
+    columns_right = [c.name for c in schema_right.columns]
+    budget = buffer_pages * PAGE_SIZE
+    n_parts = max(2, buffer_pages - 1)
+    stats["partitions"] += n_parts
+
+    left_paths = [os.path.join(tmp_dir, f"joinL_{_depth}_{i}.run") for i in range(n_parts)]
+    right_paths = [os.path.join(tmp_dir, f"joinR_{_depth}_{i}.run") for i in range(n_parts)]
+    left_sizes = _partition_to_disk(left, key_left, columns_left, schema_left, left_paths, _depth, n_parts)
+    right_sizes = _partition_to_disk(right, key_right, columns_right, schema_right, right_paths, _depth, n_parts)
+
+    for i in range(n_parts):
+        if left_sizes[i] == 0 or right_sizes[i] == 0:
+            os.remove(left_paths[i])
+            os.remove(right_paths[i])
+            continue
+
+        menor = min(left_sizes[i], right_sizes[i])
+        if menor <= budget or _depth >= MAX_REPARTITION:
+            yield from _join_partition_in_memory(left_paths[i], left_sizes[i], key_left, schema_left,
+                right_paths[i], right_sizes[i], key_right, schema_right,combine,)
+        else:
+            stats["repartitions"] += 1
+            yield from external_hash_join(_read_run(left_paths[i], schema_left), key_left, _read_run(right_paths[i], schema_right), key_right,
+                schema_left, schema_right, buffer_pages, tmp_dir, combine, stats, _depth + 1,)
+
+
+def _partition_to_disk(rows, key, columns, schema, paths, depth, n_parts):
+    sizes = [0] * n_parts
+    files = [open(p, "wb") for p in paths]
+    try:
+        for row in rows:
+            packed = Record([row[c] for c in columns]).pack(schema)
+            i = hash((depth, key(row))) % n_parts
+            files[i].write(packed)
+            sizes[i] += len(packed)
+    finally:
+        for f in files:
+            f.close()
+    return sizes
+
+
+def _join_partition_in_memory(left_path, left_size, key_left, schema_left, right_path, right_size, key_right, schema_right, combine):
+    if left_size <= right_size:
+        build_path, build_key, build_schema = left_path, key_left, schema_left
+        probe_path, probe_key, probe_schema = right_path, key_right, schema_right
+        build_is_left = True
+    else:
+        build_path, build_key, build_schema = right_path, key_right, schema_right
+        probe_path, probe_key, probe_schema = left_path, key_left, schema_left
+        build_is_left = False
+
+    tabla_hash = {}
+    for row in _read_run(build_path, build_schema):
+        tabla_hash.setdefault(build_key(row), []).append(row)
+
+    for row in _read_run(probe_path, probe_schema):
+        for match in tabla_hash.get(probe_key(row), ()):
+            yield combine(match, row) if build_is_left else combine(row, match)
+
+# runs
 
 def _write_run(rows, columns, schema, tmp_dir, name):
     path = os.path.join(tmp_dir, f"{name}.run")
