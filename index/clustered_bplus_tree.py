@@ -91,6 +91,11 @@ class ClusteredBPlusTree:
         self._seq.reorganize()
         self._rebuild()
 
+    def reload(self) -> None:
+        """After a ROLLBACK the tree's metapage was restored behind its back
+        (the SequentialFile reloads itself, it is the table's storage)."""
+        self._tree.reload()
+
     # --------------------------------------------------------------- policy
 
     def aux_limit(self) -> int:

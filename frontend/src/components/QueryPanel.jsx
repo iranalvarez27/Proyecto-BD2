@@ -21,6 +21,16 @@ const SQL_TEMPLATES = [
   { label: 'DELETE en Heap + Limpieza de Índices', sql: 'DELETE FROM estudiantes WHERE id = 12;' },
   { label: 'Transacción: BEGIN', sql: 'BEGIN TRANSACTION;' },
   { label: 'Transacción: COMMIT', sql: 'COMMIT;' },
+  { label: 'Transacción: ROLLBACK', sql: 'ROLLBACK;' },
+  {
+    label: 'Transacción completa (BEGIN → INSERT → ROLLBACK)',
+    sql: [
+      'BEGIN TRANSACTION;',
+      "INSERT INTO estudiantes VALUES (500, 'Prueba Rollback', 'Demo', 10.0);",
+      'SELECT * FROM estudiantes WHERE id = 500;',
+      'ROLLBACK;',
+    ].join('\n'),
+  },
 ];
 
 

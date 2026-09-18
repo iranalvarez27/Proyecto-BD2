@@ -1,6 +1,7 @@
 import os
 
 from common.page import PAGE_SIZE
+from transaction import manager as tx_manager
 
 
 class FileManager:
@@ -30,6 +31,10 @@ class FileManager:
         self._check_id(path, page_id)
         self._check_size(data)
         fp = self._handle(path)
+        if tx_manager.TX_ACTIVE():
+            # before-image for ROLLBACK
+            fp.seek(page_id * PAGE_SIZE)
+            tx_manager.TX_HOOK("WRITE", path, page_id, fp.read(PAGE_SIZE))
         fp.seek(page_id * PAGE_SIZE)
         fp.write(data)
         # out of the handle buffer: the page must survive the process dying
@@ -40,6 +45,7 @@ class FileManager:
         self._check_size(data)
         fp = self._handle(path)
         page_id = self._pages[path]
+        tx_manager.TX_HOOK("APPEND", path, page_id, None)
         fp.seek(page_id * PAGE_SIZE)
         fp.write(data)
         fp.flush()
@@ -50,12 +56,16 @@ class FileManager:
     def truncate(self, path: str, n_pages: int) -> None:
         fp = self._handle(path)
         fp.flush()
+        if n_pages < self._pages[path]:
+            self._snapshot(path)
         fp.truncate(n_pages * PAGE_SIZE)
         self._pages[path] = n_pages
 
     def replace(self, src: str, dst: str) -> None:
         self.close(src)
         self.close(dst)
+        if os.path.exists(dst):
+            self._snapshot(dst)
         os.replace(src, dst)
 
     def close(self, path: str) -> None:
@@ -81,6 +91,13 @@ class FileManager:
             self._files[path] = fp
             self._pages[path] = os.path.getsize(path) // PAGE_SIZE
         return fp
+
+    @staticmethod
+    def _snapshot(path: str) -> None:
+        """Whole-file before-image, for operations that drop pages wholesale."""
+        if tx_manager.TX_ACTIVE():
+            with open(path, "rb") as fp:
+                tx_manager.TX_HOOK("SNAPSHOT", path, None, fp.read())
 
     def _check_id(self, path: str, page_id: int) -> None:
         if not 0 <= page_id < self.page_count(path):

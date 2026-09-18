@@ -1,10 +1,14 @@
 import tempfile
+import threading
 
 from query.lexer import Lexer, LexerError
 from query.parser import Parser, ParserError
 from query.semantic import SemanticAnalyzer, SemanticError
 from query.catalog import Catalog, TableInfo, STORAGE_HEAP, STORAGE_SEQUENTIAL
-from query.ast import SelectNode, InsertNode, DeleteNode, Condition, BinaryCondition
+from query.ast import (
+    SelectNode, InsertNode, DeleteNode, Condition, BinaryCondition,
+    BeginNode, CommitNode, RollbackNode,
+)
 from query.tokens import TokenType
 from common.record import Record
 from common.types import Column, DataType, Schema
@@ -12,15 +16,19 @@ from engine.external import external_group_by, external_hash_join, external_sort
 from index.bplus_tree import DuplicateKey
 from index.hash_utils import UnhashableKeyType
 from index.key_codec import INT64_MAX, INT64_MIN, KeyTooLong, KeyTypeMismatch, UnorderableKey
+from transaction.manager import TransactionManager, TransactionError
+from transaction.locks import DeadlockError, LockTimeoutError
 
 BUFFER_PAGES = 64
+DEFAULT_SESSION = "__autocommit__"
 
 class ExecutionError(Exception):
     pass
 
 ERRORES_EJECUCION = (ExecutionError, DuplicateKey, UnhashableKeyType, KeyTooLong, KeyTypeMismatch, UnorderableKey,)
 class QueryResult:
-    def __init__(self, filas=None, resumen=None, plan=None, error=None, tipo_error=None):
+    def __init__(self, filas=None, resumen=None, plan=None, error=None, tipo_error=None,
+                 transaccion_activa=False, xact_id=None):
         self.filas = filas
         self.resumen = resumen
         if plan is None:
@@ -29,6 +37,8 @@ class QueryResult:
             self.plan = plan
         self.error = error
         self.tipo_error = tipo_error
+        self.transaccion_activa = transaccion_activa
+        self.xact_id = xact_id
 
     @property
     def ok(self):
@@ -37,14 +47,30 @@ class QueryResult:
         return False
 
 class Conexion:
-    def __init__(self, catalog: Catalog, buffer_pages: int = BUFFER_PAGES, tmp_dir: str | None = None):
+    def __init__(self, catalog: Catalog, txn_manager: TransactionManager | None = None,
+                 buffer_pages: int = BUFFER_PAGES, tmp_dir: str | None = None):
         self.catalog = catalog
         self.semantic = SemanticAnalyzer(catalog)
-        self.plan = []
         self.buffer_pages = buffer_pages
         self.tmp_dir = tmp_dir
+        self.txn_manager = txn_manager or TransactionManager()
+        self.lock_manager = self.txn_manager.lock_manager
+        # Un solo Conexion se comparte entre requests/hilos concurrentes; el plan
+        # de ejecucion se guarda por hilo para que dos ejecuciones simultaneas no
+        # se mezclen en la misma lista.
+        self._local = threading.local()
 
-    def execute(self, sql: str) -> QueryResult:
+    @property
+    def plan(self) -> list:
+        if not hasattr(self._local, "plan"):
+            self._local.plan = []
+        return self._local.plan
+
+    @plan.setter
+    def plan(self, value: list) -> None:
+        self._local.plan = value
+
+    def execute(self, sql: str, session_id: str = DEFAULT_SESSION) -> QueryResult:
         self.plan = []
 
         try:
@@ -62,19 +88,119 @@ class Conexion:
         except SemanticError as e:
             return QueryResult(error=str(e), tipo_error="semantico")
 
-        try:
-            if isinstance(nodo, SelectNode):
-                filas = self.ejecutar_select(nodo)
-                return QueryResult(filas=filas, plan=self.plan)
-            if isinstance(nodo, InsertNode):
-                resumen = self.ejecutar_insert(nodo)
-                return QueryResult(resumen=resumen, plan=self.plan)
-            if isinstance(nodo, DeleteNode):
-                resumen = self.ejecutar_delete(nodo)
-                return QueryResult(resumen=resumen, plan=self.plan)
+        if isinstance(nodo, BeginNode):
+            return self._ejecutar_begin(session_id)
+        if isinstance(nodo, CommitNode):
+            return self._ejecutar_commit(session_id)
+        if isinstance(nodo, RollbackNode):
+            return self._ejecutar_rollback(session_id)
+
+        if not isinstance(nodo, (SelectNode, InsertNode, DeleteNode)):
             return QueryResult(error=f"nodo no ejecutable: {type(nodo).__name__}", tipo_error="ejecucion")
+
+        modo = "S" if isinstance(nodo, SelectNode) else "X"
+        # los locks son por tabla: un JOIN lee ambas
+        recursos = [nodo.tabla]
+        if isinstance(nodo, SelectNode) and nodo.join is not None and nodo.join.tabla != nodo.tabla:
+            recursos.append(nodo.join.tabla)
+        txn_estaba_activa = self.txn_manager.is_active(session_id)
+
+        try:
+            for recurso in recursos:
+                self.lock_manager.acquire(session_id, recurso, modo)
+        except (DeadlockError, LockTimeoutError) as e:
+            self.txn_manager.abortar_por_deadlock_o_timeout(session_id)
+            self._resync_tras_rollback()
+            if not txn_estaba_activa:
+                # autocommit con varios recursos: soltar los que ya se habian concedido
+                for recurso in recursos:
+                    self.lock_manager.release_resource(session_id, recurso)
+            tipo = "deadlock" if isinstance(e, DeadlockError) else "timeout"
+            return QueryResult(error=str(e), tipo_error=tipo)
+
+        for recurso in recursos:
+            self.txn_manager.registrar_acceso(session_id, recurso, modo)
+
+        try:
+            with self.txn_manager.bind_current(session_id):
+                if isinstance(nodo, SelectNode):
+                    filas = self.ejecutar_select(nodo)
+                    resultado = QueryResult(filas=filas, plan=self.plan)
+                elif isinstance(nodo, InsertNode):
+                    resumen = self.ejecutar_insert(nodo)
+                    resultado = QueryResult(resumen=resumen, plan=self.plan)
+                else:
+                    resumen = self.ejecutar_delete(nodo)
+                    resultado = QueryResult(resumen=resumen, plan=self.plan)
         except ERRORES_EJECUCION as e:
-            return QueryResult(error=str(e), tipo_error="ejecucion", plan=self.plan)
+            resultado = QueryResult(error=str(e), tipo_error="ejecucion", plan=self.plan)
+        finally:
+            if not txn_estaba_activa:
+                # sentencia autocommit: el lock era transitorio, solo por la duracion de esta sentencia
+                for recurso in recursos:
+                    self.lock_manager.release_resource(session_id, recurso)
+
+        txn_activa = self.txn_manager.is_active(session_id)
+        txn = self.txn_manager.get_active(session_id)
+        resultado.transaccion_activa = txn_activa
+        resultado.xact_id = txn.xact_id if txn is not None else None
+        return resultado
+
+    # ------------------------------------------------------- control transaccional
+
+    def _ejecutar_begin(self, session_id: str) -> QueryResult:
+        try:
+            txn = self.txn_manager.begin(session_id)
+        except TransactionError as e:
+            return QueryResult(error=str(e), tipo_error="transaccion")
+        resultado = QueryResult(
+            resumen={"operacion": "BEGIN", "mensaje": f"Transaccion {txn.xact_id} iniciada"},
+            plan=[f"BEGIN TRANSACTION ({txn.xact_id})"],
+        )
+        resultado.transaccion_activa = True
+        resultado.xact_id = txn.xact_id
+        return resultado
+
+    def _ejecutar_commit(self, session_id: str) -> QueryResult:
+        try:
+            txn = self.txn_manager.commit(session_id)
+        except TransactionError as e:
+            return QueryResult(error=str(e), tipo_error="transaccion")
+        resultado = QueryResult(
+            resumen={"operacion": "COMMIT", "mensaje": f"Transaccion {txn.xact_id} confirmada"},
+            plan=[f"END TRANSACTION ({txn.xact_id})"],
+        )
+        resultado.transaccion_activa = False
+        resultado.xact_id = txn.xact_id
+        return resultado
+
+    def _ejecutar_rollback(self, session_id: str) -> QueryResult:
+        try:
+            txn = self.txn_manager.rollback(session_id)
+        except TransactionError as e:
+            return QueryResult(error=str(e), tipo_error="transaccion")
+        self._resync_tras_rollback()
+        resultado = QueryResult(
+            resumen={"operacion": "ROLLBACK", "mensaje": f"Transaccion {txn.xact_id} revertida"},
+            plan=[f"ROLLBACK ({txn.xact_id})"],
+        )
+        resultado.transaccion_activa = False
+        resultado.xact_id = txn.xact_id
+        return resultado
+
+    def _resync_tras_rollback(self) -> None:
+        """El undo restaura bytes de archivo directamente (bypaseando los
+        metodos normales de storages e indices), asi que hay que forzar a cada
+        uno a recargar su estado en memoria desde disco: cabecera/cola y
+        contadores del secuencial, cache de espacio libre del heap, y
+        root/height del B+ o directorio del hash. El storage va primero."""
+        for tabla in self.catalog.listar_tablas():
+            info = self.catalog.get_table(tabla)
+            objetos = [info.storage] + [indice for indice, _tipo in info.indices.values()]
+            for objeto in objetos:
+                reload_fn = getattr(objeto, "reload", None)
+                if reload_fn is not None:
+                    reload_fn()
 
     def leer_todo(self, info: TableInfo):
         nombres_col = [c.name for c in info.schema.columns]

@@ -1,5 +1,8 @@
 from query.tokens import Token, TokenType
-from query.ast import SelectNode, InsertNode, DeleteNode, Condition, BinaryCondition, OrderBy, JoinClause
+from query.ast import (
+    SelectNode, InsertNode, DeleteNode, Condition, BinaryCondition, OrderBy, JoinClause,
+    BeginNode, CommitNode, RollbackNode,
+)
 
 class ParserError(Exception):
     pass
@@ -38,6 +41,12 @@ class Parser:
             nodo = self.parse_insert()
         elif self.coincide(TokenType.DELETE):
             nodo = self.parse_delete()
+        elif self.coincide(TokenType.BEGIN) or self.coincide(TokenType.START):
+            nodo = self.parse_begin()
+        elif self.coincide(TokenType.COMMIT) or self.coincide(TokenType.END):
+            nodo = self.parse_commit()
+        elif self.coincide(TokenType.ROLLBACK) or self.coincide(TokenType.ABORT):
+            nodo = self.parse_rollback()
         else:
             raise ParserError(f"error en la consulta, empieza con {self.actual().value}")
 
@@ -45,6 +54,25 @@ class Parser:
             self.avanzar()
         self.esperar(TokenType.EOF)
         return nodo
+
+    def parse_begin(self):
+        # BEGIN [TRANSACTION] | START TRANSACTION
+        self.avanzar()  # BEGIN o START
+        if self.coincide(TokenType.TRANSACTION):
+            self.avanzar()
+        return BeginNode()
+
+    def parse_commit(self):
+        # COMMIT [TRANSACTION] | END TRANSACTION
+        self.avanzar()  # COMMIT o END
+        if self.coincide(TokenType.TRANSACTION):
+            self.avanzar()
+        return CommitNode()
+
+    def parse_rollback(self):
+        # ROLLBACK | ABORT
+        self.avanzar()
+        return RollbackNode()
 
     def parse_select(self):
         self.esperar(TokenType.SELECT)
