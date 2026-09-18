@@ -280,8 +280,15 @@ class EngineAdapter:
                 "transaction": transaction_info,
             }
 
+        # Calculate actual row count to estimate rows accurately in execution plan
+        actual_count = None
+        if res.filas is not None:
+            actual_count = len(res.filas)
+        elif res.resumen is not None:
+            actual_count = res.resumen.get("filas_afectadas", 1)
+
         # Format plan steps into visual hierarchy for PlanPanel
-        plan_tree = self._build_plan_tree(res.plan, sql_clean)
+        plan_tree = self._build_plan_tree(res.plan, sql_clean, actual_rows=actual_count)
 
         # Handle SELECT result (list of dicts)
         if res.filas is not None:
@@ -352,14 +359,16 @@ class EngineAdapter:
             "transaction": transaction_info,
         }
 
-    def _build_plan_tree(self, plan_steps: List[str], sql: str) -> Dict[str, Any]:
-        """Convert linear query plan steps from Conexion into a visual hierarchical tree."""
+    def _build_plan_tree(self, plan_steps: List[str], sql: str, actual_rows: Optional[int] = None) -> Dict[str, Any]:
+        """Convert linear query plan steps from Conexion into a visual hierarchical tree with realistic row counts."""
+        default_rows = actual_rows if actual_rows is not None else 1
         if not plan_steps:
             return {
                 "node_type": "QueryPlan",
                 "query": sql,
                 "cost": 1.0,
-                "rows_estimated": 1,
+                "estimated_time_ms": 1.0,
+                "rows_estimated": default_rows,
                 "children": [],
             }
 
@@ -371,6 +380,7 @@ class EngineAdapter:
                     "node_type": "TransactionControl",
                     "method": step,
                     "cost": 0.0,
+                    "estimated_time_ms": 0.0,
                     "rows_estimated": 0,
                     "children": [],
                 })
@@ -380,7 +390,7 @@ class EngineAdapter:
                     "node_type": "Sort (ORDER BY)",
                     "method": step,
                     "cost": 1.80,
-                    "rows_estimated": 10,
+                    "rows_estimated": actual_rows if actual_rows is not None else 10,
                     "children": [],
                 })
             elif "group by" in step_lower:
@@ -388,23 +398,27 @@ class EngineAdapter:
                     "node_type": "Aggregate (GROUP BY)",
                     "method": step,
                     "cost": 1.50,
-                    "rows_estimated": 5,
+                    "rows_estimated": actual_rows if actual_rows is not None else 5,
                     "children": [],
                 })
             elif "agrupado" in step_lower and "no agrupado" not in step_lower:
+                is_equality = "=" in step or "busqueda por indice bplus agrupado en" in step_lower
+                est_rows = 1 if is_equality else (actual_rows if actual_rows is not None else 5)
                 nodes.append({
                     "node_type": "IndexScan (B+ Tree Agrupado)",
                     "method": step,
                     "cost": 1.10,
-                    "rows_estimated": 5,
+                    "rows_estimated": est_rows,
                     "children": [],
                 })
             elif "no agrupado" in step_lower:
+                is_equality = "=" in step or "busqueda por indice bplus no agrupado en" in step_lower
+                est_rows = 1 if is_equality else (actual_rows if actual_rows is not None else 5)
                 nodes.append({
                     "node_type": "IndexScan (B+ Tree No Agrupado)",
                     "method": step,
                     "cost": 1.25,
-                    "rows_estimated": 5,
+                    "rows_estimated": est_rows,
                     "children": [],
                 })
             elif "bplus" in step_lower:
@@ -412,7 +426,7 @@ class EngineAdapter:
                     "node_type": "IndexScan (B+ Tree)",
                     "method": step,
                     "cost": 1.20,
-                    "rows_estimated": 5,
+                    "rows_estimated": actual_rows if actual_rows is not None else 5,
                     "children": [],
                 })
             elif "hash" in step_lower:
@@ -420,7 +434,7 @@ class EngineAdapter:
                     "node_type": "IndexScan (Extendible Hash)",
                     "method": step,
                     "cost": 1.05,
-                    "rows_estimated": 5,
+                    "rows_estimated": actual_rows if actual_rows is not None else 5,
                     "children": [],
                 })
             elif "binaria" in step_lower:
@@ -436,7 +450,7 @@ class EngineAdapter:
                     "node_type": "SequentialScan (Ordenado por PK)",
                     "method": step,
                     "cost": 1.10,
-                    "rows_estimated": 10,
+                    "rows_estimated": actual_rows if actual_rows is not None else 10,
                     "children": [],
                 })
             elif "escaneo" in step_lower or "heap" in step_lower:
@@ -444,7 +458,7 @@ class EngineAdapter:
                     "node_type": "FullTableScan",
                     "method": step,
                     "cost": 2.50,
-                    "rows_estimated": 10,
+                    "rows_estimated": actual_rows if actual_rows is not None else 10,
                     "children": [],
                 })
             elif "insert" in step_lower:
@@ -452,7 +466,7 @@ class EngineAdapter:
                     "node_type": "InsertTuple",
                     "method": step,
                     "cost": 1.0,
-                    "rows_estimated": 1,
+                    "rows_estimated": actual_rows if actual_rows is not None else 1,
                     "children": [],
                 })
             elif "delete" in step_lower:
@@ -460,7 +474,7 @@ class EngineAdapter:
                     "node_type": "DeleteTuple",
                     "method": step,
                     "cost": 1.5,
-                    "rows_estimated": 1,
+                    "rows_estimated": actual_rows if actual_rows is not None else 1,
                     "children": [],
                 })
             else:
@@ -468,23 +482,27 @@ class EngineAdapter:
                     "node_type": "ExecutionStep",
                     "method": step,
                     "cost": 1.0,
-                    "rows_estimated": 5,
+                    "rows_estimated": actual_rows if actual_rows is not None else 5,
                     "children": [],
                 })
 
         # Nest nodes into an execution tree: leaf (bottom) to root (top)
         curr = nodes[0]
+        curr["estimated_time_ms"] = curr["cost"]
         for next_node in nodes[1:]:
             next_node["children"] = [curr]
             next_node["cost"] = round(next_node["cost"] + curr["cost"], 2)
+            next_node["estimated_time_ms"] = next_node["cost"]
             curr = next_node
 
         # Wrap with a Projection root node
+        total_time = round(curr["cost"] + 0.1, 2)
         root = {
             "node_type": "Projection",
             "relation": "Resultado",
-            "cost": round(curr["cost"] + 0.1, 2),
-            "rows_estimated": curr.get("rows_estimated", 5),
+            "cost": total_time,
+            "estimated_time_ms": total_time,
+            "rows_estimated": actual_rows if actual_rows is not None else curr.get("rows_estimated", 1),
             "children": [curr],
         }
         return root
@@ -499,11 +517,19 @@ class EngineAdapter:
                     "node_type": "ErrorInQuery",
                     "error": f"{res.tipo_error}: {res.error}",
                     "cost": 0.0,
+                    "estimated_time_ms": 0.0,
                     "rows_estimated": 0,
                     "children": [],
                 },
             }
+
+        actual_count = None
+        if res.filas is not None:
+            actual_count = len(res.filas)
+        elif res.resumen is not None:
+            actual_count = res.resumen.get("filas_afectadas", 1)
+
         return {
             "query": sql,
-            "root_node": self._build_plan_tree(res.plan, sql),
+            "root_node": self._build_plan_tree(res.plan, sql, actual_rows=actual_count),
         }

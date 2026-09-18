@@ -61,8 +61,8 @@ function PlanNode({ node, depth = 0, isLast = true }) {
 
             {/* Metrics */}
             <div className="flex items-center gap-2 text-[11px] font-mono text-slate-400">
-              {node.cost !== undefined && (
-                <span>Costo: <b className="text-slate-200">{node.cost}</b></span>
+              {(node.estimated_time_ms !== undefined || node.cost !== undefined) && (
+                <span>Tiempo Est.: <b className="text-slate-200">{node.estimated_time_ms ?? node.cost} ms</b></span>
               )}
               {node.rows_estimated !== undefined && (
                 <span>Filas est.: <b className="text-slate-200">{node.rows_estimated}</b></span>
@@ -151,9 +151,9 @@ export default function PlanPanel({ plan, query }) {
           <span className="text-slate-500">Consulta:</span>
           <code className="text-slate-300 truncate">{query || plan.query || 'N/A'}</code>
         </div>
-        {root.cost !== undefined && (
+        {(root.estimated_time_ms !== undefined || root.cost !== undefined) && (
           <div className="text-[11px] font-mono bg-slate-800/80 px-2 py-0.5 rounded text-slate-300 shrink-0">
-            Costo Total Est.: <b className="text-amber-400">{root.cost}</b>
+            Tiempo Total Est.: <b className="text-amber-400">{root.estimated_time_ms ?? root.cost} ms</b>
           </div>
         )}
       </div>

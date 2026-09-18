@@ -9,6 +9,7 @@ __pycache__/
 *.idx
 data/*
 !data/generate_data.py
+!data/benchmark_charts.py
 node_modules/
 .DS_Store
 storage/DOCUMENTACION.md
