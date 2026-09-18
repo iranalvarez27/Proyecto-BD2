@@ -1,3 +1,5 @@
+import tempfile
+
 from query.lexer import Lexer, LexerError
 from query.parser import Parser, ParserError
 from query.semantic import SemanticAnalyzer, SemanticError
@@ -5,10 +7,18 @@ from query.catalog import Catalog, TableInfo, STORAGE_HEAP, STORAGE_SEQUENTIAL
 from query.ast import SelectNode, InsertNode, DeleteNode, Condition, BinaryCondition
 from query.tokens import TokenType
 from common.record import Record
+from common.types import Column, DataType, Schema
+from engine.external import external_group_by, external_sort
+from index.bplus_tree import DuplicateKey
+from index.hash_utils import UnhashableKeyType
+from index.key_codec import INT64_MAX, INT64_MIN, KeyTooLong, KeyTypeMismatch, UnorderableKey
+
+BUFFER_PAGES = 64
 
 class ExecutionError(Exception):
     pass
 
+ERRORES_EJECUCION = (ExecutionError, DuplicateKey, UnhashableKeyType, KeyTooLong, KeyTypeMismatch, UnorderableKey,)
 class QueryResult:
     def __init__(self, filas=None, resumen=None, plan=None, error=None, tipo_error=None):
         self.filas = filas
@@ -27,10 +37,12 @@ class QueryResult:
         return False
 
 class Conexion:
-    def __init__(self, catalog: Catalog):
+    def __init__(self, catalog: Catalog, buffer_pages: int = BUFFER_PAGES, tmp_dir: str | None = None):
         self.catalog = catalog
         self.semantic = SemanticAnalyzer(catalog)
         self.plan = []
+        self.buffer_pages = buffer_pages
+        self.tmp_dir = tmp_dir
 
     def execute(self, sql: str) -> QueryResult:
         self.plan = []
@@ -61,7 +73,7 @@ class Conexion:
                 resumen = self.ejecutar_delete(nodo)
                 return QueryResult(resumen=resumen, plan=self.plan)
             return QueryResult(error=f"nodo no ejecutable: {type(nodo).__name__}", tipo_error="ejecucion")
-        except ExecutionError as e:
+        except ERRORES_EJECUCION as e:
             return QueryResult(error=str(e), tipo_error="ejecucion", plan=self.plan)
 
     def leer_todo(self, info: TableInfo):
@@ -106,19 +118,33 @@ class Conexion:
             raise ExecutionError(f"operador desconocido: {op}")
         return resultado
 
-    def _extraer_rango_columna(self, cond, col_name: str):
-        """Extrae (low, high) de una condición simple o compuesta con AND sobre col_name."""
+    def _limite_inferior(self, tipo: DataType):
+        if tipo in (DataType.SMALLINT, DataType.INT, DataType.BIGINT):
+            return INT64_MIN
+        if tipo in (DataType.FLOAT, DataType.DOUBLE):
+            return float("-inf")
+        return ""  
+
+    def _limite_superior(self, tipo: DataType):
+        if tipo in (DataType.SMALLINT, DataType.INT, DataType.BIGINT):
+            return INT64_MAX
+        if tipo in (DataType.FLOAT, DataType.DOUBLE):
+            return float("inf")
+        return "\U0010FFFF" * 64  # máximo code point válido de Unicode
+
+    def _extraer_rango_columna(self, cond, col_name: str, schema: Schema):
         if isinstance(cond, Condition):
             if cond.columna == col_name:
+                tipo = schema.columns[schema.column_index(col_name)].type
                 if cond.operador in (TokenType.GT, TokenType.GTE):
-                    return (cond.valor, 999999999)
+                    return (cond.valor, self._limite_superior(tipo))
                 if cond.operador in (TokenType.LT, TokenType.LTE):
-                    return (-999999999, cond.valor)
+                    return (self._limite_inferior(tipo), cond.valor)
             return None
 
         if isinstance(cond, BinaryCondition) and cond.operador == TokenType.AND:
-            r1 = self._extraer_rango_columna(cond.izquierda, col_name)
-            r2 = self._extraer_rango_columna(cond.derecha, col_name)
+            r1 = self._extraer_rango_columna(cond.izquierda, col_name, schema)
+            r2 = self._extraer_rango_columna(cond.derecha, col_name, schema)
             if r1 is not None and r2 is not None:
                 low = max(r1[0], r2[0])
                 high = min(r1[1], r2[1])
@@ -128,7 +154,6 @@ class Conexion:
                 return r1
             elif r2 is not None:
                 return r2
-
         return None
 
     def ejecutar_select(self, nodo: SelectNode) -> list:
@@ -172,7 +197,7 @@ class Conexion:
             for col in info.indices:
                 ind, t_ind = self.catalog.get_indice(nodo.tabla, col)
                 if t_ind in ("bplus", "clustered"):
-                    bnds = self._extraer_rango_columna(where, col)
+                    bnds = self._extraer_rango_columna(where, col, info.schema)
                     if bnds is not None:
                         rango_info = (col, ind, t_ind, bnds[0], bnds[1])
                         break
@@ -234,42 +259,44 @@ class Conexion:
 
             else:
                 self.plan.append(f"escaneo completo de '{info.nombre}' ({info.tipo_storage}) + filtro WHERE")
-                filas = [f for f in self.leer_todo(info) if self.cumple_where(where, f)]
-        if nodo.group_by is not None:
-            filas = self.agrupar(filas, nodo.group_by)
-            self.plan.append(f"GROUP BY {nodo.group_by}")
+                filas = [f for f in self.leer_todo(info) if self.cumple_where(where, f)]   
+        with tempfile.TemporaryDirectory(dir=self.tmp_dir) as tmp:
+            schema = info.schema
+            if nodo.group_by is not None:
+                filas, schema = self.agrupar(filas, schema, nodo.group_by, tmp)
+                orden_ya_resuelto = False
 
-        if nodo.order_by is not None and not orden_ya_resuelto:
-            filas = sorted(filas, key=lambda f: f[nodo.order_by.columna], reverse=nodo.order_by.descendente)
-            if nodo.order_by.descendente:
-                direccion = "DESC"
-            else:
-                direccion = "ASC"
-            self.plan.append(f"ORDER BY {nodo.order_by.columna} {direccion} (sort en memoria)")
+            if nodo.order_by is not None and not orden_ya_resuelto:
+                filas = self.ordenar(filas, schema, nodo.order_by, tmp)
 
-        if nodo.columnas == ["*"]:
-            return filas
-        salida = []
-        for fila in filas:
-            fila_reducida = {}
-            for col in nodo.columnas:
-                fila_reducida[col] = fila[col]
-            salida.append(fila_reducida)
-        return salida
+            if nodo.columnas == ["*"]:
+                return list(filas)
+            salida = []
+            for fila in filas:
+                fila_reducida = {}
+                for col in nodo.columnas:
+                    fila_reducida[col] = fila[col]
+                salida.append(fila_reducida)
+            return salida
 
-    def agrupar(self, filas: list, columna: str) -> list:
-        conteo = {}
-        orden_aparicion = []
-        for fila in filas:
-            clave = fila[columna]
-            if clave not in conteo:
-                conteo[clave] = 0
-                orden_aparicion.append(clave)
-            conteo[clave] += 1
-        salida = []
-        for clave in orden_aparicion:
-            salida.append({columna: clave, "count": conteo[clave]})
-        return salida
+    def agrupar(self, filas, schema: Schema, columna: str, tmp_dir: str):
+        stats = {}
+        conteo = external_group_by(filas, lambda f: f[columna], lambda acc, f: (acc or 0) + 1,
+                                   schema, self.buffer_pages, tmp_dir, stats)
+        self.plan.append(f"GROUP BY {columna} (external hash, B={self.buffer_pages}: "
+                         f"{stats['partitions']} particiones, {stats['repartitions']} reparticiones)")
+        col = schema.columns[schema.column_index(columna)]
+        schema_grupos = Schema(schema.table_name, [col, Column("count", DataType.BIGINT, 8)])
+        return [{columna: clave, "count": n} for clave, n in conteo.items()], schema_grupos
+
+    def ordenar(self, filas, schema: Schema, order_by, tmp_dir: str):
+        stats = {}
+        filas = external_sort(filas, lambda f: f[order_by.columna], schema, self.buffer_pages,
+                              tmp_dir, reverse=order_by.descendente, stats=stats)
+        direccion = "DESC" if order_by.descendente else "ASC"
+        self.plan.append(f"ORDER BY {order_by.columna} {direccion} (external sort, B={self.buffer_pages}: "
+                         f"{stats['runs']} runs, {stats['passes']} pasadas)")
+        return filas
 
     def ejecutar_insert(self, nodo: InsertNode) -> dict:
         info = self.catalog.get_table(nodo.tabla)
@@ -284,9 +311,14 @@ class Conexion:
             if pk_col is not None:
                 idx_pk = info.schema.column_index(pk_col.name)
                 nueva_pk = record.values[idx_pk]
-                for fila in self.leer_todo(info):
-                    if fila[pk_col.name] == nueva_pk:
+                if self.catalog.tiene_indice(nodo.tabla, pk_col.name):
+                    indice_pk, _ = self.catalog.get_indice(nodo.tabla, pk_col.name)
+                    if indice_pk.search(nueva_pk):
                         raise ExecutionError(f"no se pudo insertar: clave {nueva_pk} ya existe")
+                else:
+                    for fila in self.leer_todo(info):
+                        if fila[pk_col.name] == nueva_pk:
+                            raise ExecutionError(f"no se pudo insertar: clave {nueva_pk} ya existe")
         try:
             if info.tipo_storage == STORAGE_HEAP:
                 rid = info.storage.insert(record, info.schema)

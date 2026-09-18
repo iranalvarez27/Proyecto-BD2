@@ -100,6 +100,17 @@ class Record:
         return Record([by_name[c.name] for c in schema.columns])
 
     @staticmethod
+    def read_from(stream, schema: Schema) -> "Record | None":
+        header_format = _header_format(schema)
+        header = stream.read(struct.calcsize(header_format))
+        if not header:
+            return None
+        n_varchar = sum(1 for c in schema.columns if c.type == DataType.VARCHAR)
+        fields = struct.unpack(header_format, header)
+        body = stream.read(sum(fields[len(fields) - n_varchar:]))
+        return Record.unpack(header + body, schema)
+
+    @staticmethod
     def fixed_size(schema: Schema) -> int:
         """Size of the fixed section only. Equals the full record size
         only when the schema has no VARCHAR columns."""
