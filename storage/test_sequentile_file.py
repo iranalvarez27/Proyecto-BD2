@@ -35,7 +35,6 @@ def clean_files(*open_files):
         if os.path.exists(path):
             os.remove(path)
 
-
 schema = Schema(
     table_name="alumnos",
     columns=[
@@ -57,11 +56,6 @@ schema = Schema(
         )
     ]
 )
-
-
-# ==========================================================
-# PRUEBA 1: ELIMINAR HEAD
-# ==========================================================
 
 clean_files()
 
@@ -107,11 +101,6 @@ assert seq.search(10) is None
 assert seq.search(20) is not None
 assert seq.search(30) is not None
 
-
-# ==========================================================
-# PRUEBA 2: ELIMINAR ÚLTIMO E INEXISTENTE
-# ==========================================================
-
 clean_files(seq)
 
 seq = SequentialFile(
@@ -149,11 +138,6 @@ print(
 
 assert seq.search(30) is None
 assert seq.delete(999) is None
-
-
-# ==========================================================
-# PRUEBA 3: NUEVO MÍNIMO Y NUEVO MÁXIMO
-# ==========================================================
 
 clean_files(seq)
 
@@ -212,11 +196,6 @@ assert keys == [
     40
 ]
 
-
-# ==========================================================
-# PRUEBA 4: MULTIPÁGINA
-# ==========================================================
-
 print()
 print("==============================")
 print("PRUEBA MULTIPAGINA")
@@ -232,8 +211,6 @@ seq = SequentialFile(
     "id"
 )
 
-# Insertamos 200 registros en orden inverso.
-# Esto obliga a usar AUX y varias páginas.
 for i in range(200, 0, -1):
     seq.insert(
         Record([
@@ -284,11 +261,6 @@ assert keys == list(
 
 print("ORDEN CORRECTO")
 
-
-# ==========================================================
-# PRUEBA 5: REORGANIZACIÓN MULTIPÁGINA
-# ==========================================================
-
 print()
 print("REORGANIZANDO MULTIPAGINA...")
 
@@ -328,18 +300,11 @@ print(
     "REORGANIZACION MULTIPAGINA CORRECTA"
 )
 
-
-# ==========================================================
-# PRUEBA 6: PERSISTENCIA
-# ==========================================================
-
 print()
 print("==============================")
 print("PRUEBA DE PERSISTENCIA")
 print("==============================")
 
-# Cerramos el objeto,
-# pero NO borramos los archivos.
 seq.close()
 
 del seq
@@ -395,11 +360,6 @@ assert keys == list(
 print(
     "PERSISTENCIA CORRECTA"
 )
-
-
-# ==========================================================
-# PRUEBA 7: PK DUPLICADA
-# ==========================================================
 
 print()
 print("==============================")
@@ -475,11 +435,6 @@ assert keys == [
     30
 ]
 
-
-# ==========================================================
-# PRUEBA 8: REINSERTAR PK ELIMINADA
-# ==========================================================
-
 print()
 print("==============================")
 print("PRUEBA REINSERTAR PK ELIMINADA")
@@ -528,11 +483,6 @@ record_20 = seq.search(20)
 assert record_20 is not None
 assert record_20.values[1] == "Pedro Nuevo"
 
-
-# ==========================================================
-# PRUEBA 9: NUEVO SEARCH
-# ==========================================================
-
 print()
 print("==============================")
 print("PRUEBA NUEVO SEARCH")
@@ -548,9 +498,6 @@ seq = SequentialFile(
     "id"
 )
 
-# Inserciones crecientes.
-# Con la optimización actual,
-# entran directamente a MAIN.
 for i in range(1, 201):
     seq.insert(
         Record([
@@ -616,11 +563,6 @@ print(
     "BUSQUEDA EN MAIN CORRECTA"
 )
 
-
-# ==========================================================
-# PRUEBA 10: SEARCH EN AUX
-# ==========================================================
-
 print()
 print(
     "ELIMINANDO 150 Y REINSERTANDOLO EN AUX..."
@@ -668,11 +610,6 @@ print(
     "BUSQUEDA EN AUX CORRECTA"
 )
 
-
-# ==========================================================
-# PRUEBA 11: SEARCH DE REGISTRO ELIMINADO
-# ==========================================================
-
 print()
 print(
     "ELIMINANDO 100..."
@@ -703,11 +640,6 @@ print(
     "TODAS LAS PRUEBAS DE SEARCH PASARON"
 )
 
-
-# ==========================================================
-# PRUEBA 12: OPTIMIZACIÓN MAIN / AUX
-# ==========================================================
-
 print()
 print("==============================")
 print("PRUEBA OPTIMIZACION MAIN/AUX")
@@ -723,8 +655,6 @@ seq = SequentialFile(
     "id"
 )
 
-# Todos son crecientes.
-# Deben ir directamente a MAIN.
 seq.insert(
     Record([10, "A", 20])
 )
@@ -756,10 +686,6 @@ assert (
     == 0
 )
 
-
-# Eliminamos físicamente de forma lazy el 40.
-# La clave 40 sigue existiendo físicamente en MAIN.
-
 print()
 print(
     "ELIMINANDO 40..."
@@ -769,11 +695,6 @@ assert (
     seq.delete(40)
     is not None
 )
-
-
-# 35 es mayor que el último vivo (30),
-# pero menor que la última clave física MAIN (40).
-# Por eso debe ir a AUX.
 
 print(
     "INSERTANDO 35..."
@@ -793,10 +714,6 @@ assert (
     == 1
 )
 
-
-# 50 sí es mayor que la última clave física MAIN (40).
-# Puede agregarse directamente a MAIN.
-
 print(
     "INSERTANDO 50..."
 )
@@ -814,7 +731,6 @@ assert (
     seq.aux_record_count()
     == 1
 )
-
 
 print()
 print(
@@ -843,18 +759,12 @@ print(
     "OPTIMIZACION MAIN/AUX CORRECTA"
 )
 
-
-# ==========================================================
-# FIN
-# ==========================================================
-
 seq.close()
 
 print()
 print("==============================")
 print("TODAS LAS PRUEBAS PASARON")
 print("==============================")
-
 
 print("\n==============================")
 print("PRUEBA ARCHIVO LOGICAMENTE VACIO")

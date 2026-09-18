@@ -8,7 +8,6 @@ from common.types import Schema, RID
 from engine.buffer_pool import BufferPool
 from engine.segment import Segment
 
-
 class HeapFile:
     def __init__(self, pool: BufferPool, file_path: str):
         self._file_path = file_path

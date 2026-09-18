@@ -37,7 +37,6 @@ heap = HeapFile(
     "test_heap.dat"
 )
 
-# Insertamos registros
 rid1 = heap.insert(
     Record([1, "Ana", 20]),
     schema
@@ -57,7 +56,6 @@ print("RID 1:", rid1)
 print("RID 2:", rid2)
 print("RID 3:", rid3)
 
-# Eliminamos el segundo registro
 heap.delete(rid2)
 
 print()
@@ -68,9 +66,6 @@ print(
 
 assert heap.read(rid2, schema) is None
 
-
-# Insertamos otro registro.
-# El Heap debería intentar reutilizar el espacio disponible.
 rid4 = heap.insert(
     Record([4, "Luis", 23]),
     schema
@@ -89,7 +84,6 @@ print(
 
 assert heap.read(rid4, schema) is not None
 assert heap.read(rid4, schema).values[0] == 4
-
 
 print()
 print("SCAN:")
@@ -126,7 +120,6 @@ print("==============================")
 if os.path.exists("test_heap.dat"):
     os.remove("test_heap.dat")
 
-
 schema_variable = Schema(
     table_name="datos",
     columns=[
@@ -144,16 +137,10 @@ schema_variable = Schema(
     ]
 )
 
-
 heap = HeapFile(
     BufferPool(FileManager()),
     "test_heap.dat"
 )
-
-
-# --------------------------------------------------
-# 1. Llenamos varias páginas
-# --------------------------------------------------
 
 rids = []
 
@@ -168,16 +155,10 @@ for i in range(12):
 
     rids.append(rid)
 
-
 print(
     "Paginas iniciales:",
     heap.page_count()
 )
-
-
-# --------------------------------------------------
-# 2. Liberamos espacio en la página 0
-# --------------------------------------------------
 
 rid_eliminado = rids[0]
 
@@ -189,14 +170,6 @@ print(
     "RID eliminado:",
     rid_eliminado
 )
-
-
-# --------------------------------------------------
-# 3. Intentamos insertar algo MUY grande
-#
-# No cabe en el hueco de la página 0.
-# Esto es importante para probar _reusable.
-# --------------------------------------------------
 
 rid_grande = heap.insert(
     Record([
@@ -216,14 +189,6 @@ print(
     heap.page_count()
 )
 
-
-# --------------------------------------------------
-# 4. Ahora insertamos algo muy pequeño
-#
-# Este SÍ debería poder aprovechar
-# el hueco que quedó en página 0.
-# --------------------------------------------------
-
 rid_pequeno = heap.insert(
     Record([
         200,
@@ -242,7 +207,6 @@ print(
     heap.page_count()
 )
 
-
 print()
 print(
     "Pagina con hueco:",
@@ -254,32 +218,25 @@ print(
     rid_pequeno.page_id
 )
 
-
 assert heap.read(
     rid_pequeno,
     schema_variable
 ) is not None
 
-
-# Queremos que vuelva a aprovechar
-# la página que tenía espacio disponible.
 assert (
     rid_pequeno.page_id
     == rid_eliminado.page_id
 )
-
 
 print()
 print(
     "REUSABLE CON TAMAÑOS VARIABLES CORRECTO"
 )
 
-
 heap.close()
 
 if os.path.exists("test_heap.dat"):
     os.remove("test_heap.dat")
-
 
     print("\n==============================")
 print("PRUEBA REUTILIZACION DESPUES DE REABRIR")
@@ -287,7 +244,6 @@ print("==============================")
 
 if os.path.exists("test_heap.dat"):
     os.remove("test_heap.dat")
-
 
 schema_reopen = Schema(
     table_name="datos",
@@ -297,7 +253,6 @@ schema_reopen = Schema(
     ]
 )
 
-
 heap = HeapFile(
     BufferPool(FileManager()),
     "test_heap.dat"
@@ -305,7 +260,6 @@ heap = HeapFile(
 
 rids = []
 
-# 12 registros grandes -> varias páginas
 for i in range(12):
     rid = heap.insert(
         Record([
@@ -317,15 +271,11 @@ for i in range(12):
 
     rids.append(rid)
 
-
 print(
     "Paginas iniciales:",
     heap.page_count()
 )
 
-
-# Buscamos un registro de página 0
-# y otro de página 1.
 rid_page0 = next(
     rid
     for rid in rids
@@ -338,7 +288,6 @@ rid_page1 = next(
     if rid.page_id == 1
 )
 
-
 print(
     "Hueco pagina 0:",
     rid_page0
@@ -349,8 +298,6 @@ print(
     rid_page1
 )
 
-
-# Dejamos un hueco en dos páginas distintas.
 heap.delete(rid_page0)
 heap.delete(rid_page1)
 
@@ -358,22 +305,14 @@ paginas_antes = heap.page_count()
 
 heap.close()
 
-
-# --------------------------------------------------
-# REABRIMOS
-# --------------------------------------------------
-
 heap = HeapFile(
     BufferPool(FileManager()),
     "test_heap.dat"
 )
 
-
 print()
 print("ARCHIVO REABIERTO")
 
-
-# Debe descubrir y usar el hueco de página 0.
 rid_nuevo1 = heap.insert(
     Record([
         100,
@@ -387,9 +326,6 @@ print(
     rid_nuevo1
 )
 
-
-# También debería ser capaz de descubrir
-# el hueco que sigue existiendo en página 1.
 rid_nuevo2 = heap.insert(
     Record([
         200,
@@ -413,25 +349,21 @@ print(
     heap.page_count()
 )
 
-
 assert rid_nuevo1.page_id == 0
 
 assert rid_nuevo2.page_id == 1
 
 assert heap.page_count() == paginas_antes
 
-
 print()
 print(
     "REUTILIZACION DESPUES DE REABRIR CORRECTA"
 )
 
-
 heap.close()
 
 if os.path.exists("test_heap.dat"):
     os.remove("test_heap.dat")
-
 
 print("\n==============================")
 print("PRUEBA ESPACIO LIBRE SIN DELETED")
@@ -439,7 +371,6 @@ print("==============================")
 
 if os.path.exists("test_heap.dat"):
     os.remove("test_heap.dat")
-
 
 schema_free = Schema(
     table_name="datos",
@@ -449,18 +380,10 @@ schema_free = Schema(
     ]
 )
 
-
 heap = HeapFile(
     BufferPool(FileManager()),
     "test_heap.dat"
 )
-
-
-# --------------------------------------------------
-# Página 0
-# Dos registros de 1500 bytes.
-# Debería quedar algo de espacio libre.
-# --------------------------------------------------
 
 rid1 = heap.insert(
     Record([
@@ -478,13 +401,6 @@ rid2 = heap.insert(
     schema_free
 )
 
-
-# --------------------------------------------------
-# Página 1
-# Estos registros ya no entran en página 0.
-# Dos registros de 1900 casi llenan página 1.
-# --------------------------------------------------
-
 rid3 = heap.insert(
     Record([
         3,
@@ -500,7 +416,6 @@ rid4 = heap.insert(
     ]),
     schema_free
 )
-
 
 print(
     "RID 1:",
@@ -529,12 +444,6 @@ print(
 
 assert heap.page_count() == 2
 
-
-# --------------------------------------------------
-# Cerramos y reabrimos.
-# No existe ningún deleted slot.
-# --------------------------------------------------
-
 heap.close()
 
 heap = HeapFile(
@@ -545,12 +454,6 @@ heap = HeapFile(
 print()
 print("ARCHIVO REABIERTO")
 
-
-# --------------------------------------------------
-# 500 bytes no deberían entrar en página 1,
-# pero sí deberían entrar en página 0.
-# --------------------------------------------------
-
 rid_pequeno = heap.insert(
     Record([
         5,
@@ -558,7 +461,6 @@ rid_pequeno = heap.insert(
     ]),
     schema_free
 )
-
 
 print(
     "RID pequeño:",
@@ -570,19 +472,14 @@ print(
     heap.page_count()
 )
 
-
-# Debería aprovechar la página 0.
 assert rid_pequeno.page_id == 0
 
-# No debería crear una tercera página.
 assert heap.page_count() == 2
-
 
 print()
 print(
     "ESPACIO LIBRE SIN DELETED REUTILIZADO CORRECTAMENTE"
 )
-
 
 heap.close()
 

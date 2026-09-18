@@ -17,7 +17,6 @@ ENTRY_HEADER_SIZE = struct.calcsize(ENTRY_HEADER_FORMAT)
 META_FORMAT = "<biibiiiii"
 META_SAVE_EVERY = 256
 
-
 @dataclass(frozen=True)
 class FilePointer:
     file_type: int
@@ -34,7 +33,6 @@ class FilePointer:
         if rid.page_id >= 0:
             return cls(file_type=MAIN_FILE, page_id=rid.page_id, slot_id=rid.slot_id)
         return cls(file_type=AUX_FILE, page_id=-rid.page_id - 1, slot_id=rid.slot_id)
-
 
 @dataclass
 class SequentialEntry:
@@ -65,18 +63,15 @@ class SequentialEntry:
         record = Record.unpack(record_data, schema)
         return cls(record=record, next_pointer=next_pointer, deleted=deleted)
 
-
 def _pack_pointer(pointer: FilePointer | None) -> tuple[int, int, int]:
     if pointer is None:
         return (-1, -1, -1)
     return (pointer.file_type, pointer.page_id, pointer.slot_id)
 
-
 def _unpack_pointer(file_type: int, page_id: int, slot_id: int) -> FilePointer | None:
     if file_type == -1:
         return None
     return FilePointer(file_type=file_type, page_id=page_id, slot_id=slot_id)
-
 
 class SequentialFile:
     def __init__(self, pool: BufferPool, data_path: str, aux_path: str, schema: Schema, key_column: str):
@@ -142,8 +137,6 @@ class SequentialFile:
         self._save_state()
 
     def reload(self) -> None:
-        """Rebuilds head, tail and counters from the files: after a ROLLBACK
-        they were restored behind this object's back."""
         self._recover_state()
         self._save_state()
 
