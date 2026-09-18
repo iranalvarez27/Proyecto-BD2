@@ -8,7 +8,7 @@ from query.ast import SelectNode, InsertNode, DeleteNode, Condition, BinaryCondi
 from query.tokens import TokenType
 from common.record import Record
 from common.types import Column, DataType, Schema
-from engine.external import external_group_by, external_sort
+from engine.external import external_group_by, external_hash_join, external_sort
 from index.bplus_tree import DuplicateKey
 from index.hash_utils import UnhashableKeyType
 from index.key_codec import INT64_MAX, INT64_MIN, KeyTooLong, KeyTypeMismatch, UnorderableKey
@@ -130,7 +130,7 @@ class Conexion:
             return INT64_MAX
         if tipo in (DataType.FLOAT, DataType.DOUBLE):
             return float("inf")
-        return "\U0010FFFF" * 64  # máximo code point válido de Unicode
+        return "\U0010FFFF" * 64
 
     def _extraer_rango_columna(self, cond, col_name: str, schema: Schema):
         if isinstance(cond, Condition):
@@ -157,9 +157,19 @@ class Conexion:
         return None
 
     def ejecutar_select(self, nodo: SelectNode) -> list:
+        orden_ya_resuelto = False
+
+        if nodo.join is not None:
+            with tempfile.TemporaryDirectory(dir=self.tmp_dir) as tmp_join:
+                filas = self.ejecutar_join(nodo, tmp_join)
+            if nodo.where is not None:
+                filas = [f for f in filas if self.cumple_where(nodo.where, f)]
+                self.plan.append("filtro WHERE post-JOIN")
+            schema = self._schema_join(nodo)
+            return self._finalizar_select(nodo, filas, schema, orden_ya_resuelto)
+
         info = self.catalog.get_table(nodo.tabla)
         where = nodo.where
-        orden_ya_resuelto = False
         nombres_col = [c.name for c in info.schema.columns]
 
         if where is None:
@@ -192,7 +202,6 @@ class Conexion:
         else:
             es_igualdad = isinstance(where, Condition) and where.operador == TokenType.EQ
 
-            # Evaluar si aplica búsqueda por rango en algún índice (bplus o clustered)
             rango_info = None
             for col in info.indices:
                 ind, t_ind = self.catalog.get_indice(nodo.tabla, col)
@@ -259,9 +268,11 @@ class Conexion:
 
             else:
                 self.plan.append(f"escaneo completo de '{info.nombre}' ({info.tipo_storage}) + filtro WHERE")
-                filas = [f for f in self.leer_todo(info) if self.cumple_where(where, f)]   
+                filas = [f for f in self.leer_todo(info) if self.cumple_where(where, f)]
+        return self._finalizar_select(nodo, filas, info.schema, orden_ya_resuelto)
+
+    def _finalizar_select(self, nodo: SelectNode, filas, schema: Schema, orden_ya_resuelto: bool) -> list:
         with tempfile.TemporaryDirectory(dir=self.tmp_dir) as tmp:
-            schema = info.schema
             if nodo.group_by is not None:
                 filas, schema = self.agrupar(filas, schema, nodo.group_by, tmp)
                 orden_ya_resuelto = False
@@ -278,6 +289,85 @@ class Conexion:
                     fila_reducida[col] = fila[col]
                 salida.append(fila_reducida)
             return salida
+
+    def _schema_join(self, nodo: SelectNode) -> Schema:
+        info1 = self.catalog.get_table(nodo.tabla)
+        info2 = self.catalog.get_table(nodo.join.tabla)
+        columnas = (
+            [Column(f"{info1.nombre}.{c.name}", c.type, c.size) for c in info1.schema.columns] +
+            [Column(f"{info2.nombre}.{c.name}", c.type, c.size) for c in info2.schema.columns]
+        )
+        return Schema(f"{info1.nombre}_join_{info2.nombre}", columnas)
+
+    def _combinar_filas(self, tabla1: str, fila1: dict, tabla2: str, fila2: dict) -> dict:
+        combinada = {f"{tabla1}.{k}": v for k, v in fila1.items()}
+        combinada.update({f"{tabla2}.{k}": v for k, v in fila2.items()})
+        return combinada
+
+    def _buscar_por_indice(self, info: TableInfo, indice, tipo_indice: str, valor, nombres_col: list) -> list:
+        if tipo_indice == "clustered":
+            record = indice.search(valor)
+            return [dict(zip(nombres_col, record.values))] if record is not None else []
+        rids = indice.search(valor)
+        filas = []
+        for rid in rids:
+            record = info.storage.read(rid, info.schema)
+            if record is not None:
+                filas.append(dict(zip(nombres_col, record.values)))
+        return filas
+
+    def ejecutar_join(self, nodo: SelectNode, tmp_dir: str) -> list:
+        info1 = self.catalog.get_table(nodo.tabla)
+        info2 = self.catalog.get_table(nodo.join.tabla)
+        tabla1, tabla2 = info1.nombre, info2.nombre
+
+        def lado(columna_calificada: str):
+            tabla_ref, col = columna_calificada.split(".", 1)
+            return col if tabla_ref == tabla1 else None, col if tabla_ref == tabla2 else None
+
+        c1_izq, c2_izq = lado(nodo.join.columna_izquierda)
+        c1_der, c2_der = lado(nodo.join.columna_derecha)
+        col1 = c1_izq if c1_izq is not None else c1_der
+        col2 = c2_izq if c2_izq is not None else c2_der
+
+        nombres1 = [c.name for c in info1.schema.columns]
+        nombres2 = [c.name for c in info2.schema.columns]
+
+        if self.catalog.tiene_indice(tabla2, col2):
+            indice, tipo = self.catalog.get_indice(tabla2, col2)
+            self.plan.append(
+                f"join anidado: escaneo de '{tabla1}' + busqueda por indice {tipo} sobre '{tabla2}.{col2}'")
+            filas = []
+            for fila1 in self.leer_todo(info1):
+                for fila2 in self._buscar_por_indice(info2, indice, tipo, fila1[col1], nombres2):
+                    filas.append(self._combinar_filas(tabla1, fila1, tabla2, fila2))
+            return filas
+
+        if self.catalog.tiene_indice(tabla1, col1):
+            indice, tipo = self.catalog.get_indice(tabla1, col1)
+            self.plan.append(
+                f"join anidado: escaneo de '{tabla2}' + busqueda por indice {tipo} sobre '{tabla1}.{col1}'")
+            filas = []
+            for fila2 in self.leer_todo(info2):
+                for fila1 in self._buscar_por_indice(info1, indice, tipo, fila2[col2], nombres1):
+                    filas.append(self._combinar_filas(tabla1, fila1, tabla2, fila2))
+            return filas
+
+        stats = {}
+        filas = list(external_hash_join(
+            self.leer_todo(info1), lambda f: f[col1],
+            self.leer_todo(info2), lambda f: f[col2],
+            info1.schema, info2.schema,
+            self.buffer_pages, tmp_dir,
+            lambda fila1, fila2: self._combinar_filas(tabla1, fila1, tabla2, fila2),
+            stats,
+        ))
+        self.plan.append(
+            f"hash join externo entre '{tabla1}' y '{tabla2}' sobre '{col1}'='{col2}' "
+            f"(external hashing, B={self.buffer_pages}: {stats['partitions']} particiones, "
+            f"{stats['repartitions']} reparticiones)"
+        )
+        return filas
 
     def agrupar(self, filas, schema: Schema, columna: str, tmp_dir: str):
         stats = {}
@@ -322,16 +412,27 @@ class Conexion:
         try:
             if info.tipo_storage == STORAGE_HEAP:
                 rid = info.storage.insert(record, info.schema)
-                self.actualizar_indices_insert(nodo.tabla, info, record, rid)
             elif info.tipo_storage == STORAGE_SEQUENTIAL:
-                info.storage.insert(record)
+                indice_clustered = self._indice_clustered(nodo.tabla, info.key_column)
+                if indice_clustered is not None:
+                    rid = indice_clustered.insert(record)
+                else:
+                    rid = info.storage.insert(record)
             else:
                 raise ExecutionError(f"storage desconocido: {info.tipo_storage}")
+            self.actualizar_indices_insert(nodo.tabla, info, record, rid)
         except ValueError as e:
             raise ExecutionError(f"no se pudo insertar: {e}")
 
         self.plan.append(f"INSERT en '{info.nombre}' ({info.tipo_storage})")
         return {"operacion": "INSERT", "filas_afectadas": 1}
+
+    def _indice_clustered(self, tabla: str, key_column: str):
+        if self.catalog.tiene_indice(tabla, key_column):
+            indice, tipo = self.catalog.get_indice(tabla, key_column)
+            if tipo == "clustered":
+                return indice
+        return None
 
     def actualizar_indices_insert(self, tabla: str, info: TableInfo, record: Record, rid) -> None:
         for columna in info.indices:
@@ -355,8 +456,14 @@ class Conexion:
             if es_por_clave:
                 clave = where.valor
                 self.plan.append(f"DELETE por clave '{info.key_column}={clave}' en '{info.nombre}'")
-                borrado = info.storage.delete(clave)
-                if borrado:
+                indice_clustered = self._indice_clustered(nodo.tabla, info.key_column)
+                if indice_clustered is not None:
+                    borrado = indice_clustered.delete(clave)
+                else:
+                    borrado = info.storage.delete(clave)
+                if borrado is not None:
+                    rid, record = borrado
+                    self.actualizar_indices_delete(nodo.tabla, info, record, rid)
                     return {"operacion": "DELETE", "filas_afectadas": 1}
                 else:
                     return {"operacion": "DELETE", "filas_afectadas": 0}
@@ -366,10 +473,19 @@ class Conexion:
             for fila in self.leer_todo(info):
                 if where is None or self.cumple_where(where, fila):
                     claves.append(fila[info.key_column])
+            indice_clustered = self._indice_clustered(nodo.tabla, info.key_column)
+            borradas = 0
             for clave in claves:
-                info.storage.delete(clave)
+                if indice_clustered is not None:
+                    borrado = indice_clustered.delete(clave)
+                else:
+                    borrado = info.storage.delete(clave)
+                if borrado is not None:
+                    rid, record = borrado
+                    self.actualizar_indices_delete(nodo.tabla, info, record, rid)
+                    borradas += 1
             self.plan.append(f"escaneo + DELETE por clave en '{info.nombre}'")
-            return {"operacion": "DELETE", "filas_afectadas": len(claves)}
+            return {"operacion": "DELETE", "filas_afectadas": borradas}
 
         if info.tipo_storage == STORAGE_HEAP:
             nombres_col = [c.name for c in info.schema.columns]

@@ -19,12 +19,19 @@ class OrderBy:
     descendente: bool = False
 
 @dataclass
+class JoinClause:
+    tabla: str
+    columna_izquierda: str
+    columna_derecha: str
+
+@dataclass
 class SelectNode:
     columnas: list
     tabla: str
     where: object = None
     order_by: OrderBy = None
     group_by: str = None
+    join: JoinClause = None
 
 
 @dataclass
