@@ -34,7 +34,7 @@ class LockManager:
         # historia de adquisiciones exitosas: (session_id, recurso, modo, ts)
         self.historia: list[tuple] = []
 
-    # --------------------------------------------------------------- estado
+    # estado
 
     def _resource_state(self, resource: str) -> dict:
         return self._state.setdefault(resource, {"S": set(), "X": None})
@@ -64,7 +64,7 @@ class LockManager:
         self._mode_by_session_resource[(session_id, resource)] = mode
         self._held_by_session.setdefault(session_id, set()).add(resource)
 
-    # ------------------------------------------------------------ wait-for
+    # wait-for
 
     def _update_wait_for(self, session_id: str, resource: str, mode: str) -> None:
         st = self._resource_state(resource)
@@ -99,7 +99,7 @@ class LockManager:
 
         return dfs(start, stack)
 
-    # ------------------------------------------------------------- publico
+    # publico
 
     def acquire(self, session_id: str, resource: str, mode: str) -> None:
         if mode not in ("S", "X"):

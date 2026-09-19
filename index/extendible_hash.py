@@ -39,7 +39,7 @@ class ExtendibleHash(Index):
                 raise ValueError(f"bucket_capacity must be in [1, {MAX_ENTRIES}]")
             self._create(bucket_capacity)
 
-    # ------------------------------------------------------------------ Index
+    # Index
 
     def insert(self, key: Any, rid: RID) -> None:
         self._insert_hash(stable_hash(key), rid)
@@ -74,7 +74,7 @@ class ExtendibleHash(Index):
     def is_empty(self) -> bool:
         return all(not page.entries for _, page in self._iter_pages())
 
-    # -------------------------------------------------------------- insertion
+    # insertion
 
     def _insert_hash(self, key_hash: int, rid: RID) -> None:
         while True:
@@ -94,7 +94,6 @@ class ExtendibleHash(Index):
             if bucket.local_depth == self._global_depth:
                 self._double_directory()
             self._split_bucket(idx, page_id, bucket)
-            # the mask changed: the next turn recomputes the target bucket
 
     def _is_stuck(self, bucket: BucketPage, key_hash: int) -> bool:
         if bucket.local_depth >= HASH_BITS:
@@ -106,9 +105,6 @@ class ExtendibleHash(Index):
     def _split_bucket(self, idx: int, page_id: int, bucket: BucketPage) -> None:
         old_depth = bucket.local_depth
         discriminating_bit = 1 << old_depth
-
-        # the whole chain splits, not just the primary, or a chained bucket
-        # freezes forever
         entries: list[tuple[int, RID]] = []
         spare: list[int] = []
         page = bucket
@@ -125,14 +121,12 @@ class ExtendibleHash(Index):
         for h, rid in entries:
             (move if h & discriminating_bit else keep).append((h, rid))
 
-        # the old primary is reused as the half that stays
         image_page_id = spare.pop() if spare else self._alloc_page()
         self._write_chain(page_id, keep, old_depth + 1, spare)
         self._write_chain(image_page_id, move, old_depth + 1, spare)
         for leftover in spare:
             self._free_page(leftover)
 
-        # slots pointing here sit at stride 2**old_depth; one write per page
         low_bits = idx & (discriminating_bit - 1)
         touched: set[int] = set()
         for i in range(low_bits, len(self._dir), discriminating_bit):
@@ -150,7 +144,6 @@ class ExtendibleHash(Index):
         spare: list[int],
     ) -> None:
         cap = self._capacity
-        # `or [[]]` so an empty side still gets its primary page
         chunks = [entries[i:i + cap] for i in range(0, len(entries), cap)] or [[]]
 
         page_ids = [head_id]
@@ -167,7 +160,6 @@ class ExtendibleHash(Index):
             self._write_bucket(pid, page)
 
     def _double_directory(self) -> None:
-        # last-d-bits scheme: doubling is concatenation
         self._dir = self._dir + self._dir
         self._global_depth += 1
         self._grow_dir_pages()
@@ -190,8 +182,6 @@ class ExtendibleHash(Index):
         new_page.add(key_hash, rid)
         new_page.overflow_page_id = first_id
         new_id = self._alloc_page()
-        # written before the primary points at it: a crash leaves an orphan
-        # page rather than a dangling pointer
         self._write_bucket(new_id, new_page)
         primary.overflow_page_id = new_id
         self._write_bucket(primary_id, primary)
@@ -208,12 +198,11 @@ class ExtendibleHash(Index):
         self._write_bucket(page_id, page)
         self._free_page(next_id)
 
-    # ------------------------------------------------------------ maintenance
+    # maintenance
 
     def bulk_load(self, pairs) -> None:
         pool, path = self._seg.pool, self._seg.path
         tmp_path = path + ".rebuild"
-        # a leftover from an interrupted load would be opened instead of created
         pool.truncate(tmp_path, 0)
         fresh = ExtendibleHash(pool, tmp_path, bucket_capacity=self._capacity)
         for key, rid in pairs:
@@ -221,7 +210,7 @@ class ExtendibleHash(Index):
         pool.replace(tmp_path, path)
         self._load()
 
-    # ----------------------------------------------------------------- paging
+    # paging
 
     def _mask(self) -> int:
         return (1 << self._global_depth) - 1
@@ -234,7 +223,6 @@ class ExtendibleHash(Index):
         return page_id
 
     def _free_page(self, page_id: int) -> None:
-        # truncating instead of chaining would shift later page ids
         self._seg.free(page_id)
         self._flush_meta()
 
@@ -244,7 +232,7 @@ class ExtendibleHash(Index):
     def _write_bucket(self, page_id: int, page: BucketPage) -> None:
         self._seg.write(page_id, page.to_bytes())
 
-    # --------------------------------------------------------------- metapage
+    # metapage
 
     def _flush_meta(self) -> None:
         buf = bytearray(PAGE_SIZE)
@@ -281,7 +269,7 @@ class ExtendibleHash(Index):
     def reload(self) -> None:
         self._load()
 
-    # -------------------------------------------------------------- directory
+    # directory
 
     def _load_dir(self, first_dir_page: int) -> None:
         self._dir_pages = []

@@ -25,10 +25,6 @@ class Transaction:
 def _no_op_hook(op: str, path: str, page_id, before) -> None:
     return None
 
-
-# Hook global inyectable: los storages/indices lo llaman por atributo de
-# modulo (`from transaction import manager as tx_manager; tx_manager.TX_HOOK(...)`)
-# para que siempre vean el valor vigente, no el que existia al importar.
 TX_HOOK = _no_op_hook
 
 
@@ -36,11 +32,7 @@ def _no_active() -> bool:
     return False
 
 
-# Igual que TX_HOOK: el FileManager pregunta esto antes de leer la imagen
-# previa de una pagina, para no pagar esa lectura extra en las escrituras
-# fuera de una transaccion.
 TX_ACTIVE = _no_active
-
 
 class _BindContext:
     __slots__ = ("_manager", "_session_id", "_previo")
@@ -63,8 +55,6 @@ class _BindContext:
 class TransactionManager:
     def __init__(self, lock_manager: LockManager | None = None, timeout: float = 3.0, pool=None):
         self.lock_manager = lock_manager or LockManager(timeout=timeout)
-        # BufferPool que el undo debe invalidar: restaura bytes directo en
-        # disco, asi que sus frames y handles quedarian desactualizados.
         self._pool = pool
         self._sessions: dict[str, Transaction] = {}
         self._lock = threading.RLock()
@@ -76,7 +66,7 @@ class TransactionManager:
         TX_HOOK = self._tx_hook
         TX_ACTIVE = self._tx_active
 
-    # --------------------------------------------------------------- ciclo
+    # ciclo
 
     def _nuevo_xact_id(self) -> str:
         with self._lock:
@@ -112,7 +102,7 @@ class TransactionManager:
     def _current_txn(self) -> Transaction | None:
         return getattr(self._local, "txn", None)
 
-    # -------------------------------------------------------- undo en RAM
+    # undo en RAM
 
     def _tx_hook(self, op: str, path: str, page_id, before) -> None:
         txn = self._current_txn()
@@ -139,7 +129,7 @@ class TransactionManager:
         with self._lock:
             self.historia.append(entrada)
 
-    # ------------------------------------------------------------ commit
+    # commit
 
     def commit(self, session_id: str) -> Transaction:
         with self._lock:
@@ -170,25 +160,23 @@ class TransactionManager:
 
     def _deshacer(self, txn: Transaction) -> None:
         if self._pool is not None:
-            # soltar handles y frames antes de tocar los archivos por fuera del pool
             for path in {entrada[0] for entrada in txn.undo_buffer}:
                 self._pool.close(path)
         for path, page_id, op, before in reversed(txn.undo_buffer):
             if op == "WRITE":
                 if not os.path.exists(path):
-                    continue  # p.ej. archivo temporal que un replace ya movio
+                    continue 
                 with open(path, "r+b") as f:
                     f.seek(page_id * PAGE_SIZE)
                     f.write(before)
             elif op == "APPEND":
                 if not os.path.exists(path):
                     continue
-                # antes de este append el archivo tenia exactamente page_id paginas
                 with open(path, "r+b") as f:
                     f.truncate(page_id * PAGE_SIZE)
             elif op == "SNAPSHOT":
                 with open(path, "wb") as f:
                     f.write(before)
             elif op == "TRUNCATE":
-                pass  # el SNAPSHOT correspondiente ya restauro el archivo completo
+                pass  
         txn.undo_buffer.clear()

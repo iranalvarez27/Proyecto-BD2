@@ -59,7 +59,7 @@ class BPlusTree(Index):
                 raise ValueError("a new index needs its key_type")
             self._create(key_type, unique, clustered)
 
-    # ------------------------------------------------------------------ Index
+    # Index
 
     def insert(self, key: Any, rid: RID) -> None:
         self._insert_raw(encode(key, self._key_type), rid)
@@ -80,7 +80,7 @@ class BPlusTree(Index):
     def is_empty(self) -> bool:
         return next(self.scan(), None) is None
 
-    # -------------------------------------------------------------- insertion
+    # insertion
 
     def _insert_raw(self, k: bytes, payload) -> None:
         path: list[tuple[int, int]] = []
@@ -164,7 +164,7 @@ class BPlusTree(Index):
         self._write_node(right_id, right)
         return mid_key, right_id
 
-    # -------------------------------------------------------------- deletion
+    # deletion
 
     def _delete_raw(self, k: bytes, payload) -> bool:
         path: list[tuple[int, int]] = []
@@ -348,7 +348,7 @@ class BPlusTree(Index):
         self._free_page(right_id)
         return right_id
 
-    # ------------------------------------------------------------ bulk load
+    # bulk load
 
     @staticmethod
     def _pack(sizes: list[int], capacity: int, gap: int = 0) -> list[tuple[int, int]]:
@@ -447,7 +447,7 @@ class BPlusTree(Index):
                 return node.payloads[-1]
         return None
 
-    # ------------------------------------------------------------------ reads
+    # reads
 
     def _present(self, leaf: NodePage, i: int, k: bytes) -> bool:
         if i < leaf.count:
@@ -500,7 +500,7 @@ class BPlusTree(Index):
             node = self._read_node(page_id)
         return page_id
 
-    # -------------------------------------------------------------- pages
+    # pages
 
     def _alloc_page(self) -> int:
         reused = self._seg.free_head != NIL
@@ -519,7 +519,7 @@ class BPlusTree(Index):
     def _write_node(self, page_id: int, node: NodePage) -> None:
         self._seg.write(page_id, node.to_bytes())
 
-    # -------------------------------------------------------------- metapage
+    # metapage
 
     def _create(self, key_type: DataType, unique: bool, clustered: bool) -> None:
         self._key_type = key_type

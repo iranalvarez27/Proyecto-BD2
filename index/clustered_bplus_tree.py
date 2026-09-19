@@ -25,7 +25,7 @@ class ClusteredBPlusTree:
         if fresh:
             self._rebuild()
 
-    # ----------------------------------------------------------------- reads
+    # reads
 
     def search(self, key):
         page_id = self._tree.floor(key)
@@ -62,7 +62,7 @@ class ClusteredBPlusTree:
         )
         return [r for _, r in heapq.merge(from_main, from_aux, key=lambda t: t[0])]
 
-    # ---------------------------------------------------------------- writes
+    # writes
 
     def insert(self, record: Record):
         key = record.values[self._key_index]
@@ -82,7 +82,7 @@ class ClusteredBPlusTree:
     def reload(self) -> None:
         self._tree.reload()
 
-    # --------------------------------------------------------------- policy
+    # policy
 
     def aux_limit(self) -> int:
         return max(1, int(math.log2(max(self._seq.page_count(MAIN_FILE), 2))))
@@ -96,7 +96,7 @@ class ClusteredBPlusTree:
             or self._seq.deleted_ratio() > DELETED_LIMIT
         )
 
-    # ------------------------------------------------------------- internals
+    # internals
 
     def _key_of(self, entry: SequentialEntry):
         return entry.record.values[self._key_index]

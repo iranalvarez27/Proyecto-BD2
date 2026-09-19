@@ -1,12 +1,3 @@
-"""Demo obligatoria con hilos: transacciones simultaneas, carrera de PK y
-deadlock real, con y sin el LockManager.
-
-Uso:
-    python -m transaction.simulation --threads 8 --mode locked
-    python -m transaction.simulation --threads 8 --mode raceless
-    python -m transaction.simulation --threads 8 --mode locked --xacts 3 --seed 42
-    python -m transaction.simulation --scenario deadlock
-"""
 import argparse
 import os
 import random
@@ -26,15 +17,13 @@ from storage.sequential_file import SequentialFile
 from index.bplus_tree import BPlusTree
 from index.extendible_hash import ExtendibleHash
 from index.clustered_bplus_tree import ClusteredBPlusTree
-from query.catalog import (
-    Catalog, STORAGE_HEAP, STORAGE_SEQUENTIAL, INDEX_BPLUS, INDEX_HASH, INDEX_CLUSTERED,
-)
+from query.catalog import (Catalog, STORAGE_HEAP, STORAGE_SEQUENTIAL, INDEX_BPLUS, INDEX_HASH, INDEX_CLUSTERED,)
 from query.conexion import Conexion
 from transaction.manager import TransactionManager
 from transaction.serializability import construir_grafo_precedencia
 
 
-# --------------------------------------------------------------- entorno
+# entorno
 
 def construir_entorno(data_dir: str, pool: BufferPool) -> Catalog:
     os.makedirs(data_dir, exist_ok=True)
@@ -81,7 +70,7 @@ def construir_entorno(data_dir: str, pool: BufferPool) -> Catalog:
     return catalog
 
 
-# ------------------------------------------------------------ invariantes
+# invariantes
 
 def verificar_pk_unicas(catalog: Catalog) -> list:
     info = catalog.get_table("estudiantes")
@@ -104,7 +93,7 @@ def verificar_indices_coherentes(catalog: Catalog) -> int:
     return incoherentes
 
 
-# --------------------------------------------------------- INSERT sin lock
+# INSERT sin lock
 
 def raceless_insert(catalog: Catalog, tabla: str, valores: list, delay_s: float):
     info = catalog.get_table(tabla)
@@ -128,7 +117,7 @@ def raceless_insert(catalog: Catalog, tabla: str, valores: list, delay_s: float)
     return rid
 
 
-# --------------------------------------------------------------- escenarios
+# escenarios
 
 def escenario_carrera(catalog, conexion, n_threads, n_claves, modo, delay_ms, seed):
     random.seed(seed)
@@ -232,7 +221,7 @@ def escenario_deadlock(conexion, delay_ms):
     return resultado
 
 
-# -------------------------------------------------------------------- main
+# main
 
 def main():
     ap = argparse.ArgumentParser(description="Demo de concurrencia con hilos (BD2 - Transacciones)")
