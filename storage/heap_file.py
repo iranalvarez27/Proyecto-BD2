@@ -29,6 +29,9 @@ class HeapFile:
     def close(self) -> None:
         self._seg.close()
 
+    def file_paths(self) -> list[str]:
+        return [self._file_path]
+
     def __enter__(self):
         return self
 

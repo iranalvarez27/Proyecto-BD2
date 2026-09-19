@@ -39,6 +39,9 @@ class ExtendibleHash(Index):
                 raise ValueError(f"bucket_capacity must be in [1, {MAX_ENTRIES}]")
             self._create(bucket_capacity)
 
+    def file_paths(self) -> list[str]:
+        return [self._seg.path]
+
     # Index
 
     def insert(self, key: Any, rid: RID) -> None:

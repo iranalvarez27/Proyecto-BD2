@@ -25,6 +25,9 @@ class ClusteredBPlusTree:
         if fresh:
             self._rebuild()
 
+    def file_paths(self) -> list[str]:
+        return self._tree.file_paths()
+
     # reads
 
     def search(self, key):

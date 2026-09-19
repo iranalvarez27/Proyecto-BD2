@@ -817,13 +817,6 @@ class Conexion:
         return {"operacion": "CREATE TABLE", "tabla": nodo.tabla, "filas_afectadas": 0}
 
     def ejecutar_drop_table(self, nodo: DropTableNode, session_id: str) -> dict:
-        """Borra una tabla por completo: cierra los handles de sus archivos
-        (necesario en Windows antes de poder eliminarlos), elimina fisicamente
-        el/los archivo(s) de storage y de cada indice, y desregistra la tabla
-        del catalogo. Es irreversible: no hay papelera de reciclaje ni forma
-        de deshacerlo con ROLLBACK (misma razon que CREATE TABLE: el catalogo
-        en RAM y el borrado fisico de un archivo entero no pasan por el
-        mecanismo de undo basado en before-images de paginas)."""
         if self.txn_manager.is_active(session_id):
             raise ExecutionError("DROP TABLE no se puede ejecutar dentro de una transaccion (BEGIN...COMMIT); "
                 "ejecutala como sentencia autocommit, fuera del BEGIN")

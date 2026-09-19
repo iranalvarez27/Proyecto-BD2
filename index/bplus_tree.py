@@ -59,6 +59,9 @@ class BPlusTree(Index):
                 raise ValueError("a new index needs its key_type")
             self._create(key_type, unique, clustered)
 
+    def file_paths(self) -> list[str]:
+        return [self._seg.path]
+
     # Index
 
     def insert(self, key: Any, rid: RID) -> None:

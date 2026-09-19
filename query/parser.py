@@ -269,11 +269,6 @@ class Parser:
         col = self.parse_columna_ref()
 
         if self.coincide(TokenType.BETWEEN):
-            # 'col BETWEEN bajo AND alto' es azucar sintactico por
-            # 'col >= bajo AND col <= alto': se arma como una BinaryCondition
-            # comun para que la reutilicen tal cual la evaluacion del WHERE
-            # (cumple_where) y la optimizacion de rango por indice
-            # (_extraer_rango_columna en conexion.py), sin tocar nada de eso.
             self.avanzar()
             bajo = self.parse_valor()
             self.esperar(TokenType.AND)

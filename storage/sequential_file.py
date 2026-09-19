@@ -108,6 +108,9 @@ class SequentialFile:
             seg.close()
         self._closed = True
 
+    def file_paths(self) -> list[str]:
+        return [self._data_path, self._aux_path, self._meta_path, self._dirty_path]
+
     def __enter__(self):
         return self
 
