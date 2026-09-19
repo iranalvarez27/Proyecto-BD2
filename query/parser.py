@@ -1,7 +1,7 @@
 from query.tokens import Token, TokenType
 from query.ast import (
     SelectNode, InsertNode, DeleteNode, Condition, BinaryCondition, OrderBy, JoinClause,
-    BeginNode, CommitNode, RollbackNode, ExplainNode, ColumnDef, CreateTableNode,
+    BeginNode, CommitNode, RollbackNode, ExplainNode, ColumnDef, CreateTableNode, DropTableNode,
 )
 
 class ParserError(Exception):
@@ -51,6 +51,8 @@ class Parser:
             nodo = self.parse_explain()
         elif self.coincide(TokenType.CREATE):
             nodo = self.parse_create_table()
+        elif self.coincide(TokenType.DROP):
+            nodo = self.parse_drop_table()
         else:
             raise ParserError(f"error en la consulta, empieza con {self.actual().value}")
 
@@ -117,6 +119,13 @@ class Parser:
                 raise ParserError(f"pos {tok.pos}: USING debe ser HEAP o SEQUENTIAL, salio '{tok.value}'")
             storage = valor
         return CreateTableNode(tabla, columnas, storage)
+
+    def parse_drop_table(self):
+        # DROP TABLE nombre
+        self.esperar(TokenType.DROP)
+        self.esperar(TokenType.TABLE)
+        tabla = self.esperar(TokenType.IDENT).value
+        return DropTableNode(tabla)
 
     def parse_column_def(self):
         nombre = self.esperar(TokenType.IDENT).value
@@ -258,6 +267,20 @@ class Parser:
             return expr
 
         col = self.parse_columna_ref()
+
+        if self.coincide(TokenType.BETWEEN):
+            # 'col BETWEEN bajo AND alto' es azucar sintactico por
+            # 'col >= bajo AND col <= alto': se arma como una BinaryCondition
+            # comun para que la reutilicen tal cual la evaluacion del WHERE
+            # (cumple_where) y la optimizacion de rango por indice
+            # (_extraer_rango_columna en conexion.py), sin tocar nada de eso.
+            self.avanzar()
+            bajo = self.parse_valor()
+            self.esperar(TokenType.AND)
+            alto = self.parse_valor()
+            return BinaryCondition(
+                Condition(col, TokenType.GTE, bajo), TokenType.AND, Condition(col, TokenType.LTE, alto))
+
         if self.actual().type not in OPERADORES_COMP:
             raise ParserError(f"pos {self.actual().pos}: falta operador de comparacion")
         op = self.avanzar().type

@@ -6,7 +6,7 @@ from query.lexer import Lexer, LexerError
 from query.parser import Parser, ParserError
 from query.semantic import SemanticAnalyzer, SemanticError, resolver_tipo_columna
 from query.catalog import (Catalog, TableInfo, STORAGE_HEAP, STORAGE_SEQUENTIAL, INDEX_BPLUS, INDEX_CLUSTERED,)
-from query.ast import (SelectNode, InsertNode, DeleteNode, Condition, BinaryCondition,BeginNode, CommitNode, RollbackNode, ExplainNode, CreateTableNode,)
+from query.ast import (SelectNode, InsertNode, DeleteNode, Condition, BinaryCondition,BeginNode, CommitNode, RollbackNode, ExplainNode, CreateTableNode, DropTableNode,)
 from query.tokens import TokenType
 from common.record import Record
 from common.types import Column, DataType, Schema
@@ -97,7 +97,7 @@ class Conexion:
         if isinstance(nodo, ExplainNode):
             return self._ejecutar_explain(nodo, session_id)
 
-        if not isinstance(nodo, (SelectNode, InsertNode, DeleteNode, CreateTableNode)):
+        if not isinstance(nodo, (SelectNode, InsertNode, DeleteNode, CreateTableNode, DropTableNode)):
             return QueryResult(error=f"nodo no ejecutable: {type(nodo).__name__}", tipo_error="ejecucion")
 
         modo = "S" if isinstance(nodo, SelectNode) else "X"
@@ -131,6 +131,9 @@ class Conexion:
                     resultado = QueryResult(resumen=resumen, plan=self.plan)
                 elif isinstance(nodo, CreateTableNode):
                     resumen = self.ejecutar_create_table(nodo, session_id)
+                    resultado = QueryResult(resumen=resumen, plan=self.plan)
+                elif isinstance(nodo, DropTableNode):
+                    resumen = self.ejecutar_drop_table(nodo, session_id)
                     resultado = QueryResult(resumen=resumen, plan=self.plan)
                 else:
                     resumen = self.ejecutar_delete(nodo)
@@ -812,3 +815,44 @@ class Conexion:
             f"CREATE TABLE '{nodo.tabla}' ({nodo.storage}, {len(columnas)} columnas, "
             f"PK='{pk_col_name}' con indice automatico)")
         return {"operacion": "CREATE TABLE", "tabla": nodo.tabla, "filas_afectadas": 0}
+
+    def ejecutar_drop_table(self, nodo: DropTableNode, session_id: str) -> dict:
+        """Borra una tabla por completo: cierra los handles de sus archivos
+        (necesario en Windows antes de poder eliminarlos), elimina fisicamente
+        el/los archivo(s) de storage y de cada indice, y desregistra la tabla
+        del catalogo. Es irreversible: no hay papelera de reciclaje ni forma
+        de deshacerlo con ROLLBACK (misma razon que CREATE TABLE: el catalogo
+        en RAM y el borrado fisico de un archivo entero no pasan por el
+        mecanismo de undo basado en before-images de paginas)."""
+        if self.txn_manager.is_active(session_id):
+            raise ExecutionError("DROP TABLE no se puede ejecutar dentro de una transaccion (BEGIN...COMMIT); "
+                "ejecutala como sentencia autocommit, fuera del BEGIN")
+        if self.pool is None:
+            raise ExecutionError("DROP TABLE no esta disponible: esta Conexion no tiene acceso a un BufferPool")
+        if not self.catalog.existe_tabla(nodo.tabla):
+            raise ExecutionError(f"la tabla '{nodo.tabla}' no existe")
+
+        info = self.catalog.get_table(nodo.tabla)
+
+        rutas = list(info.storage.file_paths())
+        for indice, _tipo_indice in info.indices.values():
+            for ruta in indice.file_paths():
+                if ruta not in rutas:
+                    rutas.append(ruta)
+
+        for ruta in rutas:
+            self.pool.close(ruta)
+
+        borrados = 0
+        for ruta in rutas:
+            try:
+                if os.path.exists(ruta):
+                    os.remove(ruta)
+                    borrados += 1
+            except OSError as e:
+                raise ExecutionError(f"no se pudo borrar el archivo '{ruta}' de la tabla '{nodo.tabla}': {e}")
+
+        self.catalog.eliminar_tabla(nodo.tabla)
+
+        self.plan.append(f"DROP TABLE '{nodo.tabla}' ({borrados} archivo(s) eliminado(s) de disco)")
+        return {"operacion": "DROP TABLE", "tabla": nodo.tabla, "filas_afectadas": 0}

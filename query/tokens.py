@@ -57,6 +57,10 @@ class TokenType(Enum):
     KEY = 45
     USING = 46
 
+    DROP = 47
+
+    BETWEEN = 48
+
 KEYWORDS = {"select": TokenType.SELECT, "from": TokenType.FROM, "where": TokenType.WHERE,
             "insert": TokenType.INSERT, "into": TokenType.INTO, "values": TokenType.VALUES,
             "delete": TokenType.DELETE, "order": TokenType.ORDER, "by": TokenType.BY,
@@ -68,7 +72,9 @@ KEYWORDS = {"select": TokenType.SELECT, "from": TokenType.FROM, "where": TokenTy
             "rollback": TokenType.ROLLBACK, "abort": TokenType.ABORT,
             "explain": TokenType.EXPLAIN, "analyze": TokenType.ANALYZE,
             "create": TokenType.CREATE, "table": TokenType.TABLE,
-            "primary": TokenType.PRIMARY, "key": TokenType.KEY, "using": TokenType.USING,}
+            "primary": TokenType.PRIMARY, "key": TokenType.KEY, "using": TokenType.USING,
+            "drop": TokenType.DROP,
+            "between": TokenType.BETWEEN,}
 
 @dataclass
 class Token:

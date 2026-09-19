@@ -1,6 +1,6 @@
 from query.ast import (
     SelectNode, InsertNode, DeleteNode, Condition, BinaryCondition, OrderBy,
-    BeginNode, CommitNode, RollbackNode, ExplainNode, CreateTableNode,
+    BeginNode, CommitNode, RollbackNode, ExplainNode, CreateTableNode, DropTableNode,
 )
 from query.catalog import Catalog
 from common.types import Schema, DataType
@@ -45,6 +45,8 @@ class SemanticAnalyzer:
             self.validar(nodo.statement)  
         elif isinstance(nodo, CreateTableNode):
             self.validar_create_table(nodo)
+        elif isinstance(nodo, DropTableNode):
+            self.validar_drop_table(nodo)
         elif isinstance(nodo, (BeginNode, CommitNode, RollbackNode)):
             pass
         else:
@@ -217,3 +219,7 @@ class SemanticAnalyzer:
             raise SemanticError(f"CREATE TABLE '{nodo.tabla}' necesita exactamente una columna PRIMARY KEY")
         if pk_count > 1:
             raise SemanticError(f"CREATE TABLE '{nodo.tabla}' solo admite una columna PRIMARY KEY")
+
+    def validar_drop_table(self, nodo: DropTableNode) -> None:
+        if not self._catalog.existe_tabla(nodo.tabla):
+            raise SemanticError(f"la tabla '{nodo.tabla}' no existe")

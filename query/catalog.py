@@ -65,3 +65,8 @@ class Catalog:
 
     def listar_tablas(self) -> list[str]:
         return list(self._tablas.keys())
+
+    def eliminar_tabla(self, nombre: str) -> None:
+        if nombre not in self._tablas:
+            raise ValueError(f"la tabla '{nombre}' no existe")
+        del self._tablas[nombre]

@@ -80,3 +80,8 @@ class CreateTableNode:
     tabla: str
     columnas: list
     storage: str = "heap"
+
+
+@dataclass
+class DropTableNode:
+    tabla: str
