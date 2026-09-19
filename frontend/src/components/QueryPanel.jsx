@@ -1,12 +1,14 @@
 import React, { useState } from 'react';
-import { 
-  Play, 
-  GitBranch, 
-  RotateCcw, 
-  Terminal, 
-  Clock, 
-  Code2, 
-  Sparkles 
+import {
+  Play,
+  GitBranch,
+  RotateCcw,
+  Terminal,
+  Clock,
+  Code2,
+  Sparkles,
+  Gauge,
+  Upload
 } from 'lucide-react';
 
 const SQL_TEMPLATES = [
@@ -19,6 +21,10 @@ const SQL_TEMPLATES = [
   { label: 'GROUP BY por carrera', sql: 'SELECT carrera FROM estudiantes GROUP BY carrera;' },
   { label: 'INSERT en Heap + Actualización Índices', sql: "INSERT INTO estudiantes VALUES (12, 'Valeria Gomez', 'Bioingenieria', 19.5);" },
   { label: 'DELETE en Heap + Limpieza de Índices', sql: 'DELETE FROM estudiantes WHERE id = 12;' },
+  { label: 'EXPLAIN (plan estimado, sin tocar disco)', sql: "EXPLAIN INSERT INTO estudiantes VALUES (12, 'Valeria Gomez', 'Bioingenieria', 19.5);" },
+  { label: 'EXPLAIN ANALYZE (ejecuta de verdad + tiempo real)', sql: 'EXPLAIN ANALYZE SELECT * FROM estudiantes WHERE id > 3;' },
+  { label: 'CREATE TABLE (Heap, con PK indexada)', sql: 'CREATE TABLE productos (id INT PRIMARY KEY, nombre VARCHAR(30), precio FLOAT);' },
+  { label: 'CREATE TABLE (Sequential, PK agrupada)', sql: 'CREATE TABLE ventas (folio INT PRIMARY KEY, monto FLOAT) USING SEQUENTIAL;' },
   { label: 'Transacción: BEGIN', sql: 'BEGIN TRANSACTION;' },
   { label: 'Transacción: COMMIT', sql: 'COMMIT;' },
   { label: 'Transacción: ROLLBACK', sql: 'ROLLBACK;' },
@@ -34,13 +40,14 @@ const SQL_TEMPLATES = [
 ];
 
 
-export default function QueryPanel({ 
-  query, 
-  setQuery, 
-  onExecute, 
-  onExplain, 
-  loading, 
-  history = [] 
+export default function QueryPanel({
+  query,
+  setQuery,
+  onExecute,
+  onExplain,
+  onOpenCsvImport,
+  loading,
+  history = []
 }) {
   const [selectedTemplate, setSelectedTemplate] = useState('');
 
@@ -97,14 +104,35 @@ export default function QueryPanel({
             <RotateCcw className="w-3.5 h-3.5" />
           </button>
 
+          {onOpenCsvImport && (
+            <button
+              onClick={onOpenCsvImport}
+              title="Importar datos desde un archivo CSV (genera CREATE TABLE/INSERT en el editor)"
+              className="flex items-center gap-1.5 px-2.5 py-1 bg-emerald-600/20 hover:bg-emerald-600/30 border border-emerald-500/40 text-emerald-200 hover:text-white rounded text-xs font-medium transition"
+            >
+              <Upload className="w-3.5 h-3.5" />
+              <span>Cargar CSV</span>
+            </button>
+          )}
+
           <button
-            onClick={onExplain}
+            onClick={() => onExplain(false)}
             disabled={loading || !query.trim()}
             className="flex items-center gap-1.5 px-2.5 py-1 bg-purple-600/20 hover:bg-purple-600/30 border border-purple-500/40 text-purple-200 hover:text-white rounded text-xs font-medium transition disabled:opacity-50"
-            title="Ver Plan de Ejecución (EXPLAIN)"
+            title="Ver el plan estimado, sin ejecutar cambios en disco (INSERT/DELETE no se aplican)"
           >
             <GitBranch className="w-3.5 h-3.5" />
             <span>EXPLAIN</span>
+          </button>
+
+          <button
+            onClick={() => onExplain(true)}
+            disabled={loading || !query.trim()}
+            className="flex items-center gap-1.5 px-2.5 py-1 bg-fuchsia-600/20 hover:bg-fuchsia-600/30 border border-fuchsia-500/40 text-fuchsia-200 hover:text-white rounded text-xs font-medium transition disabled:opacity-50"
+            title="Ejecuta la consulta de verdad y muestra tiempo real + filas reales (EXPLAIN ANALYZE)"
+          >
+            <Gauge className="w-3.5 h-3.5" />
+            <span>EXPLAIN ANALYZE</span>
           </button>
 
           <button

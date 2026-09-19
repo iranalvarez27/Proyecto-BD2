@@ -18,6 +18,7 @@ import FilePanel from './components/FilePanel';
 import QueryPanel from './components/QueryPanel';
 import ResultsPanel from './components/ResultsPanel';
 import PlanPanel from './components/PlanPanel';
+import CsvImportModal from './components/CsvImportModal';
 
 function obtenerOCrearSessionId() {
   try {
@@ -50,6 +51,7 @@ export default function App() {
 
   const [sessionId] = useState(obtenerOCrearSessionId);
   const [transactionState, setTransactionState] = useState({ active: false, xact_id: null });
+  const [csvImportOpen, setCsvImportOpen] = useState(false);
 
   // Initial load of tables
   useEffect(() => {
@@ -102,7 +104,18 @@ export default function App() {
         if (data.transaction) {
           setTransactionState(data.transaction);
         }
-        if (data.status !== 'success') break;
+        if (data.status !== 'success') {
+          if (data.transaction && data.transaction.active) {
+            try {
+              const rb = await ejecutarUnaSentencia('ROLLBACK;');
+              if (rb.transaction) setTransactionState(rb.transaction);
+              data = { ...data, error: `${data.error || ''} (transacción revertida automáticamente)`.trim() };
+            } catch (rbErr) {
+              console.error('Fallo el ROLLBACK automático tras error en script:', rbErr);
+            }
+          }
+          break;
+        }
       }
 
       setQueryResult(data);
@@ -116,11 +129,9 @@ export default function App() {
         return [...prev, q];
       });
 
-      // Refresh tables if an INSERT or DELETE might have altered disk pages,
-      // o si una transaccion activa se acaba de confirmar/revertir.
       const terminoTransaccion = activaAntes && data && data.transaction && !data.transaction.active;
       const qUpper = q.trim().toUpperCase();
-      if (qUpper.includes('INSERT') || qUpper.includes('DELETE') || terminoTransaccion) {
+      if (qUpper.includes('INSERT') || qUpper.includes('DELETE') || qUpper.includes('CREATE TABLE') || terminoTransaccion) {
         fetchTables();
       }
     } catch (err) {
@@ -136,17 +147,26 @@ export default function App() {
     }
   };
 
-  const handleExplainQuery = async () => {
+  const handleExplainQuery = async (analyze = false) => {
     if (!query.trim()) return;
     setLoadingQuery(true);
     try {
       const res = await fetch('/api/explain', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ query }),
+        body: JSON.stringify({ query, session_id: sessionId, analyze }),
       });
       const data = await res.json();
-      setExecutionPlan(data.root_node || data);
+      if (data.transaction) {
+        setTransactionState(data.transaction);
+      }
+
+      const qUpper = query.trim().toUpperCase();
+      if (analyze && (qUpper.includes('INSERT') || qUpper.includes('DELETE') || qUpper.includes('CREATE TABLE'))) {
+        fetchTables();
+      }
+      setQueryResult(data);
+      setExecutionPlan(data.plan || null);
       setActiveBottomTab('plan');
     } catch (err) {
       console.error('Explain error:', err);
@@ -175,6 +195,11 @@ export default function App() {
     const q = `SELECT * FROM ${tableName};`;
     setQuery(q);
     handleExecuteQuery(q);
+  };
+
+  const handleCsvScriptReady = (script) => {
+    setQuery(script);
+    setCsvImportOpen(false);
   };
 
   const handleReseed = async () => {
@@ -266,6 +291,7 @@ export default function App() {
               setQuery={setQuery}
               onExecute={() => handleExecuteQuery()}
               onExplain={handleExplainQuery}
+              onOpenCsvImport={() => setCsvImportOpen(true)}
               loading={loadingQuery}
               history={history}
             />
@@ -325,6 +351,14 @@ export default function App() {
           </div>
         </main>
       </div>
+
+      {csvImportOpen && (
+        <CsvImportModal
+          tables={tables}
+          onClose={() => setCsvImportOpen(false)}
+          onUseScript={handleCsvScriptReady}
+        />
+      )}
     </div>
   );
 }
