@@ -149,19 +149,38 @@ export default function App() {
 
   const handleExplainQuery = async (analyze = false) => {
     if (!query.trim()) return;
+    const sentencias = query.split(';').map(s => s.trim()).filter(Boolean);
+    if (sentencias.length === 0) return;
+    const explicables = sentencias.filter(s => /^(SELECT|INSERT|DELETE)\b/i.test(s));
+    if (explicables.length === 0) {
+      alert(
+        'EXPLAIN solo puede analizar sentencias SELECT, INSERT o DELETE.\n\n' +
+        'El editor no tiene ninguna (por ejemplo, CREATE TABLE o BEGIN/COMMIT/ROLLBACK no se pueden explicar).'
+      );
+      return;
+    }
+    const objetivo = explicables[0];
+    if (sentencias.length > 1) {
+      const continuar = confirm(
+        `El editor tiene ${sentencias.length} sentencias, pero EXPLAIN solo puede analizar una a la vez.\n\n` +
+        `Se analizará:\n${objetivo}\n\n¿Continuar?`
+      );
+      if (!continuar) return;
+    }
+
     setLoadingQuery(true);
     try {
       const res = await fetch('/api/explain', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ query, session_id: sessionId, analyze }),
+        body: JSON.stringify({ query: objetivo, session_id: sessionId, analyze }),
       });
       const data = await res.json();
       if (data.transaction) {
         setTransactionState(data.transaction);
       }
 
-      const qUpper = query.trim().toUpperCase();
+      const qUpper = objetivo.toUpperCase();
       if (analyze && (qUpper.includes('INSERT') || qUpper.includes('DELETE') || qUpper.includes('CREATE TABLE'))) {
         fetchTables();
       }
