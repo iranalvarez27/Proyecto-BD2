@@ -162,15 +162,15 @@ export default function CsvImportModal({ tables = [], onClose, onUseScript }) {
   const previewLines = script ? script.split('\n').slice(0, 6) : [];
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
-      <div className="w-full max-w-3xl max-h-[90vh] bg-slate-900 border border-slate-700 rounded-lg shadow-2xl flex flex-col overflow-hidden">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 dark:bg-black/60 p-4">
+      <div className="w-full max-w-3xl max-h-[90vh] bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg shadow-2xl flex flex-col overflow-hidden">
         {/* Header */}
-        <div className="flex items-center justify-between px-4 py-3 border-b border-slate-800">
-          <div className="flex items-center gap-2 text-slate-200 font-semibold text-sm">
-            <Upload className="w-4 h-4 text-emerald-400" />
+        <div className="flex items-center justify-between px-4 py-3 border-b border-slate-200 dark:border-slate-800">
+          <div className="flex items-center gap-2 text-slate-700 dark:text-slate-200 font-semibold text-sm">
+            <Upload className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
             Importar datos desde CSV
           </div>
-          <button onClick={onClose} className="p-1 hover:bg-slate-800 rounded text-slate-400 hover:text-white">
+          <button onClick={onClose} className="p-1 hover:bg-slate-100 dark:hover:bg-slate-800 rounded text-slate-400 hover:text-slate-800 dark:hover:text-white">
             <X className="w-4 h-4" />
           </button>
         </div>
@@ -178,18 +178,18 @@ export default function CsvImportModal({ tables = [], onClose, onUseScript }) {
         <div className="flex-1 overflow-y-auto p-4 space-y-4 text-sm">
           {/* Paso 1: archivo */}
           <div>
-            <label className="flex items-center gap-2 text-xs font-semibold text-slate-400 uppercase tracking-wide mb-1.5">
+            <label className="flex items-center gap-2 text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wide mb-1.5">
               1. Selecciona el archivo .csv
             </label>
             <div className="flex items-center gap-2">
               <button
                 onClick={() => fileInputRef.current?.click()}
-                className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded text-slate-200 text-xs"
+                className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 border border-slate-300 dark:border-slate-700 rounded text-slate-700 dark:text-slate-200 text-xs"
               >
                 <Upload className="w-3.5 h-3.5" />
                 Elegir archivo
               </button>
-              <span className="text-slate-500 text-xs truncate">{fileName || 'Ningún archivo seleccionado'}</span>
+              <span className="text-slate-400 dark:text-slate-500 text-xs truncate">{fileName || 'Ningún archivo seleccionado'}</span>
               <input
                 ref={fileInputRef}
                 type="file"
@@ -199,7 +199,7 @@ export default function CsvImportModal({ tables = [], onClose, onUseScript }) {
               />
             </div>
             {parseError && (
-              <p className="mt-2 text-rose-400 text-xs flex items-center gap-1">
+              <p className="mt-2 text-rose-600 dark:text-rose-400 text-xs flex items-center gap-1">
                 <AlertTriangle className="w-3.5 h-3.5" /> {parseError}
               </p>
             )}
@@ -207,15 +207,15 @@ export default function CsvImportModal({ tables = [], onClose, onUseScript }) {
 
           {headers.length > 0 && (
             <>
-              <div className="text-xs text-slate-500">
-                Detectadas <b className="text-slate-300">{headers.length}</b> columnas y{' '}
-                <b className="text-slate-300">{rows.length}</b> filas de datos.
+              <div className="text-xs text-slate-500 dark:text-slate-500">
+                Detectadas <b className="text-slate-700 dark:text-slate-300">{headers.length}</b> columnas y{' '}
+                <b className="text-slate-700 dark:text-slate-300">{rows.length}</b> filas de datos.
                 {rows.length > 500 && ' Con este tamaño la importación puede tardar un poco (una petición por fila).'}
               </div>
 
               {/* Paso 2: destino */}
               <div>
-                <label className="text-xs font-semibold text-slate-400 uppercase tracking-wide mb-1.5 block">
+                <label className="text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wide mb-1.5 block">
                   2. Destino de los datos
                 </label>
                 <div className="flex gap-2 mb-3">
@@ -223,8 +223,8 @@ export default function CsvImportModal({ tables = [], onClose, onUseScript }) {
                     onClick={() => setMode('new')}
                     className={`flex items-center gap-1.5 px-3 py-1.5 rounded text-xs border transition ${
                       mode === 'new'
-                        ? 'bg-emerald-600/20 border-emerald-500/50 text-emerald-200'
-                        : 'bg-slate-800 border-slate-700 text-slate-400 hover:text-slate-200'
+                        ? 'bg-emerald-50 dark:bg-emerald-600/20 border-emerald-400 dark:border-emerald-500/50 text-emerald-700 dark:text-emerald-200'
+                        : 'bg-slate-100 dark:bg-slate-800 border-slate-300 dark:border-slate-700 text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200'
                     }`}
                   >
                     <FilePlus2 className="w-3.5 h-3.5" />
@@ -235,8 +235,8 @@ export default function CsvImportModal({ tables = [], onClose, onUseScript }) {
                     disabled={tables.length === 0}
                     className={`flex items-center gap-1.5 px-3 py-1.5 rounded text-xs border transition disabled:opacity-40 ${
                       mode === 'existing'
-                        ? 'bg-indigo-600/20 border-indigo-500/50 text-indigo-200'
-                        : 'bg-slate-800 border-slate-700 text-slate-400 hover:text-slate-200'
+                        ? 'bg-pg-50 dark:bg-pg-600/20 border-pg-400 dark:border-pg-500/50 text-pg-700 dark:text-pg-200'
+                        : 'bg-slate-100 dark:bg-slate-800 border-slate-300 dark:border-slate-700 text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200'
                     }`}
                   >
                     <Table2 className="w-3.5 h-3.5" />
@@ -245,22 +245,22 @@ export default function CsvImportModal({ tables = [], onClose, onUseScript }) {
                 </div>
 
                 {mode === 'new' && (
-                  <div className="space-y-3 bg-slate-950/40 border border-slate-800 rounded p-3">
+                  <div className="space-y-3 bg-slate-50 dark:bg-slate-950/40 border border-slate-200 dark:border-slate-800 rounded p-3">
                     <div className="flex items-center gap-3 flex-wrap">
-                      <label className="text-xs text-slate-400">
+                      <label className="text-xs text-slate-500 dark:text-slate-400">
                         Nombre de tabla:
                         <input
                           value={newTableName}
                           onChange={e => setNewTableName(toIdent(e.target.value, 'tabla'))}
-                          className="ml-2 bg-slate-800 border border-slate-700 rounded px-2 py-1 text-slate-200 text-xs w-48"
+                          className="ml-2 bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded px-2 py-1 text-slate-700 dark:text-slate-200 text-xs w-48"
                         />
                       </label>
-                      <label className="text-xs text-slate-400">
+                      <label className="text-xs text-slate-500 dark:text-slate-400">
                         Storage:
                         <select
                           value={newStorage}
                           onChange={e => setNewStorage(e.target.value)}
-                          className="ml-2 bg-slate-800 border border-slate-700 rounded px-2 py-1 text-slate-200 text-xs"
+                          className="ml-2 bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded px-2 py-1 text-slate-700 dark:text-slate-200 text-xs"
                         >
                           <option value="heap">HEAP</option>
                           <option value="sequential">SEQUENTIAL</option>
@@ -270,7 +270,7 @@ export default function CsvImportModal({ tables = [], onClose, onUseScript }) {
 
                     <table className="w-full text-xs">
                       <thead>
-                        <tr className="text-slate-500 text-left">
+                        <tr className="text-slate-500 dark:text-slate-500 text-left">
                           <th className="pb-1 pr-2">Columna CSV</th>
                           <th className="pb-1 pr-2">Nombre en tabla</th>
                           <th className="pb-1 pr-2">Tipo</th>
@@ -283,22 +283,22 @@ export default function CsvImportModal({ tables = [], onClose, onUseScript }) {
                           const col = newColumns[i];
                           if (!col) return null;
                           return (
-                            <tr key={i} className="border-t border-slate-800/60">
-                              <td className="py-1 pr-2 text-slate-400 truncate max-w-[100px]" title={h}>
+                            <tr key={i} className="border-t border-slate-200 dark:border-slate-800/60">
+                              <td className="py-1 pr-2 text-slate-500 dark:text-slate-400 truncate max-w-[100px]" title={h}>
                                 {h}
                               </td>
                               <td className="py-1 pr-2">
                                 <input
                                   value={col.name}
                                   onChange={e => updateNewColumn(i, { name: toIdent(e.target.value, `col${i + 1}`) })}
-                                  className="bg-slate-800 border border-slate-700 rounded px-1.5 py-0.5 text-slate-200 w-28"
+                                  className="bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded px-1.5 py-0.5 text-slate-700 dark:text-slate-200 w-28"
                                 />
                               </td>
                               <td className="py-1 pr-2">
                                 <select
                                   value={col.type}
                                   onChange={e => updateNewColumn(i, { type: e.target.value })}
-                                  className="bg-slate-800 border border-slate-700 rounded px-1.5 py-0.5 text-slate-200"
+                                  className="bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded px-1.5 py-0.5 text-slate-700 dark:text-slate-200"
                                 >
                                   {TIPOS_DISPONIBLES.map(t => (
                                     <option key={t} value={t}>{t}</option>
@@ -312,10 +312,10 @@ export default function CsvImportModal({ tables = [], onClose, onUseScript }) {
                                     min={1}
                                     value={col.size}
                                     onChange={e => updateNewColumn(i, { size: parseInt(e.target.value, 10) || 1 })}
-                                    className="bg-slate-800 border border-slate-700 rounded px-1.5 py-0.5 text-slate-200 w-16"
+                                    className="bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded px-1.5 py-0.5 text-slate-700 dark:text-slate-200 w-16"
                                   />
                                 ) : (
-                                  <span className="text-slate-600">—</span>
+                                  <span className="text-slate-300 dark:text-slate-600">—</span>
                                 )}
                               </td>
                               <td className="py-1">
@@ -335,13 +335,13 @@ export default function CsvImportModal({ tables = [], onClose, onUseScript }) {
                 )}
 
                 {mode === 'existing' && (
-                  <div className="space-y-3 bg-slate-950/40 border border-slate-800 rounded p-3">
-                    <label className="text-xs text-slate-400 block">
+                  <div className="space-y-3 bg-slate-50 dark:bg-slate-950/40 border border-slate-200 dark:border-slate-800 rounded p-3">
+                    <label className="text-xs text-slate-500 dark:text-slate-400 block">
                       Tabla destino:
                       <select
                         value={existingTable}
                         onChange={e => handleExistingTableChange(e.target.value)}
-                        className="ml-2 bg-slate-800 border border-slate-700 rounded px-2 py-1 text-slate-200 text-xs"
+                        className="ml-2 bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded px-2 py-1 text-slate-700 dark:text-slate-200 text-xs"
                       >
                         {tables.map(t => (
                           <option key={t.name} value={t.name}>{t.name}</option>
@@ -352,7 +352,7 @@ export default function CsvImportModal({ tables = [], onClose, onUseScript }) {
                     {selectedExistingTable && (
                       <table className="w-full text-xs">
                         <thead>
-                          <tr className="text-slate-500 text-left">
+                          <tr className="text-slate-500 dark:text-slate-500 text-left">
                             <th className="pb-1 pr-2">Columna de la tabla</th>
                             <th className="pb-1 pr-2">Tipo</th>
                             <th className="pb-1">Columna del CSV</th>
@@ -360,11 +360,11 @@ export default function CsvImportModal({ tables = [], onClose, onUseScript }) {
                         </thead>
                         <tbody>
                           {selectedExistingTable.columns.map(col => (
-                            <tr key={col.name} className="border-t border-slate-800/60">
-                              <td className="py-1 pr-2 text-slate-300">
-                                {col.name} {col.is_pk && <span className="text-amber-400">(PK)</span>}
+                            <tr key={col.name} className="border-t border-slate-200 dark:border-slate-800/60">
+                              <td className="py-1 pr-2 text-slate-600 dark:text-slate-300">
+                                {col.name} {col.is_pk && <span className="text-amber-600 dark:text-amber-400">(PK)</span>}
                               </td>
-                              <td className="py-1 pr-2 text-slate-500">{col.type}</td>
+                              <td className="py-1 pr-2 text-slate-400 dark:text-slate-500">{col.type}</td>
                               <td className="py-1">
                                 <select
                                   value={existingMapping[col.name] ?? ''}
@@ -374,8 +374,8 @@ export default function CsvImportModal({ tables = [], onClose, onUseScript }) {
                                       [col.name]: e.target.value === '' ? null : parseInt(e.target.value, 10),
                                     }))
                                   }
-                                  className={`bg-slate-800 border rounded px-1.5 py-0.5 text-slate-200 ${
-                                    existingMapping[col.name] == null ? 'border-rose-600' : 'border-slate-700'
+                                  className={`bg-white dark:bg-slate-800 border rounded px-1.5 py-0.5 text-slate-700 dark:text-slate-200 ${
+                                    existingMapping[col.name] == null ? 'border-rose-400 dark:border-rose-600' : 'border-slate-300 dark:border-slate-700'
                                   }`}
                                 >
                                   <option value="">— sin asignar —</option>
@@ -395,7 +395,7 @@ export default function CsvImportModal({ tables = [], onClose, onUseScript }) {
 
               {/* Errores / warnings */}
               {errors.length > 0 && (
-                <div className="bg-rose-950/40 border border-rose-800/60 rounded p-2.5 text-rose-300 text-xs space-y-1">
+                <div className="bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-800/60 rounded p-2.5 text-rose-700 dark:text-rose-300 text-xs space-y-1">
                   {errors.map((e, i) => (
                     <div key={i} className="flex items-start gap-1.5">
                       <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" /> {e}
@@ -404,7 +404,7 @@ export default function CsvImportModal({ tables = [], onClose, onUseScript }) {
                 </div>
               )}
               {warnings.length > 0 && (
-                <div className="bg-amber-950/30 border border-amber-800/50 rounded p-2.5 text-amber-300 text-xs space-y-1">
+                <div className="bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800/50 rounded p-2.5 text-amber-700 dark:text-amber-300 text-xs space-y-1">
                   {warnings.map((w, i) => (
                     <div key={i} className="flex items-start gap-1.5">
                       <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" /> {w}
@@ -416,10 +416,10 @@ export default function CsvImportModal({ tables = [], onClose, onUseScript }) {
               {/* Paso 3: preview */}
               {script && (
                 <div>
-                  <label className="text-xs font-semibold text-slate-400 uppercase tracking-wide mb-1.5 block">
+                  <label className="text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wide mb-1.5 block">
                     3. Vista previa del SQL generado ({rowCount} INSERT{rowCount !== 1 ? 's' : ''})
                   </label>
-                  <pre className="bg-slate-950 border border-slate-800 rounded p-2.5 text-[11px] text-emerald-300 font-mono overflow-x-auto max-h-40">
+                  <pre className="bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded p-2.5 text-[11px] text-emerald-700 dark:text-emerald-300 font-mono overflow-x-auto max-h-40">
 {previewLines.join('\n')}
 {script.split('\n').length > previewLines.length ? `\n... (${script.split('\n').length - previewLines.length} línea(s) más)` : ''}
                   </pre>
@@ -430,12 +430,12 @@ export default function CsvImportModal({ tables = [], onClose, onUseScript }) {
         </div>
 
         {/* Footer */}
-        <div className="flex items-center justify-between px-4 py-3 border-t border-slate-800 bg-slate-950/40">
-          <p className="text-[11px] text-slate-500">
+        <div className="flex items-center justify-between px-4 py-3 border-t border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950/40">
+          <p className="text-[11px] text-slate-400 dark:text-slate-500">
             Esto solo carga el script en el editor: nada se ejecuta hasta que presiones <b>Ejecutar</b>.
           </p>
           <div className="flex gap-2">
-            <button onClick={onClose} className="px-3 py-1.5 text-xs text-slate-400 hover:text-slate-200 rounded">
+            <button onClick={onClose} className="px-3 py-1.5 text-xs text-slate-500 hover:text-slate-800 dark:text-slate-400 dark:hover:text-slate-200 rounded">
               Cancelar
             </button>
             <button

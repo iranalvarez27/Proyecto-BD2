@@ -385,6 +385,15 @@ class EngineAdapter:
                     "rows_estimated": 0,
                     "children": [],
                 })
+            elif "drop table" in step_lower:
+                nodes.append({
+                    "node_type": "DropTable",
+                    "method": step,
+                    "cost": 0.5,
+                    "estimated_time_ms": 0.5,
+                    "rows_estimated": 0,
+                    "children": [],
+                })
             elif "explain analyze" in step_lower:
                 nodes.append({
                     "node_type": "ExplainAnalyze",
