@@ -1,6 +1,6 @@
 from query.ast import (
     SelectNode, InsertNode, DeleteNode, Condition, BinaryCondition, OrderBy,
-    BeginNode, CommitNode, RollbackNode,
+    BeginNode, CommitNode, RollbackNode, ExplainNode, CreateTableNode,
 )
 from query.catalog import Catalog
 from common.types import Schema, DataType
@@ -8,6 +8,26 @@ from common.types import Schema, DataType
 
 class SemanticError(Exception):
     pass
+
+TAMANOS_POR_DEFECTO = {DataType.INT: 4, DataType.SMALLINT: 2, DataType.BIGINT: 8, DataType.FLOAT: 4, DataType.DOUBLE: 8, DataType.BOOL: 1,}
+
+def resolver_tipo_columna(tipo_texto: str, tamano: int | None) -> tuple[DataType, int]:
+    try:
+        tipo = DataType(tipo_texto.upper())
+    except ValueError:
+        tipos_validos = ", ".join(t.value for t in DataType)
+        raise SemanticError(f"tipo de dato desconocido: '{tipo_texto}' (validos: {tipos_validos})")
+
+    if tipo in (DataType.CHAR, DataType.VARCHAR):
+        if not tamano or tamano <= 0:
+            raise SemanticError(
+                f"la columna de tipo {tipo.value} necesita un tamano explicito, ej. {tipo.value}(50)")
+        return tipo, tamano
+
+    if tamano is not None and tamano != TAMANOS_POR_DEFECTO[tipo]:
+        raise SemanticError(
+            f"el tipo {tipo.value} no acepta un tamano explicito (usa {tipo.value} sin parentesis)")
+    return tipo, TAMANOS_POR_DEFECTO[tipo]
 
 
 class SemanticAnalyzer:
@@ -21,8 +41,12 @@ class SemanticAnalyzer:
             self.validar_insert(nodo)
         elif isinstance(nodo, DeleteNode):
             self.validar_delete(nodo)
+        elif isinstance(nodo, ExplainNode):
+            self.validar(nodo.statement)  
+        elif isinstance(nodo, CreateTableNode):
+            self.validar_create_table(nodo)
         elif isinstance(nodo, (BeginNode, CommitNode, RollbackNode)):
-            pass  # sin validaciones semanticas: solo control transaccional
+            pass
         else:
             raise SemanticError(f"tipo de nodo desconocido: {type(nodo).__name__}")
 
@@ -172,3 +196,24 @@ class SemanticAnalyzer:
         schema = self.get_schema(nodo.tabla)
         if nodo.where is not None:
             self.validar_where(schema, nodo.where)
+
+    def validar_create_table(self, nodo: CreateTableNode) -> None:
+        if self._catalog.existe_tabla(nodo.tabla):
+            raise SemanticError(f"la tabla '{nodo.tabla}' ya existe")
+        if not nodo.columnas:
+            raise SemanticError(f"CREATE TABLE '{nodo.tabla}' necesita al menos una columna")
+
+        nombres_vistos = set()
+        pk_count = 0
+        for col_def in nodo.columnas:
+            if col_def.nombre in nombres_vistos:
+                raise SemanticError(f"la columna '{col_def.nombre}' esta repetida en CREATE TABLE '{nodo.tabla}'")
+            nombres_vistos.add(col_def.nombre)
+            resolver_tipo_columna(col_def.tipo, col_def.tamano)
+            if col_def.is_pk:
+                pk_count += 1
+
+        if pk_count == 0:
+            raise SemanticError(f"CREATE TABLE '{nodo.tabla}' necesita exactamente una columna PRIMARY KEY")
+        if pk_count > 1:
+            raise SemanticError(f"CREATE TABLE '{nodo.tabla}' solo admite una columna PRIMARY KEY")

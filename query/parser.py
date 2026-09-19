@@ -1,7 +1,7 @@
 from query.tokens import Token, TokenType
 from query.ast import (
     SelectNode, InsertNode, DeleteNode, Condition, BinaryCondition, OrderBy, JoinClause,
-    BeginNode, CommitNode, RollbackNode,
+    BeginNode, CommitNode, RollbackNode, ExplainNode, ColumnDef, CreateTableNode,
 )
 
 class ParserError(Exception):
@@ -47,6 +47,10 @@ class Parser:
             nodo = self.parse_commit()
         elif self.coincide(TokenType.ROLLBACK) or self.coincide(TokenType.ABORT):
             nodo = self.parse_rollback()
+        elif self.coincide(TokenType.EXPLAIN):
+            nodo = self.parse_explain()
+        elif self.coincide(TokenType.CREATE):
+            nodo = self.parse_create_table()
         else:
             raise ParserError(f"error en la consulta, empieza con {self.actual().value}")
 
@@ -73,6 +77,62 @@ class Parser:
         # ROLLBACK | ABORT
         self.avanzar()
         return RollbackNode()
+
+    def parse_explain(self):
+        self.esperar(TokenType.EXPLAIN)
+        analyze = False
+        if self.coincide(TokenType.ANALYZE):
+            self.avanzar()
+            analyze = True
+
+        if self.coincide(TokenType.SELECT):
+            statement = self.parse_select()
+        elif self.coincide(TokenType.INSERT):
+            statement = self.parse_insert()
+        elif self.coincide(TokenType.DELETE):
+            statement = self.parse_delete()
+        else:
+            t = self.actual()
+            raise ParserError(
+                f"pos {t.pos}: EXPLAIN solo soporta SELECT, INSERT o DELETE, salio {t.type.name} ({t.value})")
+        return ExplainNode(statement, analyze)
+
+    def parse_create_table(self):
+        self.esperar(TokenType.CREATE)
+        self.esperar(TokenType.TABLE)
+        tabla = self.esperar(TokenType.IDENT).value
+        self.esperar(TokenType.LPAREN)
+        columnas = [self.parse_column_def()]
+        while self.coincide(TokenType.COMMA):
+            self.avanzar()
+            columnas.append(self.parse_column_def())
+        self.esperar(TokenType.RPAREN)
+
+        storage = "heap"
+        if self.coincide(TokenType.USING):
+            self.avanzar()
+            tok = self.esperar(TokenType.IDENT)
+            valor = tok.value.lower()
+            if valor not in ("heap", "sequential"):
+                raise ParserError(f"pos {tok.pos}: USING debe ser HEAP o SEQUENTIAL, salio '{tok.value}'")
+            storage = valor
+        return CreateTableNode(tabla, columnas, storage)
+
+    def parse_column_def(self):
+        nombre = self.esperar(TokenType.IDENT).value
+        tipo_tok = self.esperar(TokenType.IDENT)
+        tamano = None
+        if self.coincide(TokenType.LPAREN):
+            self.avanzar()
+            tam_tok = self.esperar(TokenType.NUMBER)
+            tamano = int(tam_tok.value)
+            self.esperar(TokenType.RPAREN)
+        is_pk = False
+        if self.coincide(TokenType.PRIMARY):
+            self.avanzar()
+            self.esperar(TokenType.KEY)
+            is_pk = True
+        return ColumnDef(nombre, tipo_tok.value, tamano, is_pk)
 
     def parse_select(self):
         self.esperar(TokenType.SELECT)

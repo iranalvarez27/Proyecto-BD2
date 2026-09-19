@@ -59,3 +59,24 @@ class CommitNode:
 @dataclass
 class RollbackNode:
     pass
+
+
+@dataclass
+class ExplainNode:
+    statement: object
+    analyze: bool = False
+
+
+@dataclass
+class ColumnDef:
+    nombre: str
+    tipo: str
+    tamano: int = None
+    is_pk: bool = False
+
+
+@dataclass
+class CreateTableNode:
+    tabla: str
+    columnas: list
+    storage: str = "heap"

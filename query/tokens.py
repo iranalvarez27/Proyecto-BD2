@@ -48,6 +48,15 @@ class TokenType(Enum):
     ROLLBACK = 38
     ABORT = 39
 
+    EXPLAIN = 40
+    ANALYZE = 41
+
+    CREATE = 42
+    TABLE = 43
+    PRIMARY = 44
+    KEY = 45
+    USING = 46
+
 KEYWORDS = {"select": TokenType.SELECT, "from": TokenType.FROM, "where": TokenType.WHERE,
             "insert": TokenType.INSERT, "into": TokenType.INTO, "values": TokenType.VALUES,
             "delete": TokenType.DELETE, "order": TokenType.ORDER, "by": TokenType.BY,
@@ -56,7 +65,10 @@ KEYWORDS = {"select": TokenType.SELECT, "from": TokenType.FROM, "where": TokenTy
             "join": TokenType.JOIN, "on": TokenType.ON,
             "begin": TokenType.BEGIN, "transaction": TokenType.TRANSACTION,
             "start": TokenType.START, "commit": TokenType.COMMIT, "end": TokenType.END,
-            "rollback": TokenType.ROLLBACK, "abort": TokenType.ABORT,}
+            "rollback": TokenType.ROLLBACK, "abort": TokenType.ABORT,
+            "explain": TokenType.EXPLAIN, "analyze": TokenType.ANALYZE,
+            "create": TokenType.CREATE, "table": TokenType.TABLE,
+            "primary": TokenType.PRIMARY, "key": TokenType.KEY, "using": TokenType.USING,}
 
 @dataclass
 class Token:

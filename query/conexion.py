@@ -1,21 +1,22 @@
+import os
 import tempfile
 import threading
-
+import time
 from query.lexer import Lexer, LexerError
 from query.parser import Parser, ParserError
-from query.semantic import SemanticAnalyzer, SemanticError
-from query.catalog import Catalog, TableInfo, STORAGE_HEAP, STORAGE_SEQUENTIAL
-from query.ast import (
-    SelectNode, InsertNode, DeleteNode, Condition, BinaryCondition,
-    BeginNode, CommitNode, RollbackNode,
-)
+from query.semantic import SemanticAnalyzer, SemanticError, resolver_tipo_columna
+from query.catalog import (Catalog, TableInfo, STORAGE_HEAP, STORAGE_SEQUENTIAL, INDEX_BPLUS, INDEX_CLUSTERED,)
+from query.ast import (SelectNode, InsertNode, DeleteNode, Condition, BinaryCondition,BeginNode, CommitNode, RollbackNode, ExplainNode, CreateTableNode,)
 from query.tokens import TokenType
 from common.record import Record
 from common.types import Column, DataType, Schema
 from engine.external import external_group_by, external_hash_join, external_sort
-from index.bplus_tree import DuplicateKey
+from index.bplus_tree import BPlusTree, DuplicateKey
+from index.clustered_bplus_tree import ClusteredBPlusTree
 from index.hash_utils import UnhashableKeyType
 from index.key_codec import INT64_MAX, INT64_MIN, KeyTooLong, KeyTypeMismatch, UnorderableKey
+from storage.heap_file import HeapFile
+from storage.sequential_file import SequentialFile
 from transaction.manager import TransactionManager, TransactionError
 from transaction.locks import DeadlockError, LockTimeoutError
 
@@ -27,8 +28,7 @@ class ExecutionError(Exception):
 
 ERRORES_EJECUCION = (ExecutionError, DuplicateKey, UnhashableKeyType, KeyTooLong, KeyTypeMismatch, UnorderableKey,)
 class QueryResult:
-    def __init__(self, filas=None, resumen=None, plan=None, error=None, tipo_error=None,
-                 transaccion_activa=False, xact_id=None):
+    def __init__(self, filas=None, resumen=None, plan=None, error=None, tipo_error=None, transaccion_activa=False, xact_id=None):
         self.filas = filas
         self.resumen = resumen
         if plan is None:
@@ -48,16 +48,16 @@ class QueryResult:
 
 class Conexion:
     def __init__(self, catalog: Catalog, txn_manager: TransactionManager | None = None,
-                 buffer_pages: int = BUFFER_PAGES, tmp_dir: str | None = None):
+                 buffer_pages: int = BUFFER_PAGES, tmp_dir: str | None = None,
+                 pool=None, data_dir: str | None = None):
         self.catalog = catalog
         self.semantic = SemanticAnalyzer(catalog)
         self.buffer_pages = buffer_pages
         self.tmp_dir = tmp_dir
+        self.pool = pool
+        self.data_dir = data_dir
         self.txn_manager = txn_manager or TransactionManager()
         self.lock_manager = self.txn_manager.lock_manager
-        # Un solo Conexion se comparte entre requests/hilos concurrentes; el plan
-        # de ejecucion se guarda por hilo para que dos ejecuciones simultaneas no
-        # se mezclen en la misma lista.
         self._local = threading.local()
 
     @property
@@ -94,12 +94,13 @@ class Conexion:
             return self._ejecutar_commit(session_id)
         if isinstance(nodo, RollbackNode):
             return self._ejecutar_rollback(session_id)
+        if isinstance(nodo, ExplainNode):
+            return self._ejecutar_explain(nodo, session_id)
 
-        if not isinstance(nodo, (SelectNode, InsertNode, DeleteNode)):
+        if not isinstance(nodo, (SelectNode, InsertNode, DeleteNode, CreateTableNode)):
             return QueryResult(error=f"nodo no ejecutable: {type(nodo).__name__}", tipo_error="ejecucion")
 
         modo = "S" if isinstance(nodo, SelectNode) else "X"
-        # los locks son por tabla: un JOIN lee ambas
         recursos = [nodo.tabla]
         if isinstance(nodo, SelectNode) and nodo.join is not None and nodo.join.tabla != nodo.tabla:
             recursos.append(nodo.join.tabla)
@@ -112,7 +113,6 @@ class Conexion:
             self.txn_manager.abortar_por_deadlock_o_timeout(session_id)
             self._resync_tras_rollback()
             if not txn_estaba_activa:
-                # autocommit con varios recursos: soltar los que ya se habian concedido
                 for recurso in recursos:
                     self.lock_manager.release_resource(session_id, recurso)
             tipo = "deadlock" if isinstance(e, DeadlockError) else "timeout"
@@ -129,6 +129,9 @@ class Conexion:
                 elif isinstance(nodo, InsertNode):
                     resumen = self.ejecutar_insert(nodo)
                     resultado = QueryResult(resumen=resumen, plan=self.plan)
+                elif isinstance(nodo, CreateTableNode):
+                    resumen = self.ejecutar_create_table(nodo, session_id)
+                    resultado = QueryResult(resumen=resumen, plan=self.plan)
                 else:
                     resumen = self.ejecutar_delete(nodo)
                     resultado = QueryResult(resumen=resumen, plan=self.plan)
@@ -136,7 +139,6 @@ class Conexion:
             resultado = QueryResult(error=str(e), tipo_error="ejecucion", plan=self.plan)
         finally:
             if not txn_estaba_activa:
-                # sentencia autocommit: el lock era transitorio, solo por la duracion de esta sentencia
                 for recurso in recursos:
                     self.lock_manager.release_resource(session_id, recurso)
 
@@ -146,7 +148,7 @@ class Conexion:
         resultado.xact_id = txn.xact_id if txn is not None else None
         return resultado
 
-    # ------------------------------------------------------- control transaccional
+    # control transaccional
 
     def _ejecutar_begin(self, session_id: str) -> QueryResult:
         try:
@@ -189,11 +191,6 @@ class Conexion:
         return resultado
 
     def _resync_tras_rollback(self) -> None:
-        """El undo restaura bytes de archivo directamente (bypaseando los
-        metodos normales de storages e indices), asi que hay que forzar a cada
-        uno a recargar su estado en memoria desde disco: cabecera/cola y
-        contadores del secuencial, cache de espacio libre del heap, y
-        root/height del B+ o directorio del hash. El storage va primero."""
         for tabla in self.catalog.listar_tablas():
             info = self.catalog.get_table(tabla)
             objetos = [info.storage] + [indice for indice, _tipo in info.indices.values()]
@@ -201,6 +198,84 @@ class Conexion:
                 reload_fn = getattr(objeto, "reload", None)
                 if reload_fn is not None:
                     reload_fn()
+
+    def _ejecutar_explain(self, nodo: ExplainNode, session_id: str) -> QueryResult:
+        interna = nodo.statement
+        modo = "S" if isinstance(interna, SelectNode) else "X"
+        recursos = [interna.tabla]
+        if isinstance(interna, SelectNode) and interna.join is not None and interna.join.tabla != interna.tabla:
+            recursos.append(interna.join.tabla)
+        txn_estaba_activa = self.txn_manager.is_active(session_id)
+
+        try:
+            for recurso in recursos:
+                self.lock_manager.acquire(session_id, recurso, modo)
+        except (DeadlockError, LockTimeoutError) as e:
+            self.txn_manager.abortar_por_deadlock_o_timeout(session_id)
+            self._resync_tras_rollback()
+            if not txn_estaba_activa:
+                for recurso in recursos:
+                    self.lock_manager.release_resource(session_id, recurso)
+            tipo = "deadlock" if isinstance(e, DeadlockError) else "timeout"
+            return QueryResult(error=str(e), tipo_error=tipo)
+
+        for recurso in recursos:
+            self.txn_manager.registrar_acceso(session_id, recurso, modo)
+
+        self.plan = []
+        dry_run = not nodo.analyze
+        error = None
+        tipo_error = None
+        filas = None
+        filas_afectadas = 0
+        inicio = time.perf_counter()
+        try:
+            with self.txn_manager.bind_current(session_id):
+                if isinstance(interna, SelectNode):
+                    filas = self.ejecutar_select(interna)
+                    filas_afectadas = len(filas)
+                elif isinstance(interna, InsertNode):
+                    resumen = self.ejecutar_insert(interna, dry_run=dry_run)
+                    filas_afectadas = resumen["filas_afectadas"]
+                else:
+                    resumen = self.ejecutar_delete(interna, dry_run=dry_run)
+                    filas_afectadas = resumen["filas_afectadas"]
+        except ERRORES_EJECUCION as e:
+            error = str(e)
+            tipo_error = "ejecucion"
+        finally:
+            if not txn_estaba_activa:
+                for recurso in recursos:
+                    self.lock_manager.release_resource(session_id, recurso)
+        duracion_ms = (time.perf_counter() - inicio) * 1000
+
+        plan = list(self.plan)
+        etiqueta = "EXPLAIN ANALYZE" if nodo.analyze else "EXPLAIN"
+        if error is None:
+            if nodo.analyze:
+                plan.append(f"{etiqueta}: tiempo real = {duracion_ms:.3f} ms, filas reales = {filas_afectadas}")
+            else:
+                que_filas = "encontradas" if isinstance(interna, SelectNode) else "que resultarian afectadas"
+                plan.append(f"{etiqueta}: plan estimado, sin efectos en disco (filas {que_filas} = {filas_afectadas})")
+
+        filas_salida = filas if (nodo.analyze and isinstance(interna, SelectNode)) else None
+        resumen_salida = None
+        if error is None:
+            resumen_salida = {
+                "operacion": etiqueta,
+                "sentencia": type(interna).__name__.replace("Node", "").upper(),
+                "filas_afectadas": filas_afectadas,
+                "estimado": not nodo.analyze,
+                "tiempo_ms": round(duracion_ms, 3) if nodo.analyze else None,
+            }
+
+        resultado = QueryResult(filas=filas_salida, resumen=resumen_salida, plan=plan,
+                                 error=error, tipo_error=tipo_error)
+        txn_activa = self.txn_manager.is_active(session_id)
+        txn = self.txn_manager.get_active(session_id)
+        resultado.transaccion_activa = txn_activa
+        resultado.xact_id = txn.xact_id if txn is not None else None
+        return resultado
 
     def leer_todo(self, info: TableInfo):
         nombres_col = [c.name for c in info.schema.columns]
@@ -514,7 +589,7 @@ class Conexion:
                          f"{stats['runs']} runs, {stats['passes']} pasadas)")
         return filas
 
-    def ejecutar_insert(self, nodo: InsertNode) -> dict:
+    def ejecutar_insert(self, nodo: InsertNode, dry_run: bool = False) -> dict:
         info = self.catalog.get_table(nodo.tabla)
         record = Record(nodo.valores)
 
@@ -535,6 +610,11 @@ class Conexion:
                     for fila in self.leer_todo(info):
                         if fila[pk_col.name] == nueva_pk:
                             raise ExecutionError(f"no se pudo insertar: clave {nueva_pk} ya existe")
+
+        if dry_run:
+            self.plan.append(f"INSERT en '{info.nombre}' ({info.tipo_storage}) [no ejecutado]")
+            return {"operacion": "INSERT", "filas_afectadas": 1}
+
         try:
             if info.tipo_storage == STORAGE_HEAP:
                 rid = info.storage.insert(record, info.schema)
@@ -564,7 +644,6 @@ class Conexion:
         return info.storage.needs_reorganization()
 
     def reorganizar_tabla(self, tabla: str) -> None:
-        """Reorganiza el archivo y reconstruye todos los indices de la tabla."""
         info = self.catalog.get_table(tabla)
         indice_clustered = self._indice_clustered(tabla, info.key_column)
         if indice_clustered is not None:
@@ -614,9 +693,10 @@ class Conexion:
             valor = record.values[idx]
             indice.insert(valor, rid)
 
-    def ejecutar_delete(self, nodo: DeleteNode) -> dict:
+    def ejecutar_delete(self, nodo: DeleteNode, dry_run: bool = False) -> dict:
         info = self.catalog.get_table(nodo.tabla)
         where = nodo.where
+        sufijo = " [no ejecutado]" if dry_run else ""
         if where is not None:
             es_por_clave = (
                 isinstance(where, Condition)
@@ -626,7 +706,10 @@ class Conexion:
             )
             if es_por_clave:
                 clave = where.valor
-                self.plan.append(f"DELETE por clave '{info.key_column}={clave}' en '{info.nombre}'")
+                self.plan.append(f"DELETE por clave '{info.key_column}={clave}' en '{info.nombre}'{sufijo}")
+                if dry_run:
+                    existe = info.storage.search(clave) is not None
+                    return {"operacion": "DELETE", "filas_afectadas": 1 if existe else 0}
                 indice_clustered = self._indice_clustered(nodo.tabla, info.key_column)
                 if indice_clustered is not None:
                     borrado = indice_clustered.delete(clave)
@@ -645,6 +728,9 @@ class Conexion:
             for fila in self.leer_todo(info):
                 if where is None or self.cumple_where(where, fila):
                     claves.append(fila[info.key_column])
+            self.plan.append(f"escaneo + DELETE por clave en '{info.nombre}'{sufijo}")
+            if dry_run:
+                return {"operacion": "DELETE", "filas_afectadas": len(claves)}
             indice_clustered = self._indice_clustered(nodo.tabla, info.key_column)
             borradas = 0
             for clave in claves:
@@ -656,7 +742,6 @@ class Conexion:
                     rid, record = borrado
                     self.actualizar_indices_delete(nodo.tabla, info, record, rid)
                     borradas += 1
-            self.plan.append(f"escaneo + DELETE por clave en '{info.nombre}'")
             self._reorganizar_si_hace_falta(nodo.tabla, info)
             return {"operacion": "DELETE", "filas_afectadas": borradas}
 
@@ -667,10 +752,12 @@ class Conexion:
                 fila = dict(zip(nombres_col, record.values))
                 if where is None or self.cumple_where(where, fila):
                     candidatos.append((rid, record))
+            self.plan.append(f"escaneo + DELETE por RID en '{info.nombre}'{sufijo}")
+            if dry_run:
+                return {"operacion": "DELETE", "filas_afectadas": len(candidatos)}
             for rid, record in candidatos:
                 self.actualizar_indices_delete(nodo.tabla, info, record, rid)
                 info.storage.delete(rid)
-            self.plan.append(f"escaneo + DELETE por RID en '{info.nombre}'")
             return {"operacion": "DELETE", "filas_afectadas": len(candidatos)}
 
         raise ExecutionError(f"storage desconocido: {info.tipo_storage}")
@@ -683,3 +770,45 @@ class Conexion:
             idx = info.schema.column_index(columna)
             valor = record.values[idx]
             indice.delete(valor, rid)
+
+    def ejecutar_create_table(self, nodo: CreateTableNode, session_id: str) -> dict:
+        if self.txn_manager.is_active(session_id):
+            raise ExecutionError("CREATE TABLE no se puede ejecutar dentro de una transaccion (BEGIN...COMMIT); "
+                "ejecutala como sentencia autocommit, fuera del BEGIN")
+        if self.pool is None or self.data_dir is None:
+            raise ExecutionError("CREATE TABLE no esta disponible: esta Conexion no tiene acceso a un BufferPool ni a un directorio de datos (pool/data_dir)")
+        if self.catalog.existe_tabla(nodo.tabla):
+            raise ExecutionError(f"la tabla '{nodo.tabla}' ya existe")
+
+        columnas = []
+        pk_col_name = None
+        for col_def in nodo.columnas:
+            tipo, tamano = resolver_tipo_columna(col_def.tipo, col_def.tamano)
+            columnas.append(Column(col_def.nombre, tipo, tamano, col_def.is_pk))
+            if col_def.is_pk:
+                pk_col_name = col_def.nombre
+        schema = Schema(nodo.tabla, columnas)
+        pk_dtype = schema.columns[schema.column_index(pk_col_name)].type
+
+        if nodo.storage == STORAGE_SEQUENTIAL:
+            data_path = os.path.join(self.data_dir, f"{nodo.tabla}.bin")
+            aux_path = os.path.join(self.data_dir, f"{nodo.tabla}_aux.bin")
+            storage = SequentialFile(self.pool, data_path, aux_path, schema, pk_col_name)
+            self.catalog.register_table(nodo.tabla, schema, storage, STORAGE_SEQUENTIAL, pk_col_name)
+
+            idx_path = os.path.join(self.data_dir, f"{nodo.tabla}_{pk_col_name}_clustered.idx")
+            indice_pk = ClusteredBPlusTree(self.pool, storage, idx_path)
+            self.catalog.register_index(nodo.tabla, pk_col_name, indice_pk, INDEX_CLUSTERED)
+        else:
+            heap_path = os.path.join(self.data_dir, f"{nodo.tabla}.bin")
+            storage = HeapFile(self.pool, heap_path)
+            self.catalog.register_table(nodo.tabla, schema, storage, STORAGE_HEAP, pk_col_name)
+
+            idx_path = os.path.join(self.data_dir, f"{nodo.tabla}_{pk_col_name}_bplus.idx")
+            indice_pk = BPlusTree(self.pool, idx_path, pk_dtype, unique=True)
+            self.catalog.register_index(nodo.tabla, pk_col_name, indice_pk, INDEX_BPLUS)
+
+        self.plan.append(
+            f"CREATE TABLE '{nodo.tabla}' ({nodo.storage}, {len(columnas)} columnas, "
+            f"PK='{pk_col_name}' con indice automatico)")
+        return {"operacion": "CREATE TABLE", "tabla": nodo.tabla, "filas_afectadas": 0}
