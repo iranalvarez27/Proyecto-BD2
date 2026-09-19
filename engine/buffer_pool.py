@@ -1,5 +1,4 @@
 from collections import OrderedDict
-
 from engine.file_manager import FileManager
 
 POOL_FRAMES = 256
@@ -31,7 +30,6 @@ class BufferPool:
         return data
 
     def write_page(self, path: str, page_id: int, data: bytes) -> None:
-        # file first: if the write fails, the frame keeps the old page
         self.fm.write_page(path, page_id, data)
         self._put(path, page_id, bytes(data))
 

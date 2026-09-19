@@ -24,7 +24,6 @@ def _fixed_struct_code(col) -> str:
 
 
 def _header_format(schema: Schema) -> str:
-    """Fixed column codes followed by one length prefix per VARCHAR column."""
     fixed = "".join(
         _fixed_struct_code(c) for c in schema.columns if c.type != DataType.VARCHAR
     )
@@ -33,9 +32,6 @@ def _header_format(schema: Schema) -> str:
 
 
 class Record:
-    """
-    A row's values, positionally aligned with schema.columns.
-    """
 
     def __init__(self, values: list):
         self.values = values
@@ -112,14 +108,10 @@ class Record:
 
     @staticmethod
     def fixed_size(schema: Schema) -> int:
-        """Size of the fixed section only. Equals the full record size
-        only when the schema has no VARCHAR columns."""
         fixed = "".join(
             _fixed_struct_code(c) for c in schema.columns if c.type != DataType.VARCHAR
         )
         return struct.calcsize("<" + fixed)
 
     def packed_size(self, schema: Schema) -> int:
-        """Real size of this record once packed. Storage should use this
-        instead of fixed_size when the schema has VARCHAR columns."""
         return len(self.pack(schema))

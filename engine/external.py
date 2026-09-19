@@ -1,6 +1,5 @@
 import heapq
 import os
-
 from common.page import PAGE_SIZE
 from common.record import Record
 

@@ -15,13 +15,8 @@ try:
 except ModuleNotFoundError:
     from engine_adapter import EngineAdapter
 
-app = FastAPI(
-    title="Minigestor Multimodal API",
-    description="API REST para el Frontend del Minigestor de Base de Datos (BD2)",
-    version="1.0.0",
-)
+app = FastAPI(title="Minigestor Multimodal API",description="API REST para el Frontend del Minigestor de Base de Datos (BD2)",version="1.0.0",)
 
-# Enable CORS for Vite frontend
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -32,11 +27,10 @@ app.add_middleware(
 
 engine = EngineAdapter()
 
-
 class QueryRequest(BaseModel):
     query: str
     session_id: Optional[str] = None
-
+    analyze: Optional[bool] = False
 
 class ReorganizeRequest(BaseModel):
     table_name: str
@@ -49,33 +43,26 @@ def health_check():
 
 @app.get("/api/session")
 def new_session():
-    """Genera un session_id nuevo para que el frontend identifique sus
-    transacciones (BEGIN TRANSACTION / END TRANSACTION / ROLLBACK)."""
     return {"session_id": str(uuid.uuid4())}
 
 
 @app.get("/api/tables")
 def get_tables():
-    """Returns all registered tables, columns, indexes and live storage metrics."""
     return engine.get_tables_metadata()
 
 
 @app.post("/api/query")
 def execute_query(req: QueryRequest):
-    """Executes a SQL query for a session, returning result rows, execution plan
-    and transactional state (active/xact_id)."""
     return engine.execute_query(req.query, req.session_id)
 
 
 @app.post("/api/explain")
 def explain_query(req: QueryRequest):
-    """Generates and returns the visual execution plan for a SQL query."""
-    return engine.explain_query(req.query)
+    return engine.explain_query(req.query, req.session_id, analyze=bool(req.analyze))
 
 
 @app.post("/api/tables/reorganize")
 def reorganize_table(req: ReorganizeRequest):
-    """Triggers reorganization on a SequentialFile when wasted_ratio exceeds threshold."""
     try:
         return engine.reorganize_table(req.table_name)
     except ValueError as ex:
@@ -84,7 +71,6 @@ def reorganize_table(req: ReorganizeRequest):
 
 @app.post("/api/seed")
 def seed_database():
-    """Forces reseeding demo tables on disk."""
     engine.seed_data_if_empty()
     return {"success": True, "tables": engine.get_tables_metadata()}
 

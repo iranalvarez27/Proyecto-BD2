@@ -1,16 +1,13 @@
 import struct
-
 from common.page import PAGE_SIZE
 from engine.buffer_pool import BufferPool
 
 NIL = -1
 
-
 class Segment:
     def __init__(self, pool: BufferPool, path: str):
         self.pool = pool
         self.path = path
-        # persisted by the owner in its metapage
         self.free_head = NIL
 
     def page_count(self) -> int:
@@ -26,7 +23,6 @@ class Segment:
         return self.pool.append_page(self.path, data)
 
     def truncate(self, n_pages: int) -> None:
-        # free pages past n_pages would dangle: the list starts over
         self.pool.truncate(self.path, n_pages)
         self.free_head = NIL
 

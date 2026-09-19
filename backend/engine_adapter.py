@@ -38,12 +38,12 @@ class EngineAdapter:
         # /tmp suele ser tmpfs (RAM): los runs externos van a disco de verdad
         tmp_dir = os.path.join(data_dir, "tmp")
         os.makedirs(tmp_dir, exist_ok=True)
-        self.conexion = Conexion(self.catalog, self.txn_manager, tmp_dir=tmp_dir)
+        self.conexion = Conexion(self.catalog, self.txn_manager, tmp_dir=tmp_dir,
+                                  pool=self.pool, data_dir=self.data_dir)
         self.clustered_trees: Dict[str, ClusteredBPlusTree] = {}
         self.init_database()
 
     def init_database(self):
-        """Initialize tables, storage files, and indexes in the real Catalog."""
         # 1. Table 'estudiantes' -> HeapFile
         schema_estudiantes = Schema(
             table_name="estudiantes",
@@ -105,7 +105,6 @@ class EngineAdapter:
         self.catalog.register_index("cursos", "codigo", clustered_tree, INDEX_CLUSTERED)
 
     def seed_data_if_empty(self):
-        """Populate initial records and synchronize index entries if files are fresh."""
         info_est = self.catalog.get_table("estudiantes")
         heap: HeapFile = info_est.storage
         if heap.page_count() == 0:
@@ -174,7 +173,6 @@ class EngineAdapter:
             ]
 
             idx_list = []
-            # List all registered indexes (including clustered)
             for col_name, (idx_obj, idx_type) in info.indices.items():
                 is_clustered = (idx_type == INDEX_CLUSTERED)
                 idx_list.append({
@@ -239,12 +237,6 @@ class EngineAdapter:
     def execute_query(self, sql: str, session_id: Optional[str] = None) -> Dict[str, Any]:
         start_time = time.time()
         sql_clean = sql.strip()
-        # Cada request sin session_id explicito (curl suelto, o el cliente
-        # que aun no llamo a /api/session) recibe una identidad propia y
-        # unica: si dos de esas peticiones comparten un mismo id constante,
-        # dejarian de excluirse mutuamente entre si (acquire() ve el lock ya
-        # otorgado a "la misma sesion" y no espera), rompiendo el aislamiento
-        # justo entre los clientes que mas lo necesitan.
         session_id = session_id or str(uuid.uuid4())
 
         if not sql_clean:
@@ -360,7 +352,6 @@ class EngineAdapter:
         }
 
     def _build_plan_tree(self, plan_steps: List[str], sql: str, actual_rows: Optional[int] = None) -> Dict[str, Any]:
-        """Convert linear query plan steps from Conexion into a visual hierarchical tree with realistic row counts."""
         default_rows = actual_rows if actual_rows is not None else 1
         if not plan_steps:
             return {
@@ -382,6 +373,34 @@ class EngineAdapter:
                     "cost": 0.0,
                     "estimated_time_ms": 0.0,
                     "rows_estimated": 0,
+                    "children": [],
+                })
+
+            elif "create table" in step_lower:
+                nodes.append({
+                    "node_type": "CreateTable",
+                    "method": step,
+                    "cost": 0.5,
+                    "estimated_time_ms": 0.5,
+                    "rows_estimated": 0,
+                    "children": [],
+                })
+            elif "explain analyze" in step_lower:
+                nodes.append({
+                    "node_type": "ExplainAnalyze",
+                    "method": step,
+                    "cost": 0.0,
+                    "estimated_time_ms": 0.0,
+                    "rows_estimated": actual_rows if actual_rows is not None else 0,
+                    "children": [],
+                })
+            elif step_lower.startswith("explain:"):
+                nodes.append({
+                    "node_type": "ExplainEstimate",
+                    "method": step,
+                    "cost": 0.0,
+                    "estimated_time_ms": 0.0,
+                    "rows_estimated": actual_rows if actual_rows is not None else 0,
                     "children": [],
                 })
             # antes que los indices: "external hash" contiene "hash"
@@ -453,15 +472,7 @@ class EngineAdapter:
                     "rows_estimated": actual_rows if actual_rows is not None else 10,
                     "children": [],
                 })
-            elif "escaneo" in step_lower or "heap" in step_lower:
-                nodes.append({
-                    "node_type": "FullTableScan",
-                    "method": step,
-                    "cost": 2.50,
-                    "rows_estimated": actual_rows if actual_rows is not None else 10,
-                    "children": [],
-                })
-            elif "insert" in step_lower:
+            elif step_lower.startswith("insert"):
                 nodes.append({
                     "node_type": "InsertTuple",
                     "method": step,
@@ -469,12 +480,20 @@ class EngineAdapter:
                     "rows_estimated": actual_rows if actual_rows is not None else 1,
                     "children": [],
                 })
-            elif "delete" in step_lower:
+            elif step_lower.startswith("delete"):
                 nodes.append({
                     "node_type": "DeleteTuple",
                     "method": step,
                     "cost": 1.5,
                     "rows_estimated": actual_rows if actual_rows is not None else 1,
+                    "children": [],
+                })
+            elif "escaneo" in step_lower or "heap" in step_lower:
+                nodes.append({
+                    "node_type": "FullTableScan",
+                    "method": step,
+                    "cost": 2.50,
+                    "rows_estimated": actual_rows if actual_rows is not None else 10,
                     "children": [],
                 })
             else:
@@ -507,29 +526,9 @@ class EngineAdapter:
         }
         return root
 
-    def explain_query(self, sql: str) -> Dict[str, Any]:
-        """Runs the query to extract the real execution plan."""
-        res = self.conexion.execute(sql.strip())
-        if not res.ok:
-            return {
-                "query": sql,
-                "root_node": {
-                    "node_type": "ErrorInQuery",
-                    "error": f"{res.tipo_error}: {res.error}",
-                    "cost": 0.0,
-                    "estimated_time_ms": 0.0,
-                    "rows_estimated": 0,
-                    "children": [],
-                },
-            }
-
-        actual_count = None
-        if res.filas is not None:
-            actual_count = len(res.filas)
-        elif res.resumen is not None:
-            actual_count = res.resumen.get("filas_afectadas", 1)
-
-        return {
-            "query": sql,
-            "root_node": self._build_plan_tree(res.plan, sql, actual_rows=actual_count),
-        }
+    def explain_query(self, sql: str, session_id: Optional[str] = None, analyze: bool = False) -> Dict[str, Any]:
+        sql_clean = sql.strip()
+        if not sql_clean.upper().startswith("EXPLAIN"):
+            prefijo = "EXPLAIN ANALYZE" if analyze else "EXPLAIN"
+            sql_clean = f"{prefijo} {sql_clean}"
+        return self.execute_query(sql_clean, session_id)

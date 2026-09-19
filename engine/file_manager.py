@@ -1,5 +1,4 @@
 import os
-
 from common.page import PAGE_SIZE
 from transaction import manager as tx_manager
 
@@ -30,12 +29,10 @@ class FileManager:
         self._check_size(data)
         fp = self._handle(path)
         if tx_manager.TX_ACTIVE():
-            # before-image for ROLLBACK
             fp.seek(page_id * PAGE_SIZE)
             tx_manager.TX_HOOK("WRITE", path, page_id, fp.read(PAGE_SIZE))
         fp.seek(page_id * PAGE_SIZE)
         fp.write(data)
-        # out of the handle buffer: the page must survive the process dying
         fp.flush()
         self.writes += 1
 

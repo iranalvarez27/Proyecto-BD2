@@ -1,28 +1,3 @@
-"""
-=============================================================================
-  GENERADOR DE DATOS DE PRUEBA Y BENCHMARK (Sección 2.1.6)
-  Proyecto BD2 – Minigestor Multimodal
-=============================================================================
-
-  Genera conjuntos de datos sintéticos realistas directamente en la carpeta
-  data/ para las tablas:
-    • estudiantes  (HeapFile + B+ Tree en 'id' + Hash Extensible en 'carrera')
-    • cursos       (SequentialFile + B+ Agrupado en 'codigo')
-
-  Permite generar:
-    - 1 000 registros (1K)
-    - 10 000 registros (10K)
-    - 100 000 registros (100K)
-    - Reset a datos de muestra iniciales (8 estudiantes, 6 cursos)
-
-  Uso:
-    python3 data/generate_data.py               (modo interactivo)
-    python3 data/generate_data.py --size 1000   (o 1k, 10k, 100k)
-    python3 data/generate_data.py --reset       (volver a datos iniciales)
-    python3 data/generate_data.py --stats       (ver estado actual de data/)
-=============================================================================
-"""
-
 import os
 import sys
 import time
