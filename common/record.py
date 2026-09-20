@@ -17,10 +17,16 @@ _FIXED_CODES = {
 def _fixed_struct_code(col) -> str:
     if col.type == DataType.CHAR:
         return f"{col.size}s"
+    if col.type == DataType.POINT:
+        return "dd"
     code = _FIXED_CODES.get(col.type)
     if code is None:
         raise ValueError(f"Not a fixed-size type: {col.type}")
     return code
+
+
+def _campos_struct(col) -> int:
+    return 2 if col.type == DataType.POINT else 1
 
 
 def _header_format(schema: Schema) -> str:
@@ -60,6 +66,10 @@ class Record:
                         f"'{val}' exceeds CHAR({col.size}) for column '{col.name}'"
                     )
                 fixed_values.append(raw)
+            elif col.type == DataType.POINT:
+                lat, lon = (val.lat, val.lon) if hasattr(val, "lat") else val
+                fixed_values.append(float(lat))
+                fixed_values.append(float(lon))
             else:
                 fixed_values.append(val)
 
@@ -76,16 +86,22 @@ class Record:
         header_format = _header_format(schema)
         header = struct.unpack_from(header_format, data, 0)
 
-        n_fixed = len(fixed_columns)
-        fixed_raw = header[:n_fixed]
-        varchar_lengths = header[n_fixed:]
+        n_fixed_fields = sum(_campos_struct(c) for c in fixed_columns)
+        fixed_raw = header[:n_fixed_fields]
+        varchar_lengths = header[n_fixed_fields:]
 
         by_name = {}
-        for col, val in zip(fixed_columns, fixed_raw):
+        cursor = 0
+        for col in fixed_columns:
             if col.type == DataType.CHAR:
-                by_name[col.name] = val.decode("utf-8").rstrip("\x00")
+                by_name[col.name] = fixed_raw[cursor].decode("utf-8").rstrip("\x00")
+                cursor += 1
+            elif col.type == DataType.POINT:
+                by_name[col.name] = (fixed_raw[cursor], fixed_raw[cursor + 1])
+                cursor += 2
             else:
-                by_name[col.name] = val
+                by_name[col.name] = fixed_raw[cursor]
+                cursor += 1
 
         offset = struct.calcsize(header_format)
         for col, length in zip(varchar_columns, varchar_lengths):

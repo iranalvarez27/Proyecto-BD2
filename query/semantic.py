@@ -1,15 +1,20 @@
 from query.ast import (
     SelectNode, InsertNode, DeleteNode, Condition, BinaryCondition, OrderBy,
     BeginNode, CommitNode, RollbackNode, ExplainNode, CreateTableNode, DropTableNode,
+    PointLiteral, PolygonLiteral, FuncCall, SpatialCondition, CreateIndexNode,
 )
-from query.catalog import Catalog
+from query.catalog import Catalog, INDEX_RTREE
 from common.types import Schema, DataType
 
 
 class SemanticError(Exception):
     pass
 
-TAMANOS_POR_DEFECTO = {DataType.INT: 4, DataType.SMALLINT: 2, DataType.BIGINT: 8, DataType.FLOAT: 4, DataType.DOUBLE: 8, DataType.BOOL: 1,}
+TAMANOS_POR_DEFECTO = {DataType.INT: 4, DataType.SMALLINT: 2, DataType.BIGINT: 8, DataType.FLOAT: 4, DataType.DOUBLE: 8, DataType.BOOL: 1, DataType.POINT: 16,}
+
+FUNCIONES_DISTANCIA = {"distancia", "distancia_geo", "distancia_haversine", "distancia_euclidiana"}
+FUNCIONES_POLIGONO = {"dentro_de"}
+FUNCIONES_ESPACIALES = FUNCIONES_DISTANCIA | FUNCIONES_POLIGONO
 
 def resolver_tipo_columna(tipo_texto: str, tamano: int | None) -> tuple[DataType, int]:
     try:
@@ -47,6 +52,8 @@ class SemanticAnalyzer:
             self.validar_create_table(nodo)
         elif isinstance(nodo, DropTableNode):
             self.validar_drop_table(nodo)
+        elif isinstance(nodo, CreateIndexNode):
+            self.validar_create_index(nodo)
         elif isinstance(nodo, (BeginNode, CommitNode, RollbackNode)):
             pass
         else:
@@ -77,6 +84,10 @@ class SemanticAnalyzer:
             return isinstance(valor, str)
         if tipo == DataType.BOOL:
             return isinstance(valor, bool)
+        if tipo == DataType.POINT:
+            return isinstance(valor, PointLiteral) or (
+                isinstance(valor, (tuple, list)) and len(valor) == 2
+            )
         return False
 
     def _tipos_unificables(self, a: DataType, b: DataType) -> bool:
@@ -147,14 +158,57 @@ class SemanticAnalyzer:
         if nodo.group_by is not None:
             self._resolver_columna_join(nodo.group_by, nodo.tabla, schema, nodo.join.tabla, schema2)
 
+    def _resolver_tipo_arg_punto(self, schema: Schema, arg) -> None:
+        if isinstance(arg, PointLiteral):
+            return
+        if isinstance(arg, str):
+            self.validar_columna_existe(schema, arg)
+            idx = schema.column_index(arg)
+            col = schema.columns[idx]
+            if col.type != DataType.POINT:
+                raise SemanticError(f"'{arg}' no es una columna POINT (es {col.type.value})")
+            return
+        raise SemanticError(f"se esperaba una columna POINT o un literal POINT(...), se dio '{arg}'")
+
+    def validar_func_espacial(self, schema: Schema, funcion: FuncCall) -> None:
+        if funcion.nombre not in FUNCIONES_ESPACIALES:
+            disponibles = ", ".join(sorted(FUNCIONES_ESPACIALES))
+            raise SemanticError(f"funcion desconocida '{funcion.nombre}' (disponibles: {disponibles})")
+
+        if funcion.nombre in FUNCIONES_DISTANCIA:
+            if len(funcion.argumentos) != 2:
+                raise SemanticError(f"{funcion.nombre}(...) necesita exactamente 2 argumentos (columna POINT, punto)")
+            self._resolver_tipo_arg_punto(schema, funcion.argumentos[0])
+            self._resolver_tipo_arg_punto(schema, funcion.argumentos[1])
+        elif funcion.nombre in FUNCIONES_POLIGONO:
+            if len(funcion.argumentos) != 2:
+                raise SemanticError(f"{funcion.nombre}(...) necesita exactamente 2 argumentos (columna POINT, poligono)")
+            self._resolver_tipo_arg_punto(schema, funcion.argumentos[0])
+            if not isinstance(funcion.argumentos[1], PolygonLiteral):
+                raise SemanticError(f"{funcion.nombre}(...): el segundo argumento debe ser POLYGON(...)")
+
+    def validar_spatial_condition(self, schema: Schema, condicion: SpatialCondition) -> None:
+        self.validar_func_espacial(schema, condicion.funcion)
+        if condicion.operador is not None:
+            if condicion.funcion.nombre in FUNCIONES_POLIGONO:
+                raise SemanticError(f"{condicion.funcion.nombre}(...) ya es un predicado booleano, no se compara con operadores")
+            if not isinstance(condicion.valor, (int, float)) or isinstance(condicion.valor, bool):
+                raise SemanticError(f"la comparacion de {condicion.funcion.nombre}(...) necesita un valor numerico, "
+                    f"se dio '{condicion.valor}' ({type(condicion.valor).__name__})")
+
     def validar_where(self, schema: Schema, condicion) -> None:
         if isinstance(condicion, BinaryCondition):
             self.validar_where(schema, condicion.izquierda)
             self.validar_where(schema, condicion.derecha)
+        elif isinstance(condicion, SpatialCondition):
+            self.validar_spatial_condition(schema, condicion)
         elif isinstance(condicion, Condition):
             self.validar_columna_existe(schema, condicion.columna)
             idx = schema.column_index(condicion.columna)
             col = schema.columns[idx]
+            if col.type == DataType.POINT:
+                raise SemanticError(f"la columna '{col.name}' es POINT: usa distancia(...) o dentro_de(...) en vez de "
+                    f"comparar directamente con '{condicion.valor}'")
             if not self.tipo_compatible(col.type, condicion.valor):
                 raise SemanticError(f"tipo incompatible en WHERE: la columna '{col.name}' "
                     f"es {col.type.value} pero se comparo con '{condicion.valor}' ({type(condicion.valor).__name__})")
@@ -176,10 +230,16 @@ class SemanticAnalyzer:
             self.validar_where(schema, nodo.where)
 
         if nodo.order_by is not None:
-            self.validar_columna_existe(schema, nodo.order_by.columna)
+            if nodo.order_by.funcion is not None:
+                self.validar_func_espacial(schema, nodo.order_by.funcion)
+            else:
+                self.validar_columna_existe(schema, nodo.order_by.columna)
 
         if nodo.group_by is not None:
             self.validar_columna_existe(schema, nodo.group_by)
+
+        if nodo.limit is not None and nodo.limit <= 0:
+            raise SemanticError(f"LIMIT debe ser un entero positivo, se dio {nodo.limit}")
 
     def validar_insert(self, nodo: InsertNode) -> None:
         schema = self.get_schema(nodo.tabla)
@@ -223,3 +283,17 @@ class SemanticAnalyzer:
     def validar_drop_table(self, nodo: DropTableNode) -> None:
         if not self._catalog.existe_tabla(nodo.tabla):
             raise SemanticError(f"la tabla '{nodo.tabla}' no existe")
+
+    def validar_create_index(self, nodo: CreateIndexNode) -> None:
+        schema = self.get_schema(nodo.tabla)
+        self.validar_columna_existe(schema, nodo.columna)
+        if self._catalog.tiene_indice(nodo.tabla, nodo.columna):
+            raise SemanticError(f"la columna '{nodo.columna}' de '{nodo.tabla}' ya tiene un indice")
+
+        col = schema.columns[schema.column_index(nodo.columna)]
+        if nodo.tipo_indice == INDEX_RTREE:
+            if col.type != DataType.POINT:
+                raise SemanticError(f"CREATE INDEX ... USING RTREE solo aplica a columnas POINT "
+                    f"('{nodo.columna}' es {col.type.value})")
+        elif col.type == DataType.POINT:
+            raise SemanticError(f"la columna '{nodo.columna}' es POINT: usa USING RTREE (no BTREE/HASH)")

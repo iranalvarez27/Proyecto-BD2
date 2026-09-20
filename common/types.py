@@ -10,6 +10,7 @@ class DataType(Enum):
     BOOL = "BOOL"
     CHAR = "CHAR"
     VARCHAR = "VARCHAR"
+    POINT = "POINT"
 
 class IndexType(Enum):
     BTREE = "BTREE"

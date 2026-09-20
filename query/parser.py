@@ -2,12 +2,14 @@ from query.tokens import Token, TokenType
 from query.ast import (
     SelectNode, InsertNode, DeleteNode, Condition, BinaryCondition, OrderBy, JoinClause,
     BeginNode, CommitNode, RollbackNode, ExplainNode, ColumnDef, CreateTableNode, DropTableNode,
+    PointLiteral, PolygonLiteral, FuncCall, SpatialCondition, CreateIndexNode,
 )
 
 class ParserError(Exception):
     pass
 
 OPERADORES_COMP = [TokenType.EQ, TokenType.NEQ, TokenType.LT, TokenType.LTE, TokenType.GT, TokenType.GTE]
+TIPOS_INDICE_CREATE_INDEX = {"btree": "bplus", "bplus": "bplus", "hash": "hash", "rtree": "rtree"}
 
 class Parser:
     def __init__(self, tokens: list[Token]):
@@ -16,6 +18,12 @@ class Parser:
 
     def actual(self):
         return self._tokens[self._pos]
+
+    def siguiente(self, offset: int = 1):
+        idx = self._pos + offset
+        if idx < len(self._tokens):
+            return self._tokens[idx]
+        return self._tokens[-1]
 
     def avanzar(self):
         tok = self._tokens[self._pos]
@@ -50,7 +58,10 @@ class Parser:
         elif self.coincide(TokenType.EXPLAIN):
             nodo = self.parse_explain()
         elif self.coincide(TokenType.CREATE):
-            nodo = self.parse_create_table()
+            if self.siguiente().type == TokenType.INDEX:
+                nodo = self.parse_create_index()
+            else:
+                nodo = self.parse_create_table()
         elif self.coincide(TokenType.DROP):
             nodo = self.parse_drop_table()
         else:
@@ -121,15 +132,36 @@ class Parser:
         return CreateTableNode(tabla, columnas, storage)
 
     def parse_drop_table(self):
-        # DROP TABLE nombre
         self.esperar(TokenType.DROP)
         self.esperar(TokenType.TABLE)
         tabla = self.esperar(TokenType.IDENT).value
         return DropTableNode(tabla)
 
+    def parse_create_index(self):
+        self.esperar(TokenType.CREATE)
+        self.esperar(TokenType.INDEX)
+        self.esperar(TokenType.ON)
+        tabla = self.esperar(TokenType.IDENT).value
+        self.esperar(TokenType.LPAREN)
+        columna = self.esperar(TokenType.IDENT).value
+        self.esperar(TokenType.RPAREN)
+
+        tipo_indice = "bplus"
+        if self.coincide(TokenType.USING):
+            self.avanzar()
+            tok = self.esperar(TokenType.IDENT)
+            valor = tok.value.lower()
+            if valor not in TIPOS_INDICE_CREATE_INDEX:
+                raise ParserError(f"pos {tok.pos}: USING debe ser BTREE, HASH o RTREE, salio '{tok.value}'")
+            tipo_indice = TIPOS_INDICE_CREATE_INDEX[valor]
+        return CreateIndexNode(tabla, columna, tipo_indice)
+
     def parse_column_def(self):
         nombre = self.esperar(TokenType.IDENT).value
-        tipo_tok = self.esperar(TokenType.IDENT)
+        if self.coincide(TokenType.POINT):
+            tipo_tok = self.avanzar()
+        else:
+            tipo_tok = self.esperar(TokenType.IDENT)
         tamano = None
         if self.coincide(TokenType.LPAREN):
             self.avanzar()
@@ -167,7 +199,15 @@ class Parser:
             else:
                 group_by = self.parse_group_by()
 
-        return SelectNode(cols, tabla, where, order_by, group_by, join)
+        limit = None
+        if self.coincide(TokenType.LIMIT):
+            self.avanzar()
+            tok = self.esperar(TokenType.NUMBER)
+            if "." in tok.value:
+                raise ParserError(f"pos {tok.pos}: LIMIT necesita un entero, salio '{tok.value}'")
+            limit = int(tok.value)
+
+        return SelectNode(cols, tabla, where, order_by, group_by, join, limit)
 
     def parse_join(self):
         self.esperar(TokenType.JOIN)
@@ -186,6 +226,62 @@ class Parser:
             return f"{nombre}.{campo}"
         return nombre
 
+    def parse_numero_con_signo(self):
+        negativo = False
+        if self.coincide(TokenType.MINUS):
+            self.avanzar()
+            negativo = True
+        tok = self.esperar(TokenType.NUMBER)
+        valor = float(tok.value) if "." in tok.value else int(tok.value)
+        return -valor if negativo else valor
+
+    def parse_point_literal(self):
+        self.esperar(TokenType.POINT)
+        self.esperar(TokenType.LPAREN)
+        lat = self.parse_numero_con_signo()
+        self.esperar(TokenType.COMMA)
+        lon = self.parse_numero_con_signo()
+        self.esperar(TokenType.RPAREN)
+        return PointLiteral(float(lat), float(lon))
+
+    def parse_polygon_literal(self):
+        self.esperar(TokenType.POLYGON)
+        self.esperar(TokenType.LPAREN)
+        puntos = [self.parse_point_literal()]
+        while self.coincide(TokenType.COMMA):
+            self.avanzar()
+            puntos.append(self.parse_point_literal())
+        self.esperar(TokenType.RPAREN)
+        if len(puntos) < 3:
+            raise ParserError("POLYGON necesita al menos 3 vertices")
+        return PolygonLiteral(puntos)
+
+    def parse_func_call(self):
+        nombre = self.esperar(TokenType.IDENT).value
+        self.esperar(TokenType.LPAREN)
+        argumentos = []
+        if not self.coincide(TokenType.RPAREN):
+            argumentos.append(self.parse_expr_argumento())
+            while self.coincide(TokenType.COMMA):
+                self.avanzar()
+                argumentos.append(self.parse_expr_argumento())
+        self.esperar(TokenType.RPAREN)
+        return FuncCall(nombre.lower(), argumentos)
+
+    def parse_expr_argumento(self):
+        if self.coincide(TokenType.POINT):
+            return self.parse_point_literal()
+        if self.coincide(TokenType.POLYGON):
+            return self.parse_polygon_literal()
+        if self.coincide(TokenType.MINUS) or self.coincide(TokenType.NUMBER):
+            return self.parse_numero_con_signo()
+        if self.coincide(TokenType.STRING):
+            return self.avanzar().value
+        if self.coincide(TokenType.IDENT):
+            return self.parse_columna_ref()
+        t = self.actual()
+        raise ParserError(f"pos {t.pos}: argumento de funcion invalido '{t.value}'")
+
     def parse_columnas(self):
         if self.coincide(TokenType.STAR):
             self.avanzar()
@@ -199,6 +295,17 @@ class Parser:
     def parse_order_by(self):
         self.esperar(TokenType.ORDER)
         self.esperar(TokenType.BY)
+
+        if self.coincide(TokenType.IDENT) and self.siguiente().type == TokenType.LPAREN:
+            funcion = self.parse_func_call()
+            desc = False
+            if self.coincide(TokenType.DESC):
+                self.avanzar()
+                desc = True
+            elif self.coincide(TokenType.ASC):
+                self.avanzar()
+            return OrderBy(funcion=funcion, descendente=desc)
+
         col = self.parse_columna_ref()
         desc = False
         if self.coincide(TokenType.DESC):
@@ -266,6 +373,14 @@ class Parser:
             self.esperar(TokenType.RPAREN)
             return expr
 
+        if self.coincide(TokenType.IDENT) and self.siguiente().type == TokenType.LPAREN:
+            funcion = self.parse_func_call()
+            if self.actual().type in OPERADORES_COMP:
+                op = self.avanzar().type
+                valor = self.parse_valor()
+                return SpatialCondition(funcion, op, valor)
+            return SpatialCondition(funcion)
+
         col = self.parse_columna_ref()
 
         if self.coincide(TokenType.BETWEEN):
@@ -283,14 +398,11 @@ class Parser:
         return Condition(col, op, valor)
 
     def parse_valor(self):
+        if self.coincide(TokenType.MINUS) or self.coincide(TokenType.NUMBER):
+            return self.parse_numero_con_signo()
+        if self.coincide(TokenType.STRING):
+            return self.avanzar().value
+        if self.coincide(TokenType.POINT):
+            return self.parse_point_literal()
         tok = self.actual()
-        if tok.type == TokenType.NUMBER:
-            self.avanzar()
-            if "." in tok.value:
-                return float(tok.value) 
-            else:
-                return int(tok.value)
-        if tok.type == TokenType.STRING:
-            self.avanzar()
-            return tok.value
         raise ParserError(f"pos {tok.pos}: valor invalido '{tok.value}'")

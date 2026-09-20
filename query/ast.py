@@ -2,10 +2,34 @@ from dataclasses import dataclass
 from query.tokens import TokenType
 
 @dataclass
+class PointLiteral:
+    lat: float
+    lon: float
+
+
+@dataclass
+class PolygonLiteral:
+    puntos: list
+
+
+@dataclass
+class FuncCall:
+    nombre: str
+    argumentos: list
+
+
+@dataclass
 class Condition:
     columna: str
     operador: TokenType
     valor: object
+
+
+@dataclass
+class SpatialCondition:
+    funcion: FuncCall
+    operador: TokenType = None
+    valor: object = None
 
 @dataclass
 class BinaryCondition:
@@ -15,8 +39,9 @@ class BinaryCondition:
 
 @dataclass
 class OrderBy:
-    columna: str
+    columna: str = None
     descendente: bool = False
+    funcion: FuncCall = None
 
 @dataclass
 class JoinClause:
@@ -32,6 +57,7 @@ class SelectNode:
     order_by: OrderBy = None
     group_by: str = None
     join: JoinClause = None
+    limit: int = None
 
 
 @dataclass
@@ -85,3 +111,10 @@ class CreateTableNode:
 @dataclass
 class DropTableNode:
     tabla: str
+
+
+@dataclass
+class CreateIndexNode:
+    tabla: str
+    columna: str
+    tipo_indice: str = "bplus"  # "bplus" | "hash" | "rtree"
