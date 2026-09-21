@@ -3,13 +3,6 @@ import {
   Database,
   Table2,
   GitBranch,
-  RefreshCw,
-  Sparkles,
-  CheckCircle2,
-  XCircle,
-  Terminal,
-  Layers,
-  HelpCircle,
   RotateCcw,
   Lock,
   Sun,
@@ -216,40 +209,6 @@ export default function App() {
     }
   };
 
-  const handleExplainQuery = async (analyze = false) => {
-    if (!query.trim()) return;
-    const sentencias = query.split(';').map(s => s.trim()).filter(Boolean);
-    if (sentencias.length !== 1) return;
-    const objetivo = sentencias[0];
-    if (!/^(SELECT|INSERT|DELETE)\b/i.test(objetivo)) return;
-
-    setLoadingQuery(true);
-    try {
-      const res = await fetch('/api/explain', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ query: objetivo, session_id: sessionId, analyze }),
-      });
-      const data = await res.json();
-      if (data.transaction) {
-        setTransactionState(data.transaction);
-      }
-
-      const qUpper = objetivo.toUpperCase();
-      if (analyze && (qUpper.includes('INSERT') || qUpper.includes('DELETE') || qUpper.includes('CREATE TABLE'))) {
-        fetchTables();
-      }
-      setQueryResult(data);
-      setExecutionPlan(data.plan || null);
-      setActiveBottomTab('plan');
-    } catch (err) {
-      console.error('Explain error:', err);
-      alert('Error obteniendo el plan de ejecución: ' + err.message);
-    } finally {
-      setLoadingQuery(false);
-    }
-  };
-
   const handleReorganize = async (tableName) => {
     try {
       const res = await fetch('/api/tables/reorganize', {
@@ -383,7 +342,6 @@ export default function App() {
               query={query}
               setQuery={setQuery}
               onExecute={() => handleExecuteQuery()}
-              onExplain={handleExplainQuery}
               onOpenCsvImport={() => setCsvImportOpen(true)}
               loading={loadingQuery}
               history={history}

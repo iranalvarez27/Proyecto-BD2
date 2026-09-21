@@ -30,7 +30,6 @@ engine = EngineAdapter()
 class QueryRequest(BaseModel):
     query: str
     session_id: Optional[str] = None
-    analyze: Optional[bool] = False
 
 class ReorganizeRequest(BaseModel):
     table_name: str
@@ -54,11 +53,6 @@ def get_tables():
 @app.post("/api/query")
 def execute_query(req: QueryRequest):
     return engine.execute_query(req.query, req.session_id)
-
-
-@app.post("/api/explain")
-def explain_query(req: QueryRequest):
-    return engine.explain_query(req.query, req.session_id, analyze=bool(req.analyze))
 
 
 @app.post("/api/tables/reorganize")

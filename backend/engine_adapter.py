@@ -534,10 +534,3 @@ class EngineAdapter:
             "children": [curr],
         }
         return root
-
-    def explain_query(self, sql: str, session_id: Optional[str] = None, analyze: bool = False) -> Dict[str, Any]:
-        sql_clean = sql.strip()
-        if not sql_clean.upper().startswith("EXPLAIN"):
-            prefijo = "EXPLAIN ANALYZE" if analyze else "EXPLAIN"
-            sql_clean = f"{prefijo} {sql_clean}"
-        return self.execute_query(sql_clean, session_id)

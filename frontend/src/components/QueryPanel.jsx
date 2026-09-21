@@ -1,13 +1,10 @@
 import React, { useState, useRef } from 'react';
 import {
   Play,
-  GitBranch,
   RotateCcw,
   Terminal,
   Clock,
-  Code2,
   Sparkles,
-  Gauge,
   Upload
 } from 'lucide-react';
 
@@ -46,7 +43,6 @@ export default function QueryPanel({
   query,
   setQuery,
   onExecute,
-  onExplain,
   onOpenCsvImport,
   loading,
   history = []
@@ -56,18 +52,6 @@ export default function QueryPanel({
   const lineNumbersInnerRef = useRef(null);
 
   const lineCount = Math.max(1, query.split('\n').length);
-  const sentenciasEnEditor = query.split(';').map(s => s.trim()).filter(Boolean);
-  const hayExplicable = sentenciasEnEditor.length === 1
-    && /^(SELECT|INSERT|DELETE)\b/i.test(sentenciasEnEditor[0]);
-
-  let motivoDeshabilitado = '';
-  if (sentenciasEnEditor.length === 0) {
-    motivoDeshabilitado = 'Escribe una consulta en el editor primero.';
-  } else if (sentenciasEnEditor.length > 1) {
-    motivoDeshabilitado = 'El editor tiene varias sentencias: deja una sola SELECT, INSERT o DELETE para poder analizarla.';
-  } else if (!hayExplicable) {
-    motivoDeshabilitado = 'Solo se puede analizar SELECT, INSERT o DELETE (no CREATE TABLE, DROP TABLE ni BEGIN/COMMIT/ROLLBACK).';
-  }
 
   const handleKeyDown = (e) => {
     // Cmd+Enter or Ctrl+Enter to execute
@@ -136,34 +120,6 @@ export default function QueryPanel({
               <span>Cargar CSV</span>
             </button>
           )}
-
-          <button
-            onClick={() => onExplain(false)}
-            disabled={loading || !query.trim() || !hayExplicable}
-            className="flex items-center gap-1.5 px-2.5 py-1 bg-violet-50 hover:bg-violet-100 dark:bg-violet-600/20 dark:hover:bg-violet-600/30 border border-violet-300 dark:border-violet-500/40 text-violet-700 dark:text-violet-200 hover:text-violet-900 dark:hover:text-white rounded text-xs font-medium transition disabled:opacity-50 disabled:cursor-not-allowed"
-            title={
-              hayExplicable
-                ? "Ver el plan estimado, sin ejecutar cambios en disco (INSERT/DELETE no se aplican)"
-                : motivoDeshabilitado
-            }
-          >
-            <GitBranch className="w-3.5 h-3.5" />
-            <span>EXPLAIN</span>
-          </button>
-
-          <button
-            onClick={() => onExplain(true)}
-            disabled={loading || !query.trim() || !hayExplicable}
-            className="flex items-center gap-1.5 px-2.5 py-1 bg-fuchsia-50 hover:bg-fuchsia-100 dark:bg-fuchsia-600/20 dark:hover:bg-fuchsia-600/30 border border-fuchsia-300 dark:border-fuchsia-500/40 text-fuchsia-700 dark:text-fuchsia-200 hover:text-fuchsia-900 dark:hover:text-white rounded text-xs font-medium transition disabled:opacity-50 disabled:cursor-not-allowed"
-            title={
-              hayExplicable
-                ? "Ejecuta la consulta de verdad y muestra tiempo real + filas reales (EXPLAIN ANALYZE)"
-                : motivoDeshabilitado
-            }
-          >
-            <Gauge className="w-3.5 h-3.5" />
-            <span>EXPLAIN ANALYZE</span>
-          </button>
 
           <button
             onClick={onExecute}

@@ -1,13 +1,11 @@
 import React from 'react';
 import {
   GitBranch,
-  Layers,
   Filter,
   ArrowUpDown,
   HardDrive,
   Key,
   Share2,
-  Zap,
   Info
 } from 'lucide-react';
 
@@ -120,7 +118,7 @@ export default function PlanPanel({ plan, query, executedQuery }) {
         <GitBranch className="w-8 h-8 stroke-1 mb-2 text-slate-300 dark:text-slate-600" />
         <p>No hay un plan de ejecución activo.</p>
         <p className="mt-1 text-slate-400 dark:text-slate-600">
-          Haz clic en el botón <b>EXPLAIN</b> en el panel de consultas para visualizar el árbol de operadores.
+          Ejecuta una consulta (o antepón <b>EXPLAIN</b> / <b>EXPLAIN ANALYZE</b> en el editor) para visualizar el árbol de operadores.
         </p>
       </div>
     );

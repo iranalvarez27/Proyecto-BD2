@@ -48,7 +48,7 @@ Proyecto-BD2/
 2. **Panel de Consultas (Superior Centro):**
    * Editor de sentencias SQL multilínea con atajo `Cmd/Ctrl + Enter`.
    * Menú desplegable con plantillas rápidas (`SELECT`, `INSERT`, `ORDER BY`, `TRANSACTIONS`).
-   * Botones: **Ejecutar**, **EXPLAIN** (Plan de Ejecución) y Limpiar.
+   * Botones: **Ejecutar**, **Cargar CSV** y **Limpiar** (usa `EXPLAIN` / `EXPLAIN ANALYZE` directamente en la consola SQL para ver el plan de ejecución).
    * Historial de consultas ejecutadas.
 
 3. **Panel de Resultados (Inferior Centro):**
