@@ -67,6 +67,12 @@ class TokenType(Enum):
     LIMIT = 52
     INDEX = 53
 
+    UPDATE = 54
+    SET = 55
+    LIKE = 56
+    IN = 57
+    NOT = 58
+
 KEYWORDS = {"select": TokenType.SELECT, "from": TokenType.FROM, "where": TokenType.WHERE,
             "insert": TokenType.INSERT, "into": TokenType.INTO, "values": TokenType.VALUES,
             "delete": TokenType.DELETE, "order": TokenType.ORDER, "by": TokenType.BY,
@@ -79,10 +85,10 @@ KEYWORDS = {"select": TokenType.SELECT, "from": TokenType.FROM, "where": TokenTy
             "explain": TokenType.EXPLAIN, "analyze": TokenType.ANALYZE,
             "create": TokenType.CREATE, "table": TokenType.TABLE,
             "primary": TokenType.PRIMARY, "key": TokenType.KEY, "using": TokenType.USING,
-            "drop": TokenType.DROP,
-            "between": TokenType.BETWEEN,
-            "point": TokenType.POINT, "polygon": TokenType.POLYGON,
-            "limit": TokenType.LIMIT, "index": TokenType.INDEX,}
+            "drop": TokenType.DROP, "between": TokenType.BETWEEN, "point": TokenType.POINT,
+            "polygon": TokenType.POLYGON, "limit": TokenType.LIMIT, "index": TokenType.INDEX,
+            "update": TokenType.UPDATE, "set": TokenType.SET, "like": TokenType.LIKE,
+            "in": TokenType.IN, "not": TokenType.NOT,}
 
 @dataclass
 class Token:

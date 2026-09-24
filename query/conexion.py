@@ -1,5 +1,6 @@
 import math
 import os
+import re
 import tempfile
 import threading
 import time
@@ -7,8 +8,8 @@ from query.lexer import Lexer, LexerError
 from query.parser import Parser, ParserError
 from query.semantic import SemanticAnalyzer, SemanticError, resolver_tipo_columna
 from query.catalog import (Catalog, TableInfo, STORAGE_HEAP, STORAGE_SEQUENTIAL, INDEX_BPLUS, INDEX_HASH, INDEX_CLUSTERED, INDEX_RTREE,)
-from query.ast import (SelectNode, InsertNode, DeleteNode, Condition, BinaryCondition,BeginNode, CommitNode,RollbackNode, ExplainNode, CreateTableNode, DropTableNode,
-                        PointLiteral, PolygonLiteral, FuncCall, SpatialCondition, CreateIndexNode,)
+from query.ast import (SelectNode, InsertNode, DeleteNode, UpdateNode, Condition, NotCondition, BinaryCondition,BeginNode, CommitNode,RollbackNode, ExplainNode, CreateTableNode, DropTableNode,
+                        PointLiteral, PolygonLiteral, FuncCall, SpatialCondition, CreateIndexNode, AggregateCall, ColumnRef, SubquerySelect, JoinClause,)
 from query.tokens import TokenType
 from common.record import Record
 from common.types import Column, DataType, Schema
@@ -105,6 +106,30 @@ class Conexion:
     def plan(self, value: list) -> None:
         self._local.plan = value
 
+    def _tablas_en_condicion(self, condicion) -> list:
+        if condicion is None:
+            return []
+        if isinstance(condicion, BinaryCondition):
+            return self._tablas_en_condicion(condicion.izquierda) + self._tablas_en_condicion(condicion.derecha)
+        if isinstance(condicion, NotCondition):
+            return self._tablas_en_condicion(condicion.interior)
+        if isinstance(condicion, Condition) and isinstance(condicion.valor, SubquerySelect):
+            sub = condicion.valor.nodo_select
+            tablas = [sub.tabla] + [j.tabla for j in sub.joins]
+            return tablas + self._tablas_en_condicion(sub.where)
+        return []
+
+    def _recursos_de_nodo(self, nodo) -> list:
+        recursos = [nodo.tabla]
+        if isinstance(nodo, SelectNode):
+            for join in nodo.joins:
+                if join.tabla not in recursos:
+                    recursos.append(join.tabla)
+        for tabla in self._tablas_en_condicion(getattr(nodo, "where", None)):
+            if tabla not in recursos:
+                recursos.append(tabla)
+        return recursos
+
     def execute(self, sql: str, session_id: str = DEFAULT_SESSION) -> QueryResult:
         self.plan = []
 
@@ -132,13 +157,11 @@ class Conexion:
         if isinstance(nodo, ExplainNode):
             return self._ejecutar_explain(nodo, session_id)
 
-        if not isinstance(nodo, (SelectNode, InsertNode, DeleteNode, CreateTableNode, DropTableNode, CreateIndexNode)):
+        if not isinstance(nodo, (SelectNode, InsertNode, DeleteNode, UpdateNode, CreateTableNode, DropTableNode, CreateIndexNode)):
             return QueryResult(error=f"nodo no ejecutable: {type(nodo).__name__}", tipo_error="ejecucion")
 
         modo = "S" if isinstance(nodo, SelectNode) else "X"
-        recursos = [nodo.tabla]
-        if isinstance(nodo, SelectNode) and nodo.join is not None and nodo.join.tabla != nodo.tabla:
-            recursos.append(nodo.join.tabla)
+        recursos = self._recursos_de_nodo(nodo)
         txn_estaba_activa = self.txn_manager.is_active(session_id)
 
         try:
@@ -172,6 +195,9 @@ class Conexion:
                     resultado = QueryResult(resumen=resumen, plan=self.plan)
                 elif isinstance(nodo, CreateIndexNode):
                     resumen = self.ejecutar_create_index(nodo, session_id)
+                    resultado = QueryResult(resumen=resumen, plan=self.plan)
+                elif isinstance(nodo, UpdateNode):
+                    resumen = self.ejecutar_update(nodo)
                     resultado = QueryResult(resumen=resumen, plan=self.plan)
                 else:
                     resumen = self.ejecutar_delete(nodo)
@@ -243,9 +269,7 @@ class Conexion:
     def _ejecutar_explain(self, nodo: ExplainNode, session_id: str) -> QueryResult:
         interna = nodo.statement
         modo = "S" if isinstance(interna, SelectNode) else "X"
-        recursos = [interna.tabla]
-        if isinstance(interna, SelectNode) and interna.join is not None and interna.join.tabla != interna.tabla:
-            recursos.append(interna.join.tabla)
+        recursos = self._recursos_de_nodo(interna)
         txn_estaba_activa = self.txn_manager.is_active(session_id)
 
         try:
@@ -277,6 +301,9 @@ class Conexion:
                     filas_afectadas = len(filas)
                 elif isinstance(interna, InsertNode):
                     resumen = self.ejecutar_insert(interna, dry_run=dry_run)
+                    filas_afectadas = resumen["filas_afectadas"]
+                elif isinstance(interna, UpdateNode):
+                    resumen = self.ejecutar_update(interna, dry_run=dry_run)
                     filas_afectadas = resumen["filas_afectadas"]
                 else:
                     resumen = self.ejecutar_delete(interna, dry_run=dry_run)
@@ -356,6 +383,22 @@ class Conexion:
             return _punto_en_poligono(lat, lon, poligono)
         raise ExecutionError(f"funcion desconocida: '{nombre}'")
 
+    def _like_a_regex(self, patron: str) -> str:
+        partes = []
+        for c in patron:
+            if c == "%":
+                partes.append(".*")
+            elif c == "_":
+                partes.append(".")
+            else:
+                partes.append(re.escape(c))
+        return "".join(partes)
+
+    def _resolver_valor_cond(self, valor, fila: dict):
+        if isinstance(valor, ColumnRef):
+            return fila[valor.nombre]
+        return valor
+
     def cumple_where(self, cond, fila: dict) -> bool:
         if isinstance(cond, BinaryCondition):
             lado_izq = self.cumple_where(cond.izquierda, fila)
@@ -364,6 +407,8 @@ class Conexion:
                 return lado_izq and lado_der
             else:
                 return lado_izq or lado_der
+        if isinstance(cond, NotCondition):
+            return not self.cumple_where(cond.interior, fila)
         if isinstance(cond, SpatialCondition):
             resultado = self._evaluar_funcion_espacial(cond.funcion, fila)
             if cond.operador is None:
@@ -385,8 +430,15 @@ class Conexion:
             raise ExecutionError("condicion WHERE erronea")
 
         val_fila = fila[cond.columna]
-        val_cond = cond.valor
         op = cond.operador
+
+        if op == TokenType.LIKE:
+            regex = self._like_a_regex(cond.valor)
+            return re.fullmatch(regex, val_fila) is not None
+        if op == TokenType.IN:
+            return val_fila in cond.valor
+
+        val_cond = self._resolver_valor_cond(cond.valor, fila)
 
         if op == TokenType.EQ:
             resultado = (val_fila == val_cond)
@@ -427,7 +479,7 @@ class Conexion:
 
     def _extraer_rango_columna(self, cond, col_name: str, schema: Schema):
         if isinstance(cond, Condition):
-            if cond.columna == col_name:
+            if cond.columna == col_name and not isinstance(cond.valor, ColumnRef):
                 tipo = schema.columns[schema.column_index(col_name)].type
                 if cond.operador in (TokenType.GT, TokenType.GTE):
                     return (cond.valor, self._limite_superior(tipo))
@@ -449,20 +501,38 @@ class Conexion:
                 return r2
         return None
 
+    def _resolver_subconsultas(self, condicion):
+        if condicion is None:
+            return None
+        if isinstance(condicion, BinaryCondition):
+            return BinaryCondition(self._resolver_subconsultas(condicion.izquierda), condicion.operador,
+                                    self._resolver_subconsultas(condicion.derecha))
+        if isinstance(condicion, NotCondition):
+            return NotCondition(self._resolver_subconsultas(condicion.interior))
+        if isinstance(condicion, Condition) and isinstance(condicion.valor, SubquerySelect):
+            subnodo = condicion.valor.nodo_select
+            columna_sub = subnodo.columnas[0]
+            filas_sub = self.ejecutar_select(subnodo)
+            valores = [f[columna_sub] for f in filas_sub]
+            self.plan.append(f"subconsulta IN (...) sobre '{subnodo.tabla}.{columna_sub}' ({len(valores)} valores)")
+            return Condition(condicion.columna, condicion.operador, valores)
+        return condicion
+
     def ejecutar_select(self, nodo: SelectNode) -> list:
         orden_ya_resuelto = False
 
-        if nodo.join is not None:
+        if nodo.joins:
+            where_join = self._resolver_subconsultas(nodo.where)
             with tempfile.TemporaryDirectory(dir=self.tmp_dir) as tmp_join:
-                filas = self.ejecutar_join(nodo, tmp_join)
-            if nodo.where is not None:
-                filas = [f for f in filas if self.cumple_where(nodo.where, f)]
+                filas = self.ejecutar_joins(nodo, tmp_join)
+            if where_join is not None:
+                filas = [f for f in filas if self.cumple_where(where_join, f)]
                 self.plan.append("filtro WHERE post-JOIN")
-            schema = self._schema_join(nodo)
+            schema = self._schema_multi([nodo.tabla] + [j.tabla for j in nodo.joins])
             return self._finalizar_select(nodo, filas, schema, orden_ya_resuelto)
 
         info = self.catalog.get_table(nodo.tabla)
-        where = nodo.where
+        where = self._resolver_subconsultas(nodo.where)
         nombres_col = [c.name for c in info.schema.columns]
 
         if where is None:
@@ -493,7 +563,8 @@ class Conexion:
                 self.plan.append(f"escaneo completo de '{info.nombre}' ({info.tipo_storage})")
                 filas = list(self.leer_todo(info))
         else:
-            es_igualdad = isinstance(where, Condition) and where.operador == TokenType.EQ
+            es_igualdad = (isinstance(where, Condition) and where.operador == TokenType.EQ
+                           and not isinstance(where.valor, ColumnRef))
 
             rango_info = None
             for col in info.indices:
@@ -569,15 +640,21 @@ class Conexion:
         return self._finalizar_select(nodo, filas, info.schema, orden_ya_resuelto)
 
     def _finalizar_select(self, nodo: SelectNode, filas, schema: Schema, orden_ya_resuelto: bool) -> list:
+        hay_estrella = nodo.columnas == ["*"]
+        agregados = [] if hay_estrella else [c for c in nodo.columnas if isinstance(c, AggregateCall)]
+
         with tempfile.TemporaryDirectory(dir=self.tmp_dir) as tmp:
             if nodo.group_by is not None:
-                filas, schema = self.agrupar(filas, schema, nodo.group_by, tmp)
+                filas, schema = self.agrupar(filas, schema, nodo.group_by, agregados, tmp)
                 orden_ya_resuelto = False
+            elif agregados:
+                filas, schema = self.agregar_global(filas, schema, agregados)
+                orden_ya_resuelto = True
 
             if nodo.order_by is not None and not orden_ya_resuelto:
                 filas = self.ordenar(filas, schema, nodo.order_by, tmp)
 
-            if nodo.columnas == ["*"]:
+            if hay_estrella or agregados or nodo.group_by is not None:
                 salida = list(filas)
             else:
                 salida = []
@@ -592,14 +669,12 @@ class Conexion:
                 self.plan.append(f"LIMIT {nodo.limit}")
             return salida
 
-    def _schema_join(self, nodo: SelectNode) -> Schema:
-        info1 = self.catalog.get_table(nodo.tabla)
-        info2 = self.catalog.get_table(nodo.join.tabla)
-        columnas = (
-            [Column(f"{info1.nombre}.{c.name}", c.type, c.size) for c in info1.schema.columns] +
-            [Column(f"{info2.nombre}.{c.name}", c.type, c.size) for c in info2.schema.columns]
-        )
-        return Schema(f"{info1.nombre}_join_{info2.nombre}", columnas)
+    def _schema_multi(self, tablas: list) -> Schema:
+        columnas = []
+        for tabla in tablas:
+            info = self.catalog.get_table(tabla)
+            columnas += [Column(f"{info.nombre}.{c.name}", c.type, c.size) for c in info.schema.columns]
+        return Schema("_join_".join(tablas), columnas)
 
     def _combinar_filas(self, tabla1: str, fila1: dict, tabla2: str, fila2: dict) -> dict:
         combinada = {f"{tabla1}.{k}": v for k, v in fila1.items()}
@@ -618,17 +693,16 @@ class Conexion:
                 filas.append(dict(zip(nombres_col, record.values)))
         return filas
 
-    def ejecutar_join(self, nodo: SelectNode, tmp_dir: str) -> list:
-        info1 = self.catalog.get_table(nodo.tabla)
-        info2 = self.catalog.get_table(nodo.join.tabla)
-        tabla1, tabla2 = info1.nombre, info2.nombre
+    def _ejecutar_primer_join(self, tabla1: str, tabla2: str, join: JoinClause, tmp_dir: str) -> list:
+        info1 = self.catalog.get_table(tabla1)
+        info2 = self.catalog.get_table(tabla2)
 
         def lado(columna_calificada: str):
             tabla_ref, col = columna_calificada.split(".", 1)
             return col if tabla_ref == tabla1 else None, col if tabla_ref == tabla2 else None
 
-        c1_izq, c2_izq = lado(nodo.join.columna_izquierda)
-        c1_der, c2_der = lado(nodo.join.columna_derecha)
+        c1_izq, c2_izq = lado(join.columna_izquierda)
+        c1_der, c2_der = lado(join.columna_derecha)
         col1 = c1_izq if c1_izq is not None else c1_der
         col2 = c2_izq if c2_izq is not None else c2_der
 
@@ -671,15 +745,135 @@ class Conexion:
         )
         return filas
 
-    def agrupar(self, filas, schema: Schema, columna: str, tmp_dir: str):
+    def _ejecutar_join_adicional(self, filas_acum: list, tablas_unidas: list, join: JoinClause, tmp_dir: str) -> list:
+        tabla_nueva = join.tabla
+        info_nueva = self.catalog.get_table(tabla_nueva)
+
+        if join.columna_izquierda.split(".", 1)[0] == tabla_nueva:
+            col_nueva = join.columna_izquierda.split(".", 1)[1]
+            col_acum = join.columna_derecha
+        else:
+            col_nueva = join.columna_derecha.split(".", 1)[1]
+            col_acum = join.columna_izquierda
+
+        nombres_nueva = [c.name for c in info_nueva.schema.columns]
+
+        if self.catalog.tiene_indice(tabla_nueva, col_nueva):
+            indice, tipo = self.catalog.get_indice(tabla_nueva, col_nueva)
+            self.plan.append(
+                f"join anidado adicional: busqueda por indice {tipo} sobre '{tabla_nueva}.{col_nueva}'")
+            filas = []
+            for fila_izq in filas_acum:
+                for fila_der in self._buscar_por_indice(info_nueva, indice, tipo, fila_izq[col_acum], nombres_nueva):
+                    combinada = dict(fila_izq)
+                    combinada.update({f"{tabla_nueva}.{k}": v for k, v in fila_der.items()})
+                    filas.append(combinada)
+            return filas
+
         stats = {}
-        conteo = external_group_by(filas, lambda f: f[columna], lambda acc, f: (acc or 0) + 1,
-                                   schema, self.buffer_pages, tmp_dir, stats)
+        schema_acum = self._schema_multi(tablas_unidas)
+        filas = list(external_hash_join(
+            filas_acum, lambda f: f[col_acum],
+            self.leer_todo(info_nueva), lambda f: f[col_nueva],
+            schema_acum, info_nueva.schema,
+            self.buffer_pages, tmp_dir,
+            lambda f_izq, f_der: {**f_izq, **{f"{tabla_nueva}.{k}": v for k, v in f_der.items()}},
+            stats,
+        ))
+        self.plan.append(
+            f"hash join externo adicional con '{tabla_nueva}' sobre '{col_acum}'='{tabla_nueva}.{col_nueva}' "
+            f"(external hashing, B={self.buffer_pages}: {stats['partitions']} particiones, "
+            f"{stats['repartitions']} reparticiones)"
+        )
+        return filas
+
+    def ejecutar_joins(self, nodo: SelectNode, tmp_dir: str) -> list:
+        primer_join = nodo.joins[0]
+        filas = self._ejecutar_primer_join(nodo.tabla, primer_join.tabla, primer_join, tmp_dir)
+        tablas_unidas = [nodo.tabla, primer_join.tabla]
+
+        for join in nodo.joins[1:]:
+            filas = self._ejecutar_join_adicional(filas, tablas_unidas, join, tmp_dir)
+            tablas_unidas.append(join.tabla)
+
+        return filas
+
+    def _tipo_resultado_agregado(self, ag: AggregateCall, schema: Schema):
+        if ag.nombre == "count":
+            return DataType.BIGINT, 8
+        if ag.nombre == "avg":
+            return DataType.DOUBLE, 8
+        col = schema.columns[schema.column_index(ag.columna)]
+        return col.type, col.size
+
+    def _iniciar_acumulador(self, agregados: list) -> dict:
+        acc = {"__count__": 0}
+        for ag in agregados:
+            acc[ag.etiqueta()] = 0
+        return acc
+
+    def _actualizar_acumulador(self, acc: dict, agregados: list, fila: dict) -> dict:
+        acc["__count__"] += 1
+        for ag in agregados:
+            etiqueta = ag.etiqueta()
+            if ag.nombre == "count":
+                acc[etiqueta] += 1
+            elif ag.nombre in ("sum", "avg"):
+                acc[etiqueta] += fila[ag.columna]
+        return acc
+
+    def _finalizar_acumulador(self, acc: dict, agregados: list) -> dict:
+        fila = {}
+        for ag in agregados:
+            etiqueta = ag.etiqueta()
+            if ag.nombre == "avg":
+                fila[etiqueta] = (acc[etiqueta] / acc["__count__"]) if acc["__count__"] else 0
+            else:
+                fila[etiqueta] = acc[etiqueta]
+        return fila
+
+    def agrupar(self, filas, schema: Schema, columna: str, agregados: list, tmp_dir: str):
+        def combinar(acc, fila):
+            if acc is None:
+                acc = self._iniciar_acumulador(agregados)
+            return self._actualizar_acumulador(acc, agregados, fila)
+
+        stats = {}
+        resultados = external_group_by(filas, lambda f: f[columna], combinar,
+                                       schema, self.buffer_pages, tmp_dir, stats)
         self.plan.append(f"GROUP BY {columna} (external hash, B={self.buffer_pages}: "
                          f"{stats['partitions']} particiones, {stats['repartitions']} reparticiones)")
+
         col = schema.columns[schema.column_index(columna)]
-        schema_grupos = Schema(schema.table_name, [col, Column("count", DataType.BIGINT, 8)])
-        return [{columna: clave, "count": n} for clave, n in conteo.items()], schema_grupos
+        columnas_schema = [col]
+        if agregados:
+            for ag in agregados:
+                tipo, tamano = self._tipo_resultado_agregado(ag, schema)
+                columnas_schema.append(Column(ag.etiqueta(), tipo, tamano))
+        else:
+            columnas_schema.append(Column("count", DataType.BIGINT, 8))
+        schema_grupos = Schema(schema.table_name, columnas_schema)
+
+        filas_salida = []
+        for clave, acc in resultados.items():
+            fila = {columna: clave}
+            if agregados:
+                fila.update(self._finalizar_acumulador(acc, agregados))
+            else:
+                fila["count"] = acc["__count__"]
+            filas_salida.append(fila)
+        return filas_salida, schema_grupos
+
+    def agregar_global(self, filas, schema: Schema, agregados: list):
+        acc = self._iniciar_acumulador(agregados)
+        for fila in filas:
+            acc = self._actualizar_acumulador(acc, agregados, fila)
+        self.plan.append(f"agregacion global sobre {acc['__count__']} fila(s) (sin GROUP BY)")
+
+        fila_salida = self._finalizar_acumulador(acc, agregados)
+        columnas_schema = [Column(ag.etiqueta(), *self._tipo_resultado_agregado(ag, schema)) for ag in agregados]
+        schema_salida = Schema(schema.table_name, columnas_schema)
+        return [fila_salida], schema_salida
 
     def ordenar(self, filas, schema: Schema, order_by, tmp_dir: str):
         stats = {}
@@ -760,7 +954,6 @@ class Conexion:
         self._recargar_indices(tabla, info)
 
     def _recargar_indices(self, tabla: str, info: TableInfo) -> None:
-        # el reorganize mueve todas las filas: los RID viejos ya no valen
         secundarios = []
         for columna in info.indices:
             indice, tipo_indice = self.catalog.get_indice(tabla, columna)
@@ -802,12 +995,13 @@ class Conexion:
 
     def ejecutar_delete(self, nodo: DeleteNode, dry_run: bool = False) -> dict:
         info = self.catalog.get_table(nodo.tabla)
-        where = nodo.where
+        where = self._resolver_subconsultas(nodo.where)
         sufijo = " [no ejecutado]" if dry_run else ""
         if where is not None:
             es_por_clave = (
                 isinstance(where, Condition)
                 and where.operador == TokenType.EQ
+                and not isinstance(where.valor, ColumnRef)
                 and where.columna == info.key_column
                 and info.tipo_storage == STORAGE_SEQUENTIAL
             )
@@ -877,6 +1071,72 @@ class Conexion:
             idx = info.schema.column_index(columna)
             valor = record.values[idx]
             indice.delete(valor, rid)
+
+    def _aplicar_asignaciones(self, record: Record, schema: Schema, asignaciones: list) -> Record:
+        nuevos_valores = list(record.values)
+        for columna, valor in asignaciones:
+            idx = schema.column_index(columna)
+            nuevos_valores[idx] = valor
+        return Record(nuevos_valores)
+
+    def ejecutar_update(self, nodo: UpdateNode, dry_run: bool = False) -> dict:
+        info = self.catalog.get_table(nodo.tabla)
+        where = self._resolver_subconsultas(nodo.where)
+        sufijo = " [no ejecutado]" if dry_run else ""
+
+        if info.tipo_storage == STORAGE_HEAP:
+            nombres_col = [c.name for c in info.schema.columns]
+            candidatos = []
+            for rid, record in info.storage.scan_con_rid(info.schema):
+                fila = dict(zip(nombres_col, record.values))
+                if where is None or self.cumple_where(where, fila):
+                    candidatos.append((rid, record))
+            self.plan.append(f"escaneo + UPDATE (delete+insert) por RID en '{info.nombre}'{sufijo}")
+            if dry_run:
+                return {"operacion": "UPDATE", "filas_afectadas": len(candidatos)}
+
+            actualizadas = 0
+            for rid, record in candidatos:
+                nuevo_record = self._aplicar_asignaciones(record, info.schema, nodo.asignaciones)
+                self.actualizar_indices_delete(nodo.tabla, info, record, rid)
+                info.storage.delete(rid)
+                nuevo_rid = info.storage.insert(nuevo_record, info.schema)
+                self.actualizar_indices_insert(nodo.tabla, info, nuevo_record, nuevo_rid)
+                actualizadas += 1
+            self._reorganizar_si_hace_falta(nodo.tabla, info)
+            return {"operacion": "UPDATE", "filas_afectadas": actualizadas}
+
+        if info.tipo_storage == STORAGE_SEQUENTIAL:
+            claves = []
+            for fila in self.leer_todo(info):
+                if where is None or self.cumple_where(where, fila):
+                    claves.append(fila[info.key_column])
+            self.plan.append(f"escaneo + UPDATE (delete+insert) por clave en '{info.nombre}'{sufijo}")
+            if dry_run:
+                return {"operacion": "UPDATE", "filas_afectadas": len(claves)}
+
+            indice_clustered = self._indice_clustered(nodo.tabla, info.key_column)
+            actualizadas = 0
+            for clave in claves:
+                if indice_clustered is not None:
+                    borrado = indice_clustered.delete(clave)
+                else:
+                    borrado = info.storage.delete(clave)
+                if borrado is None:
+                    continue
+                rid, record = borrado
+                nuevo_record = self._aplicar_asignaciones(record, info.schema, nodo.asignaciones)
+                self.actualizar_indices_delete(nodo.tabla, info, record, rid)
+                if indice_clustered is not None:
+                    nuevo_rid = indice_clustered.insert(nuevo_record)
+                else:
+                    nuevo_rid = info.storage.insert(nuevo_record)
+                self.actualizar_indices_insert(nodo.tabla, info, nuevo_record, nuevo_rid)
+                actualizadas += 1
+            self._reorganizar_si_hace_falta(nodo.tabla, info)
+            return {"operacion": "UPDATE", "filas_afectadas": actualizadas}
+
+        raise ExecutionError(f"storage desconocido: {info.tipo_storage}")
 
     def ejecutar_create_table(self, nodo: CreateTableNode, session_id: str) -> dict:
         if self.txn_manager.is_active(session_id):

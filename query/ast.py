@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from query.tokens import TokenType
 
 @dataclass
@@ -19,10 +19,25 @@ class FuncCall:
 
 
 @dataclass
+class ColumnRef:
+    nombre: str
+
+
+@dataclass
+class SubquerySelect:
+    nodo_select: object
+
+
+@dataclass
 class Condition:
     columna: str
     operador: TokenType
     valor: object
+
+
+@dataclass
+class NotCondition:
+    interior: object
 
 
 @dataclass
@@ -49,6 +64,16 @@ class JoinClause:
     columna_izquierda: str
     columna_derecha: str
 
+
+@dataclass
+class AggregateCall:
+    nombre: str
+    columna: str
+
+    def etiqueta(self) -> str:
+        return f"{self.nombre}({self.columna})"
+
+
 @dataclass
 class SelectNode:
     columnas: list
@@ -56,7 +81,7 @@ class SelectNode:
     where: object = None
     order_by: OrderBy = None
     group_by: str = None
-    join: JoinClause = None
+    joins: list = field(default_factory=list)
     limit: int = None
 
 
@@ -69,6 +94,13 @@ class InsertNode:
 @dataclass
 class DeleteNode:
     tabla: str
+    where: object = None
+
+
+@dataclass
+class UpdateNode:
+    tabla: str
+    asignaciones: list  # lista[tupla[str, object]]
     where: object = None
 
 

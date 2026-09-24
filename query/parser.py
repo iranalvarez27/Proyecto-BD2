@@ -1,6 +1,7 @@
 from query.tokens import Token, TokenType
 from query.ast import (
-    SelectNode, InsertNode, DeleteNode, Condition, BinaryCondition, OrderBy, JoinClause,
+    SelectNode, InsertNode, DeleteNode, UpdateNode, Condition, BinaryCondition, NotCondition,
+    OrderBy, JoinClause, AggregateCall, ColumnRef, SubquerySelect,
     BeginNode, CommitNode, RollbackNode, ExplainNode, ColumnDef, CreateTableNode, DropTableNode,
     PointLiteral, PolygonLiteral, FuncCall, SpatialCondition, CreateIndexNode,
 )
@@ -10,6 +11,9 @@ class ParserError(Exception):
 
 OPERADORES_COMP = [TokenType.EQ, TokenType.NEQ, TokenType.LT, TokenType.LTE, TokenType.GT, TokenType.GTE]
 TIPOS_INDICE_CREATE_INDEX = {"btree": "bplus", "bplus": "bplus", "hash": "hash", "rtree": "rtree"}
+FUNCIONES_AGREGADAS = {"count", "sum", "avg"}
+LAT_MIN, LAT_MAX = -90.0, 90.0
+LON_MIN, LON_MAX = -180.0, 180.0
 
 class Parser:
     def __init__(self, tokens: list[Token]):
@@ -49,6 +53,8 @@ class Parser:
             nodo = self.parse_insert()
         elif self.coincide(TokenType.DELETE):
             nodo = self.parse_delete()
+        elif self.coincide(TokenType.UPDATE):
+            nodo = self.parse_update()
         elif self.coincide(TokenType.BEGIN) or self.coincide(TokenType.START):
             nodo = self.parse_begin()
         elif self.coincide(TokenType.COMMIT) or self.coincide(TokenType.END):
@@ -104,10 +110,12 @@ class Parser:
             statement = self.parse_insert()
         elif self.coincide(TokenType.DELETE):
             statement = self.parse_delete()
+        elif self.coincide(TokenType.UPDATE):
+            statement = self.parse_update()
         else:
             t = self.actual()
             raise ParserError(
-                f"pos {t.pos}: EXPLAIN solo soporta SELECT, INSERT o DELETE, salio {t.type.name} ({t.value})")
+                f"pos {t.pos}: EXPLAIN solo soporta SELECT, INSERT, DELETE o UPDATE, salio {t.type.name} ({t.value})")
         return ExplainNode(statement, analyze)
 
     def parse_create_table(self):
@@ -181,9 +189,9 @@ class Parser:
         self.esperar(TokenType.FROM)
         tabla = self.esperar(TokenType.IDENT).value
 
-        join = None
-        if self.coincide(TokenType.JOIN):
-            join = self.parse_join()
+        joins = []
+        while self.coincide(TokenType.JOIN):
+            joins.append(self.parse_join())
 
         where = None
         order_by = None
@@ -207,7 +215,7 @@ class Parser:
                 raise ParserError(f"pos {tok.pos}: LIMIT necesita un entero, salio '{tok.value}'")
             limit = int(tok.value)
 
-        return SelectNode(cols, tabla, where, order_by, group_by, join, limit)
+        return SelectNode(cols, tabla, where, order_by, group_by, joins, limit)
 
     def parse_join(self):
         self.esperar(TokenType.JOIN)
@@ -236,12 +244,19 @@ class Parser:
         return -valor if negativo else valor
 
     def parse_point_literal(self):
+        pos = self.actual().pos
         self.esperar(TokenType.POINT)
         self.esperar(TokenType.LPAREN)
         lat = self.parse_numero_con_signo()
         self.esperar(TokenType.COMMA)
         lon = self.parse_numero_con_signo()
         self.esperar(TokenType.RPAREN)
+        if not (LAT_MIN <= lat <= LAT_MAX):
+            raise ParserError(f"pos {pos}: POINT invalido, latitud {lat} fuera de rango "
+                f"[{LAT_MIN}, {LAT_MAX}]")
+        if not (LON_MIN <= lon <= LON_MAX):
+            raise ParserError(f"pos {pos}: POINT invalido, longitud {lon} fuera de rango "
+                f"[{LON_MIN}, {LON_MAX}]")
         return PointLiteral(float(lat), float(lon))
 
     def parse_polygon_literal(self):
@@ -286,11 +301,31 @@ class Parser:
         if self.coincide(TokenType.STAR):
             self.avanzar()
             return ["*"]
-        cols = [self.parse_columna_ref()]
+        cols = [self.parse_item_columna()]
         while self.coincide(TokenType.COMMA):
             self.avanzar()
-            cols.append(self.parse_columna_ref())
+            cols.append(self.parse_item_columna())
         return cols
+
+    def parse_item_columna(self):
+        if self.coincide(TokenType.IDENT) and self.siguiente().type == TokenType.LPAREN:
+            return self.parse_aggregate_call()
+        return self.parse_columna_ref()
+
+    def parse_aggregate_call(self):
+        tok = self.esperar(TokenType.IDENT)
+        nombre = tok.value.lower()
+        if nombre not in FUNCIONES_AGREGADAS:
+            raise ParserError(f"pos {tok.pos}: funcion '{tok.value}' no reconocida en el SELECT "
+                f"(agregadas disponibles: {', '.join(sorted(FUNCIONES_AGREGADAS))})")
+        self.esperar(TokenType.LPAREN)
+        if self.coincide(TokenType.STAR):
+            self.avanzar()
+            columna = "*"
+        else:
+            columna = self.parse_columna_ref()
+        self.esperar(TokenType.RPAREN)
+        return AggregateCall(nombre, columna)
 
     def parse_order_by(self):
         self.esperar(TokenType.ORDER)
@@ -347,6 +382,36 @@ class Parser:
             where = self.parse_condicion()
         return DeleteNode(tabla, where)
 
+    def parse_update(self):
+        self.esperar(TokenType.UPDATE)
+        tabla = self.esperar(TokenType.IDENT).value
+        self.esperar(TokenType.SET)
+        asignaciones = [self.parse_asignacion()]
+        while self.coincide(TokenType.COMMA):
+            self.avanzar()
+            asignaciones.append(self.parse_asignacion())
+        where = None
+        if self.coincide(TokenType.WHERE):
+            self.avanzar()
+            where = self.parse_condicion()
+        return UpdateNode(tabla, asignaciones, where)
+
+    def parse_asignacion(self):
+        columna = self.esperar(TokenType.IDENT).value
+        self.esperar(TokenType.EQ)
+        valor = self.parse_valor_literal()
+        return (columna, valor)
+
+    def parse_valor_literal(self):
+        if self.coincide(TokenType.MINUS) or self.coincide(TokenType.NUMBER):
+            return self.parse_numero_con_signo()
+        if self.coincide(TokenType.STRING):
+            return self.avanzar().value
+        if self.coincide(TokenType.POINT):
+            return self.parse_point_literal()
+        tok = self.actual()
+        raise ParserError(f"pos {tok.pos}: valor invalido en SET '{tok.value}'")
+
     def parse_condicion(self):
         return self.parse_or()
 
@@ -359,12 +424,19 @@ class Parser:
         return izq
 
     def parse_and(self):
-        izq = self.parse_comparacion()
+        izq = self.parse_not()
         while self.coincide(TokenType.AND):
             self.avanzar()
-            der = self.parse_comparacion()
+            der = self.parse_not()
             izq = BinaryCondition(izq, TokenType.AND, der)
         return izq
+
+    def parse_not(self):
+        if self.coincide(TokenType.NOT):
+            self.avanzar()
+            interior = self.parse_not()
+            return NotCondition(interior)
+        return self.parse_comparacion()
 
     def parse_comparacion(self):
         if self.coincide(TokenType.LPAREN):
@@ -383,13 +455,41 @@ class Parser:
 
         col = self.parse_columna_ref()
 
+        negar = False
+        if self.coincide(TokenType.NOT):
+            self.avanzar()
+            negar = True
+
+        if self.coincide(TokenType.LIKE):
+            self.avanzar()
+            tok = self.esperar(TokenType.STRING)
+            cond = Condition(col, TokenType.LIKE, tok.value)
+            return NotCondition(cond) if negar else cond
+
+        if self.coincide(TokenType.IN):
+            self.avanzar()
+            self.esperar(TokenType.LPAREN)
+            if self.coincide(TokenType.SELECT):
+                valor = SubquerySelect(self.parse_select())
+            else:
+                valor = self.parse_valores()
+            self.esperar(TokenType.RPAREN)
+            cond = Condition(col, TokenType.IN, valor)
+            return NotCondition(cond) if negar else cond
+
         if self.coincide(TokenType.BETWEEN):
             self.avanzar()
             bajo = self.parse_valor()
             self.esperar(TokenType.AND)
             alto = self.parse_valor()
-            return BinaryCondition(
+            cond = BinaryCondition(
                 Condition(col, TokenType.GTE, bajo), TokenType.AND, Condition(col, TokenType.LTE, alto))
+            return NotCondition(cond) if negar else cond
+
+        if negar:
+            t = self.actual()
+            raise ParserError(f"pos {t.pos}: NOT solo se puede usar antes de LIKE, IN o BETWEEN "
+                f"(salio {t.type.name})")
 
         if self.actual().type not in OPERADORES_COMP:
             raise ParserError(f"pos {self.actual().pos}: falta operador de comparacion")
@@ -404,5 +504,7 @@ class Parser:
             return self.avanzar().value
         if self.coincide(TokenType.POINT):
             return self.parse_point_literal()
+        if self.coincide(TokenType.IDENT):
+            return ColumnRef(self.parse_columna_ref())
         tok = self.actual()
         raise ParserError(f"pos {tok.pos}: valor invalido '{tok.value}'")
