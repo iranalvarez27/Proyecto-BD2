@@ -28,6 +28,7 @@ import json
 import csv
 import argparse
 import tempfile
+import heapq
 from typing import Dict, List, Tuple, Any
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -35,7 +36,7 @@ if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
 from common.types import RID
-from common.geo import range_query_secuencial, knn_secuencial, Point
+from common.geo import HAVERSINE, get_metric
 from common.datos_lima import generar_tiendas, centros_de_consulta
 from engine.buffer_pool import BufferPool
 from engine.file_manager import FileManager
@@ -48,6 +49,19 @@ try:
     HAS_PSYCOPG2 = True
 except ImportError:
     HAS_PSYCOPG2 = False
+
+
+# Baselines sin indice; puntos y centro en (x, y) = (lon, lat)
+def range_query_secuencial(puntos, centro, radio: float, metric: str = HAVERSINE) -> list:
+    dist = get_metric(metric)
+    x, y = centro
+    return [(px, py) for px, py in puntos if dist(x, y, (px, py, px, py)) <= radio]
+
+
+def knn_secuencial(puntos, centro, k: int, metric: str = HAVERSINE) -> list:
+    dist = get_metric(metric)
+    x, y = centro
+    return heapq.nsmallest(k, ((dist(x, y, (px, py, px, py)), (px, py)) for px, py in puntos))
 
 
 # Línea base de referencia para PostGIS GiST (calibrada en entorno PostgreSQL 16 + PostGIS 3.4)
@@ -178,12 +192,12 @@ class SpatialBenchmarkRunner:
         print(f"  -> Generando {n:,} tiendas en Lima...")
         raw_data = generar_tiendas(n, seed=2026 + n)
         # Formato de punto: row[3] = (lat, lon)
-        pts_secuencial = [Point(y=row[3][0], x=row[3][1]) for row in raw_data]
+        pts_secuencial = [(row[3][1], row[3][0]) for row in raw_data]
 
         # 2. Generar 100 centros de consulta aleatorios
         print(f"  -> Generando {self.num_queries} centros de consulta...")
         centros = centros_de_consulta(self.num_queries, seed=99)
-        centros_point = [Point(y=c[0], x=c[1]) for c in centros]
+        centros_point = [(c[1], c[0]) for c in centros]
 
         size_res = {
             "n": n,

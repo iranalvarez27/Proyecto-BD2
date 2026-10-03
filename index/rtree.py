@@ -7,8 +7,7 @@ import sys
 from typing import Any
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from common.geo import (METRICA_HAVERSINE, como_punto, mbr_de_poligono,
-                        punto_en_poligono, resolver_metrica)
+from common.geo import HAVERSINE, MBR, get_metric, point_in_polygon
 from common.page import PAGE_SIZE
 from common.types import RID
 from engine.buffer_pool import BufferPool
@@ -16,12 +15,11 @@ from engine.segment import NIL, Segment
 from index.base import Index
 
 META_PAGE = 0
-MAGIC = b"RTR1"
-META_FORMAT = "<4siHi"            # magic | raiz | altura | free_list_head
+META_FORMAT = "<iHi"              # raiz | altura | free_list_head
 
 HEADER = struct.Struct("<BxH")    # es_hoja | cantidad
-LEAF = struct.Struct("<ddii")     # lat | lon | rid.page_id | rid.slot_id
-INNER = struct.Struct("<ddddi")   # lat_min | lon_min | lat_max | lon_max | hijo
+LEAF = struct.Struct("<ddii")     # x (lon) | y (lat) | rid.page_id | rid.slot_id
+INNER = struct.Struct("<ddddi")   # x_min | y_min | x_max | y_max | hijo
 
 MAX_LEAF = (PAGE_SIZE - HEADER.size) // LEAF.size
 MAX_INNER = (PAGE_SIZE - HEADER.size) // INNER.size
@@ -70,6 +68,13 @@ def _intersects(a: tuple, b: tuple) -> bool:
     return a[0] <= b[2] and b[0] <= a[2] and a[1] <= b[3] and b[1] <= a[3]
 
 
+# La API recibe y devuelve puntos como los guarda la tabla, (lat, lon); dentro
+# del arbol todo es (x, y) = (lon, lat).
+def _xy(point) -> tuple:
+    lat, lon = point
+    return float(lon), float(lat)
+
+
 class RTree(Index):
     def __init__(self, pool: BufferPool, path: str):
         self._seg = Segment(pool, path)
@@ -93,22 +98,20 @@ class RTree(Index):
     # ------------------------------------------------------------------
 
     def insert(self, key: Any, rid: RID) -> None:
-        lat, lon = como_punto(key)
-        self._insert_entry((lat, lon, rid.page_id, rid.slot_id))
+        x, y = _xy(key)
+        self._insert_entry((x, y, rid.page_id, rid.slot_id))
 
     def search(self, key: Any) -> list[RID]:
-        lat, lon = como_punto(key)
-        return [rid for rid, _p in self._rect_search((lat, lon, lat, lon), None)]
+        x, y = _xy(key)
+        return [rid for rid, _p in self._rect_search(MBR.of_point(x, y), None)]
 
     def range_search(self, low: Any, high: Any, stats: dict | None = None) -> list[RID]:
-        lat1, lon1 = como_punto(low)
-        lat2, lon2 = como_punto(high)
-        rect = (min(lat1, lat2), min(lon1, lon2), max(lat1, lat2), max(lon1, lon2))
+        rect = MBR.of_points([_xy(low), _xy(high)])
         return [rid for rid, _p in self._rect_search(rect, stats)]
 
     def delete(self, key: Any, rid: RID) -> bool:
-        lat, lon = como_punto(key)
-        target = (lat, lon, rid.page_id, rid.slot_id)
+        x, y = _xy(key)
+        target = (x, y, rid.page_id, rid.slot_id)
         path = self._find_leaf(self._root, target)
         if path is None:
             return False
@@ -123,10 +126,10 @@ class RTree(Index):
     # consultas espaciales
     # ------------------------------------------------------------------
 
-    def radius_search(self, center: Any, radius_m: float, metrica: str = METRICA_HAVERSINE,
+    def radius_search(self, center: Any, radius_m: float, metrica: str = HAVERSINE,
                       stats: dict | None = None) -> list:
-        lat, lon = como_punto(center)
-        dist, mindist = resolver_metrica(metrica)
+        x, y = _xy(center)
+        mindist = get_metric(metrica)
         encontrados = []
         nodos = hojas = 0
         pila = [self._root]
@@ -135,20 +138,20 @@ class RTree(Index):
             nodos += 1
             if node.is_leaf:
                 hojas += 1
-                for plat, plon, page_id, slot_id in node.entries:
-                    d = dist(lat, lon, plat, plon)
+                for px, py, page_id, slot_id in node.entries:
+                    d = mindist(x, y, (px, py, px, py))
                     if d <= radius_m:
-                        encontrados.append((d, RID(page_id, slot_id), (plat, plon)))
+                        encontrados.append((d, RID(page_id, slot_id), (py, px)))
             else:
                 for e in node.entries:
-                    if mindist(lat, lon, e[:4]) <= radius_m:
+                    if mindist(x, y, e[:4]) <= radius_m:
                         pila.append(e[4])
         self._fill_stats(stats, nodos, hojas, len(encontrados))
         return encontrados
 
-    def nearest_iter(self, center: Any, metrica: str = METRICA_HAVERSINE, stats: dict | None = None):
-        lat, lon = como_punto(center)
-        dist, mindist = resolver_metrica(metrica)
+    def nearest_iter(self, center: Any, metrica: str = HAVERSINE, stats: dict | None = None):
+        x, y = _xy(center)
+        mindist = get_metric(metrica)
         contador = itertools.count()
         cola = [(0.0, next(contador), True, self._root)]
         if stats is not None:
@@ -165,20 +168,20 @@ class RTree(Index):
                 stats["nodos_visitados"] += 1
                 stats["hojas_visitadas"] += 1 if node.is_leaf else 0
             if node.is_leaf:
-                for plat, plon, page_id, slot_id in node.entries:
-                    heapq.heappush(cola, (dist(lat, lon, plat, plon), next(contador), False,
-                                          (RID(page_id, slot_id), (plat, plon))))
+                for px, py, page_id, slot_id in node.entries:
+                    heapq.heappush(cola, (mindist(x, y, (px, py, px, py)), next(contador), False,
+                                          (RID(page_id, slot_id), (py, px))))
             else:
                 for e in node.entries:
-                    heapq.heappush(cola, (mindist(lat, lon, e[:4]), next(contador), True, e[4]))
+                    heapq.heappush(cola, (mindist(x, y, e[:4]), next(contador), True, e[4]))
 
-    def knn(self, center: Any, k: int, metrica: str = METRICA_HAVERSINE,
+    def knn(self, center: Any, k: int, metrica: str = HAVERSINE,
             stats: dict | None = None) -> list:
         return list(itertools.islice(self.nearest_iter(center, metrica, stats), k))
 
     def polygon_search(self, vertices: list, stats: dict | None = None) -> list:
-        vertices = [como_punto(v) for v in vertices]
-        caja = mbr_de_poligono(vertices)
+        vertices = [_xy(v) for v in vertices]
+        caja = MBR.of_points(vertices)
         encontrados = []
         nodos = hojas = 0
         pila = [self._root]
@@ -187,10 +190,9 @@ class RTree(Index):
             nodos += 1
             if node.is_leaf:
                 hojas += 1
-                for plat, plon, page_id, slot_id in node.entries:
-                    if (caja[0] <= plat <= caja[2] and caja[1] <= plon <= caja[3]
-                            and punto_en_poligono(plat, plon, vertices)):
-                        encontrados.append((RID(page_id, slot_id), (plat, plon)))
+                for px, py, page_id, slot_id in node.entries:
+                    if caja.contains(px, py) and point_in_polygon(px, py, vertices):
+                        encontrados.append((RID(page_id, slot_id), (py, px)))
             else:
                 for e in node.entries:
                     if _intersects(e[:4], caja):
@@ -203,8 +205,8 @@ class RTree(Index):
         while pila:
             node = self._read(pila.pop())
             if node.is_leaf:
-                for plat, plon, page_id, slot_id in node.entries:
-                    yield (plat, plon), RID(page_id, slot_id)
+                for px, py, page_id, slot_id in node.entries:
+                    yield (py, px), RID(page_id, slot_id)
             else:
                 pila.extend(e[4] for e in node.entries)
 
@@ -228,7 +230,7 @@ class RTree(Index):
         if stats is not None:
             stats.update(nodos_visitados=nodos, hojas_visitadas=hojas, candidatos=candidatos)
 
-    def _rect_search(self, rect: tuple, stats: dict | None) -> list:
+    def _rect_search(self, rect: MBR, stats: dict | None) -> list:
         encontrados = []
         nodos = hojas = 0
         pila = [self._root]
@@ -237,9 +239,9 @@ class RTree(Index):
             nodos += 1
             if node.is_leaf:
                 hojas += 1
-                for plat, plon, page_id, slot_id in node.entries:
-                    if rect[0] <= plat <= rect[2] and rect[1] <= plon <= rect[3]:
-                        encontrados.append((RID(page_id, slot_id), (plat, plon)))
+                for px, py, page_id, slot_id in node.entries:
+                    if rect.contains(px, py):
+                        encontrados.append((RID(page_id, slot_id), (py, px)))
             else:
                 for e in node.entries:
                     if _intersects(e[:4], rect):
@@ -430,8 +432,8 @@ class RTree(Index):
     def bulk_load(self, pairs) -> None:
         entries = []
         for key, rid in pairs:
-            lat, lon = como_punto(key)
-            entries.append((lat, lon, rid.page_id, rid.slot_id))
+            x, y = _xy(key)
+            entries.append((x, y, rid.page_id, rid.slot_id))
 
         self._seg.truncate(1)
         if not entries:
@@ -452,20 +454,20 @@ class RTree(Index):
     def _str_pack(self, entries: list, is_leaf: bool) -> list:
         cap = max(2, int((MAX_LEAF if is_leaf else MAX_INNER) * BULK_FILL))
         if is_leaf:
-            por_lon = lambda e: e[1]
-            por_lat = lambda e: e[0]
+            por_x = lambda e: e[0]
+            por_y = lambda e: e[1]
         else:
-            por_lon = lambda e: (e[1] + e[3]) / 2
-            por_lat = lambda e: (e[0] + e[2]) / 2
+            por_x = lambda e: (e[0] + e[2]) / 2
+            por_y = lambda e: (e[1] + e[3]) / 2
 
         n_nodos = math.ceil(len(entries) / cap)
         n_franjas = math.ceil(math.sqrt(n_nodos))
         tam_franja = n_franjas * cap
 
-        entries.sort(key=por_lon)
+        entries.sort(key=por_x)
         padres = []
         for inicio in range(0, len(entries), tam_franja):
-            franja = sorted(entries[inicio:inicio + tam_franja], key=por_lat)
+            franja = sorted(entries[inicio:inicio + tam_franja], key=por_y)
             for j in range(0, len(franja), cap):
                 node = _Node(is_leaf, franja[j:j + cap])
                 page_id = self._seg.append(self._encode(node))
@@ -511,9 +513,7 @@ class RTree(Index):
         self._flush_meta()
 
     def _load(self) -> None:
-        magic, root, height, free_head = struct.unpack_from(META_FORMAT, self._seg.read(META_PAGE), 0)
-        if magic != MAGIC:
-            raise ValueError(f"{self._seg.path} no es un indice R-Tree")
+        root, height, free_head = struct.unpack_from(META_FORMAT, self._seg.read(META_PAGE), 0)
         self._root = root
         self._height = height
         self._seg.free_head = free_head
@@ -523,5 +523,5 @@ class RTree(Index):
 
     def _flush_meta(self) -> None:
         buf = bytearray(PAGE_SIZE)
-        struct.pack_into(META_FORMAT, buf, 0, MAGIC, self._root, self._height, self._seg.free_head)
+        struct.pack_into(META_FORMAT, buf, 0, self._root, self._height, self._seg.free_head)
         self._seg.write(META_PAGE, bytes(buf))
