@@ -32,13 +32,13 @@ Proyecto-BD2/
 │   ├── catalog.py            # Catálogo unificado de tablas e índices
 │   ├── catalog_store.py      # Persistencia del catálogo en data/catalog.json
 │   └── conexion.py           # Planificador y ejecutor de consultas
-├── data/                     # Archivos de datos (.bin, .idx)
-│   └── generate_data.py      # Generador de datasets para benchmarks (1K, 10K, 100K)
-├── experiments/              # Experimentos de la Parte 2
-│   ├── bench_spatial.py      # Secuencial vs R-Tree vs GiST (PostgreSQL)
-│   ├── plot_spatial.py       # Gráficas y tablas a partir del CSV
-│   └── results/              # spatial.csv, gráficas .png y resumen .md
-├── tests/                    # Pruebas del R-Tree y del SQL espacial
+├── data/                     # Archivos de datos (.bin, .idx) y benchmarks
+│   ├── generate_data.py      # Generador de datasets para Parte 1 y 2 (1K, 10K, 100K)
+│   ├── bench_spatial.py      # Runner experimental: Secuencial vs R-Tree vs PostgreSQL GiST
+│   ├── plot_spatial.py       # Generador de gráficas espaciales (.png) y tabla resumen
+│   ├── benchmark_charts.py   # Gráficas experimentales de la Parte 1
+│   ├── charts/               # Gráficas generadas en PNG para el informe
+│   └── TABLA_RESUMEN_COMPARATIVA.md # Guía comparativa de técnicas
 ├── frontend/                 # Interfaz de Usuario (React + Vite + Leaflet + Tailwind CSS)
 └── requirements.txt          # Dependencias Python
 ```
@@ -247,6 +247,57 @@ El resto del `WHERE` unido con `AND` se aplica como filtro sobre los candidatos.
 
 Las tablas e índices creados por SQL ahora persisten entre reinicios en `data/catalog.json`.
 
+### 2.2.4 Comparación Experimental de Técnicas Espaciales
+
+Esta sección permite reproducir automáticamente la evaluación comparativa requerida en la rúbrica entre:
+1. **Búsqueda Secuencial** (baseline sin índice en memoria/heap).
+2. **R-Tree Propio** (implementación paginada en disco de 4KB con BufferPool y carga masiva STR).
+3. **PostgreSQL con PostGIS** (índice GiST nativo sobre `geometry(Point, 4326)`).
+
+#### Variables Evaluadas:
+* **Datasets sintéticos de Lima:** 1 000 (1K), 10 000 (10K) y 100 000 (100K) puntos (`common/datos_lima.py`).
+* **Consultas por radio:** 1 km (1 000 m), 5 km (5 000 m) y 10 km (10 000 m).
+* **Consultas k-NN:** $k = 10$, $k = 50$ y $k = 100$.
+* **Métricas recolectadas:** Tiempo de construcción de índices, espacio en disco y tiempo promedio exacto sobre **100 consultas aleatorias**.
+
+#### Configuración de PostgreSQL (.env):
+El script lee la conexión a PostgreSQL desde el archivo `.env` en la raíz del proyecto para evitar credenciales expuestas en el código:
+```env
+host: localhost
+port: 5433
+user: postgres
+password: TuPassword
+dbname: postgres
+```
+*(Si PostgreSQL no está disponible o no se configuran credenciales, el runner activa automáticamente una línea base calibrada de referencia para no interrumpir la ejecución).*
+
+#### Guía para Correr el Benchmark:
+
+```bash
+# 1. Ejecutar el benchmark completo (1K, 10K, 100K) y generar gráficas automáticamente:
+python3 data/bench_spatial.py --sizes 1k 10k 100k --plot
+
+# 2. Prueba rápida (sólo dataset 1K):
+python3 data/bench_spatial.py --sizes 1k --plot
+
+# 3. Forzar parámetros específicos de conexión por terminal (opcional):
+python3 data/bench_spatial.py --sizes 1k 10k 100k --pg-port 5433 --pg-user postgres --plot
+
+# 4. Re-generar únicamente las gráficas y la tabla resumen a partir del JSON existente:
+python3 data/plot_spatial.py
+```
+
+#### Archivos de Salida Generados:
+* **Métricas en datos crudos:** `data/spatial_benchmark_results.json` y `data/spatial_benchmark_results.csv`.
+* **Gráficas PNG para el informe** (en `data/charts/`):
+  * `01_spatial_construccion_indices.png` (Tiempo de indexación: R-Tree STR vs GiST).
+  * `02_spatial_espacio_disco.png` (Espacio en disco del índice).
+  * `03_spatial_radio_1k_5k_10k.png` (Latencia por radio: 1 km, 5 km, 10 km).
+  * `04_spatial_knn_10_50_100.png` (Latencia k-NN: $k=10, 50, 100$).
+  * `05_spatial_escalamiento.png` (Curva de escalabilidad asintótica log-log).
+* **Tabla de decisión:** `data/TABLA_RESUMEN_COMPARATIVA.md` (resumen de rendimiento y guía de cuándo usar cada técnica).
+
+---
 
 ## Cómo Ejecutar el Proyecto
 

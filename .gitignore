@@ -9,9 +9,10 @@ __pycache__/
 *.idx
 data/*
 !data/generate_data.py
-!data/benchmark_charts.py
+!data/bench_spatial.py
 node_modules/
 .DS_Store
 storage/DOCUMENTACION.md
 storage/DOCUMENTACION.pdf
 common/test_geo.py
+.env
