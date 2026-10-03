@@ -6,6 +6,10 @@ EARTH_RADIUS_M = 6_371_000.0
 METROS_POR_GRADO = 111_320.0
 EPS = 1e-12
 
+# Constantes de métrica usadas por index/rtree.py y query/conexion.py
+METRICA_HAVERSINE = "haversine"
+METRICA_EUCLIDIANA = "euclidiana"
+
 
 @dataclass(frozen=True)
 class Point:
@@ -127,23 +131,25 @@ def euclidiana(a, b) -> float:
     return math.hypot(p2.x - p1.x, p2.y - p1.y)
 
 
-def euclidiana_aprox_m(x1: float, y1: float, x2: float, y2: float) -> float:
-    lat_media = (y1 + y2) / 2.0
-    dx = (x2 - x1) * METROS_POR_GRADO * math.cos(math.radians(lat_media))
-    dy = (y2 - y1) * METROS_POR_GRADO
+def euclidiana_aprox_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    """Distancia euclidiana aproximada en metros (proyección plana local)."""
+    lat_media = (lat1 + lat2) / 2.0
+    dx = (lon2 - lon1) * METROS_POR_GRADO * math.cos(math.radians(lat_media))
+    dy = (lat2 - lat1) * METROS_POR_GRADO
     return math.hypot(dx, dy)
 
 
-def haversine_m(x1: float, y1: float, x2: float, y2: float) -> float:
-    if not (-90.0 <= y1 <= 90.0 and -90.0 <= y2 <= 90.0):
+def haversine_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    """Distancia geodésica Haversine en metros. Argumentos: (lat1, lon1, lat2, lon2)."""
+    if not (-90.0 <= lat1 <= 90.0 and -90.0 <= lat2 <= 90.0):
         raise ValueError("La latitud debe estar entre -90 y 90 grados")
-    if not (-180.0 <= x1 <= 180.0 and -180.0 <= x2 <= 180.0):
+    if not (-180.0 <= lon1 <= 180.0 and -180.0 <= lon2 <= 180.0):
         raise ValueError("La longitud debe estar entre -180 y 180 grados")
 
-    phi1 = math.radians(y1)
-    phi2 = math.radians(y2)
-    delta_phi = math.radians(y2 - y1)
-    delta_lambda = math.radians(x2 - x1)
+    phi1 = math.radians(lat1)
+    phi2 = math.radians(lat2)
+    delta_phi = math.radians(lat2 - lat1)
+    delta_lambda = math.radians(lon2 - lon1)
     a = (
         math.sin(delta_phi / 2.0) ** 2
         + math.cos(phi1) * math.cos(phi2) * math.sin(delta_lambda / 2.0) ** 2
@@ -157,11 +163,11 @@ def distancia(a, b, metric: str = "haversine") -> float:
     p2 = as_point(b)
     metric = metric.lower()
     if metric in ("haversine", "geo", "geodesica", "geodésica"):
-        return haversine_m(p1.x, p1.y, p2.x, p2.y)
+        return haversine_m(p1.y, p1.x, p2.y, p2.x)  # lat=y, lon=x
     if metric in ("euclidiana", "euclidean"):
         return euclidiana(p1, p2)
     if metric in ("euclidiana_m", "euclidean_m", "plana_m"):
-        return euclidiana_aprox_m(p1.x, p1.y, p2.x, p2.y)
+        return euclidiana_aprox_m(p1.y, p1.x, p2.y, p2.x)  # lat=y, lon=x
     raise ValueError(f"Métrica espacial desconocida: '{metric}'")
 
 
@@ -342,3 +348,92 @@ def knn_secuencial(puntos, query, k: int, metric: str = "haversine") -> list[tup
     resultado = [(p, -neg_d) for (neg_d, _, p) in mejores]
     resultado.sort(key=lambda item: item[1])
     return resultado
+
+
+# ============================================================
+# FUNCIONES PUENTE para index/rtree.py y query/conexion.py
+#
+# El R-Tree y el motor SQL trabajan internamente con tuplas
+# (lat, lon) y MBRs como tuplas de 4 floats. Estas funciones
+# adaptan la interfaz orientada a objetos (Point, MBR) al
+# protocolo de tuplas que esos módulos esperan.
+# ============================================================
+
+def como_punto(valor) -> tuple:
+    """Convierte cualquier representación a una tupla (lat, lon)."""
+    if isinstance(valor, Point):
+        # Point almacena x=lon, y=lat en notación cartesiana
+        return (float(valor.y), float(valor.x))
+    if hasattr(valor, "lat") and hasattr(valor, "lon"):
+        return (float(valor.lat), float(valor.lon))
+    if hasattr(valor, "x") and hasattr(valor, "y"):
+        return (float(valor.y), float(valor.x))
+    lat, lon = valor
+    return (float(lat), float(lon))
+
+
+# Alias que query/conexion.py importa como: euclidiana_m as _euclidiana_aprox_m
+def euclidiana_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    """Distancia euclidiana aproximada en metros (proyección plana local)."""
+    dx = (lon2 - lon1) * METROS_POR_GRADO * math.cos(math.radians((lat1 + lat2) / 2))
+    dy = (lat2 - lat1) * METROS_POR_GRADO
+    return math.sqrt(dx * dx + dy * dy)
+
+
+def _separacion(valor: float, bajo: float, alto: float) -> float:
+    """Distancia (>= 0) de ``valor`` al intervalo [bajo, alto]."""
+    if valor < bajo:
+        return bajo - valor
+    if valor > alto:
+        return valor - alto
+    return 0.0
+
+
+def mindist_haversine_m(lat: float, lon: float, mbr: tuple) -> float:
+    """MINDIST geodésico de un punto a un MBR (tupla de 4 floats)."""
+    lat_min, lon_min, lat_max, lon_max = mbr
+    dlat = _separacion(lat, lat_min, lat_max)
+    dlon = _separacion(lon, lon_min, lon_max)
+    if dlat == 0.0 and dlon == 0.0:
+        return 0.0
+    cos_min = min(math.cos(math.radians(lat_min)), math.cos(math.radians(lat_max)))
+    a = (math.sin(math.radians(dlat) / 2) ** 2
+         + math.cos(math.radians(lat)) * max(0.0, cos_min) * math.sin(math.radians(dlon) / 2) ** 2)
+    return 2 * EARTH_RADIUS_M * math.asin(math.sqrt(min(1.0, a)))
+
+
+def mindist_euclidiana_m(lat: float, lon: float, mbr: tuple) -> float:
+    """MINDIST euclidiano de un punto a un MBR (tupla de 4 floats)."""
+    lat_min, lon_min, lat_max, lon_max = mbr
+    dlat = _separacion(lat, lat_min, lat_max)
+    dlon = _separacion(lon, lon_min, lon_max)
+    if dlat == 0.0 and dlon == 0.0:
+        return 0.0
+    cos_min = min(math.cos(math.radians((lat + lat_min) / 2)),
+                  math.cos(math.radians((lat + lat_max) / 2)))
+    dx = dlon * METROS_POR_GRADO * max(0.0, cos_min)
+    dy = dlat * METROS_POR_GRADO
+    return math.sqrt(dx * dx + dy * dy)
+
+
+# Tabla de métricas: nombre -> (dist_punto_punto, mindist_punto_mbr)
+_METRICAS = {
+    METRICA_HAVERSINE: (haversine_m, mindist_haversine_m),
+    METRICA_EUCLIDIANA: (euclidiana_m, mindist_euclidiana_m),
+}
+
+
+def resolver_metrica(metrica: str):
+    """Retorna (dist_func, mindist_func) para la métrica solicitada."""
+    try:
+        return _METRICAS[metrica]
+    except KeyError:
+        raise ValueError(f"metrica desconocida '{metrica}' (validas: {', '.join(_METRICAS)})")
+
+
+def mbr_de_poligono(vertices: list) -> tuple:
+    """Retorna (lat_min, lon_min, lat_max, lon_max) como tupla plana."""
+    lats = [v[0] for v in vertices]
+    lons = [v[1] for v in vertices]
+    return (min(lats), min(lons), max(lats), max(lons))
+
