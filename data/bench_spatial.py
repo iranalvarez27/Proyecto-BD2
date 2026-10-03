@@ -28,6 +28,8 @@ import json
 import csv
 import argparse
 import tempfile
+import struct
+import heapq
 from typing import Dict, List, Tuple, Any
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -35,11 +37,14 @@ if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
 from common.types import RID
-from common.geo import range_query_secuencial, knn_secuencial, Point
+from common.record import Record
+from common.geo import haversine_m, Point
 from common.datos_lima import generar_tiendas, centros_de_consulta
 from engine.buffer_pool import BufferPool
 from engine.file_manager import FileManager
+from storage.heap_file import HeapFile
 from index.rtree import RTree
+from data.generate_data import SCHEMA_TIENDAS
 
 # Importación condicional de psycopg2 para PostgreSQL + PostGIS
 try:
@@ -171,19 +176,27 @@ class SpatialBenchmarkRunner:
     def run_benchmark_for_size(self, n: int) -> Dict[str, Any]:
         size_label = f"{n // 1000}K" if n >= 1000 else str(n)
         print(f"\n=======================================================")
-        print(f"  EVALUANDO DATASET: {n:,} PUNTOS ({size_label})")
+        print(f"  EVALUANDO DATASET: {n:,} PUNTOS ({size_label}) [END-TO-END]")
         print(f"=======================================================")
 
         # 1. Generar datos sintéticos realistas de Lima
         print(f"  -> Generando {n:,} tiendas en Lima...")
         raw_data = generar_tiendas(n, seed=2026 + n)
-        # Formato de punto: row[3] = (lat, lon)
-        pts_secuencial = [Point(y=row[3][0], x=row[3][1]) for row in raw_data]
 
-        # 2. Generar 100 centros de consulta aleatorios
+        # 2. Generar centros de consulta aleatorios en distritos de Lima
         print(f"  -> Generando {self.num_queries} centros de consulta...")
         centros = centros_de_consulta(self.num_queries, seed=99)
-        centros_point = [Point(y=c[0], x=c[1]) for c in centros]
+
+        # 3. Poblar HeapFile físico en disco (BufferPool + páginas de 4KB)
+        print(f"  -> Poblando HeapFile físico en disco con {n:,} registros...")
+        tmp_heap = tempfile.mktemp(suffix=f"_bench_heap_{n}.bin")
+        tmp_idx = tempfile.mktemp(suffix=f"_bench_rtree_{n}.idx")
+        pool = BufferPool(FileManager())
+        heap = HeapFile(pool, tmp_heap)
+        pares_punto = []
+        for fila in raw_data:
+            rid = heap.insert(Record(list(fila)), SCHEMA_TIENDAS)
+            pares_punto.append((fila[3], rid))
 
         size_res = {
             "n": n,
@@ -194,9 +207,9 @@ class SpatialBenchmarkRunner:
         }
 
         # -------------------------------------------------------------------
-        # A. BÚSQUEDA SECUENCIAL (Baseline sin índice)
+        # A. BÚSQUEDA SECUENCIAL (Full Table Scan sobre HeapFile en disco)
         # -------------------------------------------------------------------
-        print("  [1/3] Ejecutando Búsqueda Secuencial (Baseline)...")
+        print("  [1/3] Ejecutando Búsqueda Secuencial (Full Scan en HeapFile + Fetch completo)...")
         size_res["secuencial"]["build_time_ms"] = 0.0
         size_res["secuencial"]["index_size_kb"] = 0.0
 
@@ -204,36 +217,57 @@ class SpatialBenchmarkRunner:
         radius_times_sec = {}
         for r in self.radios:
             t0 = time.perf_counter()
-            for cq in centros_point:
-                _ = range_query_secuencial(pts_secuencial, cq, r, metric="haversine")
+            for cq in centros:
+                lat_c, lon_c = cq
+                filas = []
+                for page_id in range(heap.page_count()):
+                    page = heap.read_page(page_id)
+                    for slot_id in range(page.slot_count):
+                        data = page.read(slot_id)
+                        if data == b"":
+                            continue
+                        _id, plat, plon = struct.unpack_from("<idd", data, 0)
+                        if haversine_m(plat, plon, lat_c, lon_c) <= r:
+                            filas.append(Record.unpack(data, SCHEMA_TIENDAS))
             elapsed = (time.perf_counter() - t0) * 1000.0 / self.num_queries
             radius_times_sec[int(r)] = round(elapsed, 4)
-            print(f"      Radio {r/1000:.0f} km: {elapsed:.2f} ms / consulta")
+            print(f"      Radio {r/1000:.0f} km: {elapsed:.2f} ms / consulta (Full scan + record fetch)")
         size_res["secuencial"]["radius_ms"] = radius_times_sec
 
         # k-NN Secuencial
         knn_times_sec = {}
         for k in self.k_values:
             t0 = time.perf_counter()
-            for cq in centros_point:
-                _ = knn_secuencial(pts_secuencial, cq, k, metric="haversine")
+            for cq in centros:
+                lat_c, lon_c = cq
+                mejores = []
+                for page_id in range(heap.page_count()):
+                    page = heap.read_page(page_id)
+                    for slot_id in range(page.slot_count):
+                        data = page.read(slot_id)
+                        if data == b"":
+                            continue
+                        _id, plat, plon = struct.unpack_from("<idd", data, 0)
+                        d = haversine_m(plat, plon, lat_c, lon_c)
+                        if len(mejores) < k:
+                            heapq.heappush(mejores, (-d, data))
+                        elif d < -mejores[0][0]:
+                            heapq.heapreplace(mejores, (-d, data))
+                filas = [Record.unpack(data, SCHEMA_TIENDAS) for neg_d, data in mejores]
             elapsed = (time.perf_counter() - t0) * 1000.0 / self.num_queries
             knn_times_sec[k] = round(elapsed, 4)
-            print(f"      k-NN k={k}:    {elapsed:.2f} ms / consulta")
+            print(f"      k-NN k={k}:    {elapsed:.2f} ms / consulta (Full scan + record fetch)")
         size_res["secuencial"]["knn_ms"] = knn_times_sec
 
         # -------------------------------------------------------------------
-        # B. R-TREE PROPIO (BufferPool + STR Bulk Load + Disco)
+        # B. R-TREE PROPIO (Index Scan + Heap Retrieval de tuplas completas)
         # -------------------------------------------------------------------
-        print("  [2/3] Evaluando R-Tree propio (Sort-Tile-Recursive)...")
-        tmp_idx = tempfile.mktemp(suffix=f"_bench_rtree_{n}.idx")
-        pool = BufferPool(FileManager())
+        print("  [2/3] Evaluando R-Tree propio (Index Scan + Heap Fetch completo)...")
         rtree = RTree(pool, tmp_idx)
 
         # Medir tiempo de construcción (STR Bulk Load)
-        pairs = [(row[3], RID(0, i)) for i, row in enumerate(raw_data)]
         t0 = time.perf_counter()
-        rtree.bulk_load(pairs)
+        rtree.bulk_load(pares_punto)
         t_build_rtree = (time.perf_counter() - t0) * 1000.0
         size_idx_kb = os.path.getsize(tmp_idx) / 1024.0
         size_res["rtree"]["build_time_ms"] = round(t_build_rtree, 2)
@@ -245,10 +279,22 @@ class SpatialBenchmarkRunner:
         for r in self.radios:
             t0 = time.perf_counter()
             for c in centros:
-                _ = rtree.radius_search(c, r, metrica="haversine")
+                hallados = rtree.radius_search(c, r, metrica="haversine")
+                # Recuperar registros completos del HeapFile ordenados por página física (BufferPool hit)
+                rids_sorted = sorted([rid for _d, rid, _p in hallados], key=lambda r: (r.page_id, r.slot_id))
+                cur_pid = -1
+                cur_p = None
+                filas = []
+                for rid in rids_sorted:
+                    if rid.page_id != cur_pid:
+                        cur_pid = rid.page_id
+                        cur_p = heap.read_page(cur_pid)
+                    data = cur_p.read(rid.slot_id)
+                    if data != b"":
+                        filas.append(Record.unpack(data, SCHEMA_TIENDAS))
             elapsed = (time.perf_counter() - t0) * 1000.0 / self.num_queries
             radius_times_rtree[int(r)] = round(elapsed, 4)
-            print(f"      Radio {r/1000:.0f} km: {elapsed:.2f} ms / consulta")
+            print(f"      Radio {r/1000:.0f} km: {elapsed:.2f} ms / consulta (Index + Heap fetch)")
         size_res["rtree"]["radius_ms"] = radius_times_rtree
 
         # k-NN R-Tree
@@ -256,20 +302,28 @@ class SpatialBenchmarkRunner:
         for k in self.k_values:
             t0 = time.perf_counter()
             for c in centros:
-                _ = rtree.knn(c, k, metrica="haversine")
+                hallados = rtree.knn(c, k, metrica="haversine")
+                filas = []
+                for _d, rid, _p in hallados:
+                    page = heap.read_page(rid.page_id)
+                    data = page.read(rid.slot_id)
+                    if data != b"":
+                        filas.append(Record.unpack(data, SCHEMA_TIENDAS))
             elapsed = (time.perf_counter() - t0) * 1000.0 / self.num_queries
             knn_times_rtree[k] = round(elapsed, 4)
-            print(f"      k-NN k={k}:    {elapsed:.2f} ms / consulta")
+            print(f"      k-NN k={k}:    {elapsed:.2f} ms / consulta (Index + Heap fetch)")
         size_res["rtree"]["knn_ms"] = knn_times_rtree
 
         pool.close_all()
+        if os.path.exists(tmp_heap):
+            os.remove(tmp_heap)
         if os.path.exists(tmp_idx):
             os.remove(tmp_idx)
 
         # -------------------------------------------------------------------
-        # C. POSTGRESQL + POSTGIS GIST
+        # C. POSTGRESQL + POSTGIS GIST (Index Scan + Fetchall de tuplas)
         # -------------------------------------------------------------------
-        print("  [3/3] Evaluando PostgreSQL GiST...")
+        print("  [3/3] Evaluando PostgreSQL GiST (Index Scan + Fetchall de tuplas)...")
         if self.pg_conn:
             try:
                 pg_res = self._benchmark_postgres(n, raw_data, centros)
@@ -297,12 +351,12 @@ class SpatialBenchmarkRunner:
                     id INT PRIMARY KEY,
                     nombre VARCHAR(40),
                     categoria VARCHAR(20),
-                    geom geometry(Point, 4326)
+                    geom geography(Point, 4326)
                 );
             """)
 
             # Inserción de tuplas
-            insert_sql = f"INSERT INTO {tbl_name} (id, nombre, categoria, geom) VALUES (%s, %s, %s, ST_SetSRID(ST_MakePoint(%s, %s), 4326));"
+            insert_sql = f"INSERT INTO {tbl_name} (id, nombre, categoria, geom) VALUES (%s, %s, %s, ST_SetSRID(ST_MakePoint(%s, %s), 4326)::geography);"
             # lat=row[3][0], lon=row[3][1] -> ST_MakePoint(lon, lat)
             rows = [(r[0], r[1], r[2], r[3][1], r[3][0]) for r in raw_data]
             execute_batch(cur, insert_sql, rows, page_size=2000)
@@ -317,29 +371,31 @@ class SpatialBenchmarkRunner:
             pg_size_bytes = cur.fetchone()[0]
             pg_size_kb = pg_size_bytes / 1024.0
 
-            # Consultas de radio (ST_DWithin usando geography para metros reales)
+            # Consultas de radio (ST_DWithin directamente sobre geography + fetchall de todas las columnas)
             radius_times_pg = {}
             for r in self.radios:
                 t0 = time.perf_counter()
                 for c in centros:
                     lat, lon = c
                     cur.execute(f"""
-                        SELECT count(*) FROM {tbl_name}
-                        WHERE ST_DWithin(geom::geography, ST_SetSRID(ST_MakePoint({lon}, {lat}), 4326)::geography, {r});
+                        SELECT id, nombre, categoria, ST_Y(geom::geometry), ST_X(geom::geometry)
+                        FROM {tbl_name}
+                        WHERE ST_DWithin(geom, ST_SetSRID(ST_MakePoint({lon}, {lat}), 4326)::geography, {r});
                     """)
-                    _ = cur.fetchone()
+                    _ = cur.fetchall()
                 elapsed = (time.perf_counter() - t0) * 1000.0 / self.num_queries
                 radius_times_pg[int(r)] = round(elapsed, 4)
 
-            # Consultas k-NN con el operador <-> de GiST
+            # Consultas k-NN con el operador <-> de GiST sobre geography + fetchall de todas las columnas
             knn_times_pg = {}
             for k in self.k_values:
                 t0 = time.perf_counter()
                 for c in centros:
                     lat, lon = c
                     cur.execute(f"""
-                        SELECT id FROM {tbl_name}
-                        ORDER BY geom <-> ST_SetSRID(ST_MakePoint({lon}, {lat}), 4326)
+                        SELECT id, nombre, categoria, ST_Y(geom::geometry), ST_X(geom::geometry)
+                        FROM {tbl_name}
+                        ORDER BY geom <-> ST_SetSRID(ST_MakePoint({lon}, {lat}), 4326)::geography
                         LIMIT {k};
                     """)
                     _ = cur.fetchall()
@@ -351,9 +407,9 @@ class SpatialBenchmarkRunner:
 
         print(f"      Construcción GiST: {t_build_pg:.2f} ms | Espacio: {pg_size_kb:.1f} KB")
         for r in self.radios:
-            print(f"      Radio {r/1000:.0f} km: {radius_times_pg[int(r)]:.2f} ms / consulta")
+            print(f"      Radio {r/1000:.0f} km: {radius_times_pg[int(r)]:.2f} ms / consulta (Full fetch)")
         for k in self.k_values:
-            print(f"      k-NN k={k}:    {knn_times_pg[k]:.2f} ms / consulta")
+            print(f"      k-NN k={k}:    {knn_times_pg[k]:.2f} ms / consulta (Full fetch)")
 
         return {
             "build_time_ms": round(t_build_pg, 2),
