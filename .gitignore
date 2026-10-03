@@ -14,3 +14,4 @@ node_modules/
 .DS_Store
 storage/DOCUMENTACION.md
 storage/DOCUMENTACION.pdf
+common/test_geo.py
