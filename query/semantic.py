@@ -2,7 +2,7 @@ from query.ast import (
     SelectNode, InsertNode, DeleteNode, UpdateNode, Condition, NotCondition, BinaryCondition, OrderBy,
     BeginNode, CommitNode, RollbackNode, ExplainNode, CreateTableNode, DropTableNode,
     PointLiteral, PolygonLiteral, FuncCall, SpatialCondition, CreateIndexNode,
-    AggregateCall, ColumnRef, SubquerySelect,
+    AggregateCall, ColumnRef, SubquerySelect, SetVarNode,
 )
 from query.tokens import TokenType
 from query.catalog import Catalog, INDEX_RTREE
@@ -60,7 +60,7 @@ class SemanticAnalyzer:
             self.validar_drop_table(nodo)
         elif isinstance(nodo, CreateIndexNode):
             self.validar_create_index(nodo)
-        elif isinstance(nodo, (BeginNode, CommitNode, RollbackNode)):
+        elif isinstance(nodo, (BeginNode, CommitNode, RollbackNode, SetVarNode)):
             pass
         else:
             raise SemanticError(f"tipo de nodo desconocido: {type(nodo).__name__}")
@@ -213,7 +213,9 @@ class SemanticAnalyzer:
         if isinstance(arg, PointLiteral):
             return
         if isinstance(arg, str):
-            self.validar_columna_existe(schema, arg)
+            if arg not in self.nombres_columnas(schema):
+                raise SemanticError(f"'{arg}' no es una columna de '{schema.table_name}' ni una variable de sesion "
+                    f"(para usarla como punto, definela antes con: SET {arg} = POINT(lat, lon))")
             idx = schema.column_index(arg)
             col = schema.columns[idx]
             if col.type != DataType.POINT:
@@ -313,8 +315,13 @@ class SemanticAnalyzer:
         schema = self.get_schema(nodo.tabla)
 
         if nodo.joins:
+            if nodo.extras:
+                raise SemanticError("las funciones espaciales en el SELECT junto con JOIN todavia no estan soportadas")
             self.validar_join(nodo, schema)
             return
+
+        for funcion in nodo.extras:
+            self.validar_func_espacial(schema, funcion)
 
         columnas_planas = [c for c in nodo.columnas if isinstance(c, str)] if nodo.columnas != ["*"] else []
         agregados = [c for c in nodo.columnas if isinstance(c, AggregateCall)] if nodo.columnas != ["*"] else []
@@ -323,6 +330,10 @@ class SemanticAnalyzer:
             self.validar_columna_existe(schema, columna)
         for ag in agregados:
             self.validar_aggregate(schema, ag)
+
+        if nodo.extras and (agregados or nodo.group_by is not None):
+            raise SemanticError("las funciones espaciales del SELECT no se pueden combinar con "
+                "funciones agregadas ni con GROUP BY")
 
         if agregados:
             if nodo.group_by is not None:

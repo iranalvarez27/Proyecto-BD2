@@ -25,6 +25,10 @@ from storage.sequential_file import (
 from index.bplus_tree import BPlusTree
 from index.extendible_hash import ExtendibleHash
 from index.clustered_bplus_tree import ClusteredBPlusTree
+from index.rtree import RTree
+from common.datos_lima import generar_tiendas
+from query import catalog_store
+from query.catalog import Catalog, STORAGE_HEAP, INDEX_BPLUS, INDEX_RTREE
 
 DATA_DIR = os.path.join(PROJECT_ROOT, "data")
 
@@ -131,6 +135,84 @@ def _clean_data_files():
                 os.remove(fpath)
             except Exception:
                 pass
+
+    # Indices extra creados por SQL sobre estas tablas (CREATE INDEX) quedarian
+    # apuntando a RIDs viejos: se borran junto con su entrada en catalog.json.
+    catalogo = catalog_store.leer(DATA_DIR)
+    cambio = False
+    for tabla in ("estudiantes", "cursos"):
+        entrada = catalogo["tablas"].pop(tabla, None)
+        if entrada is None:
+            continue
+        cambio = True
+        for indice in entrada.get("indices", []):
+            fpath = os.path.join(DATA_DIR, indice["archivo"])
+            if os.path.exists(fpath):
+                try:
+                    os.remove(fpath)
+                except Exception:
+                    pass
+    if cambio:
+        catalog_store.escribir(DATA_DIR, catalogo)
+
+
+SCHEMA_TIENDAS = Schema(
+    table_name="tiendas",
+    columns=[
+        Column(name="id", type=DataType.INT, size=4, is_pk=True),
+        Column(name="nombre", type=DataType.VARCHAR, size=40, is_pk=False),
+        Column(name="categoria", type=DataType.VARCHAR, size=20, is_pk=False),
+        Column(name="ubicacion", type=DataType.POINT, size=16, is_pk=False),
+    ],
+)
+
+
+def build_tiendas(n: int):
+    """Puebla 'tiendas' (HeapFile, puntos en Lima) con B+ en 'id' y R-Tree en 'ubicacion'."""
+    print(f"\nGenerando tabla espacial 'tiendas' (HeapFile + B+ Tree + R-Tree) con {n:,} puntos...")
+    heap_path = os.path.join(DATA_DIR, "tiendas.bin")
+    bplus_path = os.path.join(DATA_DIR, "tiendas_id_bplus.idx")
+    rtree_path = os.path.join(DATA_DIR, "tiendas_ubicacion_rtree.idx")
+    os.makedirs(DATA_DIR, exist_ok=True)
+    for fpath in (heap_path, bplus_path, rtree_path):
+        if os.path.exists(fpath):
+            os.remove(fpath)
+
+    pool = BufferPool(FileManager())
+    heap = HeapFile(pool, heap_path)
+    t0 = time.perf_counter()
+    pares_id, pares_punto = [], []
+    for fila in generar_tiendas(n):
+        rid = heap.insert(Record(list(fila)), SCHEMA_TIENDAS)
+        pares_id.append((fila[0], rid))
+        pares_punto.append((fila[3], rid))
+    t_heap = time.perf_counter() - t0
+
+    t0 = time.perf_counter()
+    bplus = BPlusTree(pool, bplus_path, DataType.INT, unique=True)
+    bplus.bulk_load(pares_id)
+    t_bplus = time.perf_counter() - t0
+
+    t0 = time.perf_counter()
+    rtree = RTree(pool, rtree_path)
+    rtree.bulk_load(pares_punto)
+    t_rtree = time.perf_counter() - t0
+
+    # registrar la tabla en catalog.json para que el backend la cargue al arrancar
+    catalogo = Catalog()
+    catalogo.register_table("tiendas", SCHEMA_TIENDAS, heap, STORAGE_HEAP, "id")
+    catalogo.register_index("tiendas", "id", bplus, INDEX_BPLUS)
+    catalogo.register_index("tiendas", "ubicacion", rtree, INDEX_RTREE)
+    catalog_store.guardar_tabla(DATA_DIR, catalogo.get_table("tiendas"))
+    pool.close_all()
+
+    print(f"  ✓ HeapFile:        {t_heap * 1000:9.2f} ms  |  Disco: {_format_bytes(os.path.getsize(heap_path))}")
+    print(f"  ✓ B+ Tree (id):    {t_bplus * 1000:9.2f} ms  |  Disco: {_format_bytes(os.path.getsize(bplus_path))}")
+    print(f"  ✓ R-Tree (STR):    {t_rtree * 1000:9.2f} ms  |  Disco: {_format_bytes(os.path.getsize(rtree_path))}")
+    print("\n  Consultas de ejemplo para el Panel de Mapa:")
+    print("    SELECT * FROM tiendas WHERE distancia(ubicacion, POINT(-12.1354, -77.0224)) < 2000;")
+    print("    SELECT * FROM tiendas ORDER BY distancia(ubicacion, POINT(-12.1354, -77.0224)) LIMIT 10;")
+    print("  (reinicia el backend para que cargue la tabla regenerada)")
 
 
 def generate_estudiantes_data(n: int) -> List[Tuple[int, str, str, float]]:
@@ -369,6 +451,8 @@ def main():
     parser.add_argument("--size", type=str, help="Cantidad de registros: 1000, 10000, 100000 (o 1k, 10k, 100k)")
     parser.add_argument("--reset", action="store_true", help="Restaurar a datos iniciales de prueba")
     parser.add_argument("--stats", action="store_true", help="Ver estado de archivos en data/")
+    parser.add_argument("--spatial", type=str,
+                        help="Genera solo la tabla espacial 'tiendas' con N puntos en Lima (1k, 10k, 100k)")
 
     args = parser.parse_args()
 
@@ -378,6 +462,16 @@ def main():
 
     if args.reset:
         reset_to_initial()
+        return
+
+    if args.spatial:
+        texto = args.spatial.strip().lower()
+        try:
+            n_puntos = int(float(texto[:-1]) * 1000) if texto.endswith("k") else int(texto)
+        except ValueError:
+            print(f"Error: tamaño '{args.spatial}' no reconocido. Usa 1k, 10k o 100k.")
+            sys.exit(1)
+        build_tiendas(n_puntos)
         return
 
     n = None

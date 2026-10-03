@@ -1,4 +1,3 @@
-import math
 import os
 import re
 import tempfile
@@ -7,10 +6,14 @@ import time
 from query.lexer import Lexer, LexerError
 from query.parser import Parser, ParserError
 from query.semantic import SemanticAnalyzer, SemanticError, resolver_tipo_columna
+from query import catalog_store
 from query.catalog import (Catalog, TableInfo, STORAGE_HEAP, STORAGE_SEQUENTIAL, INDEX_BPLUS, INDEX_HASH, INDEX_CLUSTERED, INDEX_RTREE,)
 from query.ast import (SelectNode, InsertNode, DeleteNode, UpdateNode, Condition, NotCondition, BinaryCondition,BeginNode, CommitNode,RollbackNode, ExplainNode, CreateTableNode, DropTableNode,
-                        PointLiteral, PolygonLiteral, FuncCall, SpatialCondition, CreateIndexNode, AggregateCall, ColumnRef, SubquerySelect, JoinClause,)
+                        PointLiteral, PolygonLiteral, FuncCall, SpatialCondition, CreateIndexNode, AggregateCall, ColumnRef, SubquerySelect, JoinClause,
+                        SetVarNode,)
 from query.tokens import TokenType
+from common.geo import (METRICA_EUCLIDIANA, METRICA_HAVERSINE, euclidiana_m as _euclidiana_aprox_m,
+                        haversine_m as _haversine_m, punto_en_poligono as _punto_en_poligono)
 from common.record import Record
 from common.types import Column, DataType, Schema
 from engine.external import external_group_by, external_hash_join, external_sort
@@ -18,6 +21,7 @@ from index.bplus_tree import BPlusTree, DuplicateKey
 from index.clustered_bplus_tree import ClusteredBPlusTree
 from index.extendible_hash import ExtendibleHash
 from index.hash_utils import UnhashableKeyType
+from index.rtree import RTree
 from index.key_codec import INT64_MAX, INT64_MIN, KeyTooLong, KeyTypeMismatch, UnorderableKey
 from storage.heap_file import HeapFile
 from storage.sequential_file import SequentialFile
@@ -27,37 +31,13 @@ from transaction.locks import DeadlockError, LockTimeoutError
 BUFFER_PAGES = 64
 DEFAULT_SESSION = "__autocommit__"
 
-EARTH_RADIUS_M = 6371000.0
-METROS_POR_GRADO = 111320.0
+# La geometria (haversine, euclidiana, punto en poligono) vive en common/geo.py
+# para que el R-Tree y los experimentos usen exactamente las mismas funciones.
+FUNCIONES_DISTANCIA = ("distancia", "distancia_geo", "distancia_haversine", "distancia_euclidiana")
 
 
-def _haversine_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
-    p1, p2 = math.radians(lat1), math.radians(lat2)
-    dphi = math.radians(lat2 - lat1)
-    dlambda = math.radians(lon2 - lon1)
-    a = math.sin(dphi / 2) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(dlambda / 2) ** 2
-    return 2 * EARTH_RADIUS_M * math.asin(math.sqrt(a))
-
-
-def _euclidiana_aprox_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
-    dx = (lon2 - lon1) * METROS_POR_GRADO * math.cos(math.radians((lat1 + lat2) / 2))
-    dy = (lat2 - lat1) * METROS_POR_GRADO
-    return math.sqrt(dx * dx + dy * dy)
-
-
-def _punto_en_poligono(lat: float, lon: float, vertices: list) -> bool:
-    # ray-casting
-    dentro = False
-    n = len(vertices)
-    for i in range(n):
-        lat1, lon1 = vertices[i]
-        lat2, lon2 = vertices[(i + 1) % n]
-        interseca = ((lon1 > lon) != (lon2 > lon)) and (
-            lat < (lat2 - lat1) * (lon - lon1) / (lon2 - lon1) + lat1
-        )
-        if interseca:
-            dentro = not dentro
-    return dentro
+def _metrica_de(nombre_funcion: str) -> str:
+    return METRICA_EUCLIDIANA if nombre_funcion == "distancia_euclidiana" else METRICA_HAVERSINE
 
 class ExecutionError(Exception):
     pass
@@ -75,6 +55,8 @@ class QueryResult:
         self.tipo_error = tipo_error
         self.transaccion_activa = transaccion_activa
         self.xact_id = xact_id
+        # descripcion de la consulta espacial (para el panel de mapa) o None
+        self.espacial = None
 
     @property
     def ok(self):
@@ -95,6 +77,8 @@ class Conexion:
         self.txn_manager = txn_manager or TransactionManager()
         self.lock_manager = self.txn_manager.lock_manager
         self._local = threading.local()
+        # variables de sesion: {session_id: {nombre: PointLiteral}}  (SET x = POINT(...))
+        self._variables: dict[str, dict] = {}
 
     @property
     def plan(self) -> list:
@@ -143,11 +127,16 @@ class Conexion:
         except ParserError as e:
             return QueryResult(error=str(e), tipo_error="sintactico")
 
+        self._local.espacial = None
+        self._sustituir_variables(nodo, session_id)
+
         try:
             self.semantic.validar(nodo)
         except SemanticError as e:
             return QueryResult(error=str(e), tipo_error="semantico")
 
+        if isinstance(nodo, SetVarNode):
+            return self._ejecutar_set_var(nodo, session_id)
         if isinstance(nodo, BeginNode):
             return self._ejecutar_begin(session_id)
         if isinstance(nodo, CommitNode):
@@ -184,6 +173,7 @@ class Conexion:
                 if isinstance(nodo, SelectNode):
                     filas = self.ejecutar_select(nodo)
                     resultado = QueryResult(filas=filas, plan=self.plan)
+                    resultado.espacial = self._local.espacial
                 elif isinstance(nodo, InsertNode):
                     resumen = self.ejecutar_insert(nodo)
                     resultado = QueryResult(resumen=resumen, plan=self.plan)
@@ -214,6 +204,53 @@ class Conexion:
         resultado.transaccion_activa = txn_activa
         resultado.xact_id = txn.xact_id if txn is not None else None
         return resultado
+
+    # variables de sesion
+
+    def _ejecutar_set_var(self, nodo: SetVarNode, session_id: str) -> QueryResult:
+        self._variables.setdefault(session_id, {})[nodo.nombre] = nodo.valor
+        punto = f"POINT({nodo.valor.lat}, {nodo.valor.lon})"
+        resultado = QueryResult(
+            resumen={"operacion": "SET", "mensaje": f"Variable de sesion {nodo.nombre} = {punto}"},
+            plan=[f"SET {nodo.nombre} = {punto} (variable de sesion)"],
+        )
+        txn = self.txn_manager.get_active(session_id)
+        resultado.transaccion_activa = txn is not None
+        resultado.xact_id = txn.xact_id if txn is not None else None
+        return resultado
+
+    def _sustituir_variables(self, nodo, session_id: str) -> None:
+        variables = self._variables.get(session_id)
+        if not variables:
+            return
+        if isinstance(nodo, ExplainNode):
+            nodo = nodo.statement
+        tabla = getattr(nodo, "tabla", None)
+        if tabla is None or not self.catalog.existe_tabla(tabla):
+            return
+        columnas = {c.name for c in self.catalog.get_table(tabla).schema.columns}
+
+        def en_funcion(funcion: FuncCall) -> None:
+            funcion.argumentos = [
+                variables[a] if isinstance(a, str) and a not in columnas and a in variables else a
+                for a in funcion.argumentos
+            ]
+
+        def en_condicion(cond) -> None:
+            if isinstance(cond, BinaryCondition):
+                en_condicion(cond.izquierda)
+                en_condicion(cond.derecha)
+            elif isinstance(cond, NotCondition):
+                en_condicion(cond.interior)
+            elif isinstance(cond, SpatialCondition):
+                en_funcion(cond.funcion)
+
+        en_condicion(getattr(nodo, "where", None))
+        if isinstance(nodo, SelectNode):
+            if nodo.order_by is not None and nodo.order_by.funcion is not None:
+                en_funcion(nodo.order_by.funcion)
+            for funcion in nodo.extras:
+                en_funcion(funcion)
 
     # control transaccional
 
@@ -339,6 +376,8 @@ class Conexion:
 
         resultado = QueryResult(filas=filas_salida, resumen=resumen_salida, plan=plan,
                                  error=error, tipo_error=tipo_error)
+        if filas_salida is not None:
+            resultado.espacial = self._local.espacial
         txn_activa = self.txn_manager.is_active(session_id)
         txn = self.txn_manager.get_active(session_id)
         resultado.transaccion_activa = txn_activa
@@ -518,6 +557,146 @@ class Conexion:
             return Condition(condicion.columna, condicion.operador, valores)
         return condicion
 
+    # ------------------------------------------------------------------
+    # consultas espaciales con R-Tree
+    # ------------------------------------------------------------------
+
+    def _conjuntos_and(self, cond) -> list:
+        if cond is None:
+            return []
+        if isinstance(cond, BinaryCondition) and cond.operador == TokenType.AND:
+            return self._conjuntos_and(cond.izquierda) + self._conjuntos_and(cond.derecha)
+        return [cond]
+
+    def _columna_y_punto(self, funcion: FuncCall):
+        if len(funcion.argumentos) != 2:
+            return None
+        a, b = funcion.argumentos
+        if isinstance(a, str) and isinstance(b, PointLiteral):
+            return a, b
+        if isinstance(b, str) and isinstance(a, PointLiteral):
+            return b, a
+        return None
+
+    def _patron_espacial(self, cond):
+        if not isinstance(cond, SpatialCondition):
+            return None
+        funcion = cond.funcion
+        if funcion.nombre in FUNCIONES_DISTANCIA and cond.operador in (TokenType.LT, TokenType.LTE):
+            par = self._columna_y_punto(funcion)
+            if par is None:
+                return None
+            columna, punto = par
+            return {"tipo": "radio", "columna": columna, "centro": [punto.lat, punto.lon],
+                    "radio_m": cond.valor, "metrica": _metrica_de(funcion.nombre)}
+        if funcion.nombre == "dentro_de" and cond.operador is None:
+            columna, poligono = funcion.argumentos
+            if isinstance(columna, str) and isinstance(poligono, PolygonLiteral):
+                return {"tipo": "poligono", "columna": columna,
+                        "poligono": [[p.lat, p.lon] for p in poligono.puntos]}
+        return None
+
+    def _patron_knn(self, nodo: SelectNode):
+        ob = nodo.order_by
+        if ob is None or ob.funcion is None or ob.descendente or nodo.limit is None:
+            return None
+        if ob.funcion.nombre not in FUNCIONES_DISTANCIA:
+            return None
+        par = self._columna_y_punto(ob.funcion)
+        if par is None:
+            return None
+        columna, punto = par
+        return {"tipo": "knn", "columna": columna, "centro": [punto.lat, punto.lon],
+                "k": nodo.limit, "metrica": _metrica_de(ob.funcion.nombre)}
+
+    def _describir_espacial(self, nodo: SelectNode, info: TableInfo, where):
+        col_punto = next((c.name for c in info.schema.columns if c.type == DataType.POINT), None)
+        if col_punto is None:
+            return None
+        desc = {"tabla": info.nombre, "columna": col_punto, "tipo": "puntos", "usa_indice": False}
+        for cond in self._conjuntos_and(where):
+            patron = self._patron_espacial(cond)
+            if patron is not None:
+                desc.update(patron)
+                return desc
+        knn = self._patron_knn(nodo)
+        if knn is not None:
+            desc.update(knn)
+        return desc
+
+    def _indice_rtree(self, tabla: str, columna: str):
+        if self.catalog.tiene_indice(tabla, columna):
+            indice, tipo = self.catalog.get_indice(tabla, columna)
+            if tipo == INDEX_RTREE:
+                return indice
+        return None
+
+    def _marcar_uso_rtree(self) -> None:
+        espacial = getattr(self._local, "espacial", None)
+        if espacial is not None:
+            espacial["usa_indice"] = True
+
+    def _plan_espacial(self, nodo: SelectNode, info: TableInfo, where, nombres_col: list):
+        for cond in self._conjuntos_and(where):
+            patron = self._patron_espacial(cond)
+            if patron is None:
+                continue
+            rtree = self._indice_rtree(info.nombre, patron["columna"])
+            if rtree is None:
+                continue
+            stats = {}
+            if patron["tipo"] == "radio":
+                lat, lon = patron["centro"]
+                hallados = rtree.radius_search((lat, lon), patron["radio_m"], patron["metrica"], stats)
+                rids = [rid for _d, rid, _p in hallados]
+                detalle = (f"busqueda por radio en indice rtree sobre '{patron['columna']}' "
+                           f"(centro {lat}, {lon}; radio {patron['radio_m']} m; metrica {patron['metrica']}")
+            else:
+                rids = [rid for rid, _p in rtree.polygon_search(patron["poligono"], stats)]
+                detalle = (f"interseccion con poligono en indice rtree sobre '{patron['columna']}' "
+                           f"({len(patron['poligono'])} vertices")
+            # leer en orden fisico: menos saltos de pagina y mismo orden que un escaneo
+            rids.sort(key=lambda r: (r.page_id, r.slot_id))
+            filas = []
+            for rid in rids:
+                record = info.storage.read(rid, info.schema)
+                if record is None:
+                    continue
+                fila = dict(zip(nombres_col, record.values))
+                if self.cumple_where(where, fila):
+                    filas.append(fila)
+            self.plan.append(f"{detalle}; {stats['nodos_visitados']} nodos visitados, "
+                             f"{stats['candidatos']} candidatos, {len(filas)} filas)")
+            self._marcar_uso_rtree()
+            return filas, False
+
+        knn = self._patron_knn(nodo)
+        hay_agregados = any(isinstance(c, AggregateCall) for c in nodo.columnas)
+        if knn is None or nodo.group_by is not None or hay_agregados:
+            return None
+        rtree = self._indice_rtree(info.nombre, knn["columna"])
+        if rtree is None:
+            return None
+        stats = {}
+        lat, lon = knn["centro"]
+        filas = []
+        for _d, rid, _p in rtree.nearest_iter((lat, lon), knn["metrica"], stats):
+            record = info.storage.read(rid, info.schema)
+            if record is None:
+                continue
+            fila = dict(zip(nombres_col, record.values))
+            if where is None or self.cumple_where(where, fila):
+                filas.append(fila)
+                if len(filas) >= knn["k"]:
+                    break
+        filtro = " + filtro WHERE incremental" if where is not None else ""
+        self.plan.append(f"k-NN best-first en indice rtree sobre '{knn['columna']}' "
+                         f"(k {knn['k']}; centro {lat}, {lon}; metrica {knn['metrica']}; "
+                         f"{stats.get('nodos_visitados', 0)} nodos visitados, "
+                         f"{stats.get('candidatos', 0)} candidatos){filtro}")
+        self._marcar_uso_rtree()
+        return filas, True
+
     def ejecutar_select(self, nodo: SelectNode) -> list:
         orden_ya_resuelto = False
 
@@ -534,6 +713,12 @@ class Conexion:
         info = self.catalog.get_table(nodo.tabla)
         where = self._resolver_subconsultas(nodo.where)
         nombres_col = [c.name for c in info.schema.columns]
+
+        self._local.espacial = self._describir_espacial(nodo, info, where)
+        plan_espacial = self._plan_espacial(nodo, info, where, nombres_col)
+        if plan_espacial is not None:
+            filas, orden_ya_resuelto = plan_espacial
+            return self._finalizar_select(nodo, filas, info.schema, orden_ya_resuelto)
 
         if where is None:
             usa_indice_orden = (nodo.order_by is not None
@@ -654,20 +839,47 @@ class Conexion:
             if nodo.order_by is not None and not orden_ya_resuelto:
                 filas = self.ordenar(filas, schema, nodo.order_by, tmp)
 
-            if hay_estrella or agregados or nodo.group_by is not None:
-                salida = list(filas)
-            else:
-                salida = []
-                for fila in filas:
-                    fila_reducida = {}
-                    for col in nodo.columnas:
-                        fila_reducida[col] = fila[col]
-                    salida.append(fila_reducida)
+            # puntos de cada fila devuelta, para que el mapa los resalte aunque
+            # la columna POINT no este en la lista del SELECT
+            espacial = getattr(self._local, "espacial", None)
+            capturar = (espacial is not None and espacial.get("tabla") == schema.table_name
+                        and not agregados and nodo.group_by is None)
+            puntos = []
+            extras = self._etiquetar_extras(nodo.extras)
+            todas = hay_estrella or agregados or nodo.group_by is not None
+
+            salida = []
+            for fila in filas:
+                if nodo.limit is not None and len(salida) >= nodo.limit:
+                    break
+                if todas:
+                    nueva = dict(fila) if extras else fila
+                else:
+                    nueva = {col: fila[col] for col in nodo.columnas}
+                for etiqueta, funcion in extras:
+                    nueva[etiqueta] = self._evaluar_funcion_espacial(funcion, fila)
+                if capturar:
+                    puntos.append(list(fila[espacial["columna"]]))
+                salida.append(nueva)
 
             if nodo.limit is not None:
-                salida = salida[:nodo.limit]
                 self.plan.append(f"LIMIT {nodo.limit}")
+            if capturar:
+                espacial["puntos"] = puntos
             return salida
+
+    def _etiquetar_extras(self, extras: list) -> list:
+        etiquetas = []
+        usados = set()
+        for funcion in extras:
+            base = funcion.alias or funcion.nombre
+            etiqueta, n = base, 2
+            while etiqueta in usados:
+                etiqueta = f"{base}_{n}"
+                n += 1
+            usados.add(etiqueta)
+            etiquetas.append((etiqueta, funcion))
+        return etiquetas
 
     def _schema_multi(self, tablas: list) -> Schema:
         columnas = []
@@ -1175,10 +1387,15 @@ class Conexion:
             indice_pk = BPlusTree(self.pool, idx_path, pk_dtype, unique=True)
             self.catalog.register_index(nodo.tabla, pk_col_name, indice_pk, INDEX_BPLUS)
 
+        self._persistir_tabla(nodo.tabla)
         self.plan.append(
             f"CREATE TABLE '{nodo.tabla}' ({nodo.storage}, {len(columnas)} columnas, "
             f"PK='{pk_col_name}' con indice automatico)")
         return {"operacion": "CREATE TABLE", "tabla": nodo.tabla, "filas_afectadas": 0}
+
+    def _persistir_tabla(self, tabla: str) -> None:
+        if self.data_dir is not None:
+            catalog_store.guardar_tabla(self.data_dir, self.catalog.get_table(tabla))
 
     def ejecutar_drop_table(self, nodo: DropTableNode, session_id: str) -> dict:
         if self.txn_manager.is_active(session_id):
@@ -1210,6 +1427,8 @@ class Conexion:
                 raise ExecutionError(f"no se pudo borrar el archivo '{ruta}' de la tabla '{nodo.tabla}': {e}")
 
         self.catalog.eliminar_tabla(nodo.tabla)
+        if self.data_dir is not None:
+            catalog_store.borrar_tabla(self.data_dir, nodo.tabla)
 
         self.plan.append(f"DROP TABLE '{nodo.tabla}' ({borrados} archivo(s) eliminado(s) de disco)")
         return {"operacion": "DROP TABLE", "tabla": nodo.tabla, "filas_afectadas": 0}
@@ -1226,19 +1445,13 @@ class Conexion:
         if self.catalog.tiene_indice(nodo.tabla, nodo.columna):
             raise ExecutionError(f"la columna '{nodo.columna}' de '{nodo.tabla}' ya tiene un indice")
 
-        if nodo.tipo_indice == INDEX_RTREE:
-            raise ExecutionError(
-                f"CREATE INDEX ... USING RTREE: el indice R-Tree todavia no esta implementado "
-                f"(pendiente de la parte espacial del equipo). El resto de SQL espacial "
-                f"(distancia(...), dentro_de(...), ORDER BY distancia(...) LIMIT k) ya funciona "
-                f"via escaneo secuencial sobre '{nodo.tabla}.{nodo.columna}', solo esta consulta "
-                f"quedaria mas rapida cuando el R-Tree este listo."
-            )
-
         info = self.catalog.get_table(nodo.tabla)
         col = info.schema.columns[info.schema.column_index(nodo.columna)]
 
-        if nodo.tipo_indice == INDEX_HASH:
+        if nodo.tipo_indice == INDEX_RTREE:
+            idx_path = os.path.join(self.data_dir, f"{nodo.tabla}_{nodo.columna}_rtree.idx")
+            indice = RTree(self.pool, idx_path)
+        elif nodo.tipo_indice == INDEX_HASH:
             idx_path = os.path.join(self.data_dir, f"{nodo.tabla}_{nodo.columna}_hash.idx")
             indice = ExtendibleHash(self.pool, idx_path)
         else:
@@ -1249,11 +1462,12 @@ class Conexion:
         for rid, record in info.storage.scan_con_rid(info.schema):
             valor = record.values[info.schema.column_index(nodo.columna)]
             pares.append((valor, rid))
-        if nodo.tipo_indice != INDEX_HASH:
+        if nodo.tipo_indice == INDEX_BPLUS:
             pares.sort(key=lambda p: (p[0], p[1].page_id, p[1].slot_id))
-        indice.bulk_load(pares)
+        indice.bulk_load(pares)   # el R-Tree usa STR (Sort-Tile-Recursive)
 
         self.catalog.register_index(nodo.tabla, nodo.columna, indice, nodo.tipo_indice)
+        self._persistir_tabla(nodo.tabla)
 
         self.plan.append(
             f"CREATE INDEX {nodo.tipo_indice} sobre '{nodo.tabla}.{nodo.columna}' "

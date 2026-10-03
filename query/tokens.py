@@ -72,6 +72,7 @@ class TokenType(Enum):
     LIKE = 56
     IN = 57
     NOT = 58
+    AS = 59
 
 KEYWORDS = {"select": TokenType.SELECT, "from": TokenType.FROM, "where": TokenType.WHERE,
             "insert": TokenType.INSERT, "into": TokenType.INTO, "values": TokenType.VALUES,
@@ -88,7 +89,7 @@ KEYWORDS = {"select": TokenType.SELECT, "from": TokenType.FROM, "where": TokenTy
             "drop": TokenType.DROP, "between": TokenType.BETWEEN, "point": TokenType.POINT,
             "polygon": TokenType.POLYGON, "limit": TokenType.LIMIT, "index": TokenType.INDEX,
             "update": TokenType.UPDATE, "set": TokenType.SET, "like": TokenType.LIKE,
-            "in": TokenType.IN, "not": TokenType.NOT,}
+            "in": TokenType.IN, "not": TokenType.NOT, "as": TokenType.AS,}
 
 @dataclass
 class Token:

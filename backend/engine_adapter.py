@@ -8,6 +8,7 @@ from typing import Any, Dict, List, Optional
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from common.types import Schema, Column, DataType
 from common.record import Record
+from common.datos_lima import generar_tiendas
 from engine.buffer_pool import BufferPool
 from engine.file_manager import FileManager
 from storage.heap_file import HeapFile
@@ -23,7 +24,9 @@ from query.catalog import (
     INDEX_BPLUS,
     INDEX_HASH,
     INDEX_CLUSTERED,
+    INDEX_RTREE,
 )
+from query import catalog_store
 from query.conexion import Conexion
 from transaction.manager import TransactionManager
 
@@ -104,6 +107,27 @@ class EngineAdapter:
         self.clustered_trees["cursos"] = clustered_tree
         self.catalog.register_index("cursos", "codigo", clustered_tree, INDEX_CLUSTERED)
 
+        # 3. Tablas e indices creados por SQL en ejecuciones anteriores (data/catalog.json)
+        catalog_store.cargar(self.catalog, self.pool, self.data_dir)
+
+        # 4. Tabla espacial de demostracion para el panel de mapa
+        self.seed_tiendas_if_missing()
+
+    def seed_tiendas_if_missing(self, n: int = 500):
+        if self.catalog.existe_tabla("tiendas"):
+            return
+        res = self.conexion.execute(
+            "CREATE TABLE tiendas (id INT PRIMARY KEY, nombre VARCHAR(40), "
+            "categoria VARCHAR(20), ubicacion POINT)")
+        if not res.ok:
+            return
+        info = self.catalog.get_table("tiendas")
+        for fila in generar_tiendas(n):
+            rec = Record(list(fila))
+            rid = info.storage.insert(rec, info.schema)
+            self.conexion.actualizar_indices_insert("tiendas", info, rec, rid)
+        self.conexion.execute("CREATE INDEX idx_tiendas_ubicacion ON tiendas (ubicacion) USING RTREE")
+
     def seed_data_if_empty(self):
         info_est = self.catalog.get_table("estudiantes")
         heap: HeapFile = info_est.storage
@@ -177,7 +201,8 @@ class EngineAdapter:
                 is_clustered = (idx_type == INDEX_CLUSTERED)
                 idx_list.append({
                     "name": f"idx_{table_name}_{col_name}" + ("_clustered" if is_clustered else ""),
-                    "type": "BTREE" if idx_type in (INDEX_BPLUS, INDEX_CLUSTERED) else "HASH",
+                    "type": ("BTREE" if idx_type in (INDEX_BPLUS, INDEX_CLUSTERED)
+                             else "RTREE" if idx_type == INDEX_RTREE else "HASH"),
                     "column": col_name,
                     "clustered": is_clustered,
                 })
@@ -212,6 +237,41 @@ class EngineAdapter:
                 "stats": stats,
             })
         return result
+
+    def get_points(self, table_name: str, column: Optional[str] = None, limit: int = 5000) -> Dict[str, Any]:
+        if not self.catalog.existe_tabla(table_name):
+            raise ValueError(f"Tabla '{table_name}' no encontrada")
+        info = self.catalog.get_table(table_name)
+        columnas_punto = [c.name for c in info.schema.columns if c.type == DataType.POINT]
+        if not columnas_punto:
+            raise ValueError(f"La tabla '{table_name}' no tiene columnas POINT")
+        if column is None:
+            column = columnas_punto[0]
+        elif column not in columnas_punto:
+            raise ValueError(f"'{column}' no es una columna POINT de '{table_name}'")
+
+        todos = [fila[column] for fila in self.conexion.leer_todo(info)]
+        total = len(todos)
+        limit = max(1, limit)
+        if total > limit:
+            paso = total / limit
+            todos = [todos[int(i * paso)] for i in range(limit)]
+        bbox = None
+        if todos:
+            lats = [p[0] for p in todos]
+            lons = [p[1] for p in todos]
+            bbox = [min(lats), min(lons), max(lats), max(lons)]
+        indexada = (self.catalog.tiene_indice(table_name, column)
+                    and self.catalog.get_indice(table_name, column)[1] == INDEX_RTREE)
+        return {
+            "table": table_name,
+            "column": column,
+            "total": total,
+            "returned": len(todos),
+            "has_rtree": indexada,
+            "bbox": bbox,
+            "points": [[p[0], p[1]] for p in todos],
+        }
 
     def reorganize_table(self, table_name: str) -> Dict[str, Any]:
         if not self.catalog.existe_tabla(table_name):
@@ -249,6 +309,7 @@ class EngineAdapter:
                 "rows": [],
                 "error": "Consulta SQL vacía.",
                 "plan": None,
+                "spatial": None,
                 "transaction": {"active": False, "xact_id": None},
             }
 
@@ -269,6 +330,7 @@ class EngineAdapter:
                 "rows": [],
                 "error": f"Error [{res.tipo_error.upper()}]: {res.error}",
                 "plan": None,
+                "spatial": None,
                 "transaction": transaction_info,
             }
 
@@ -308,6 +370,8 @@ class EngineAdapter:
                 "rows": rows,
                 "error": None,
                 "plan": plan_tree,
+                # consulta espacial detectada (radio / knn / poligono) y el punto de cada fila
+                "spatial": res.espacial,
                 "transaction": transaction_info,
             }
 
@@ -410,6 +474,23 @@ class EngineAdapter:
                     "cost": 0.0,
                     "estimated_time_ms": 0.0,
                     "rows_estimated": actual_rows if actual_rows is not None else 0,
+                    "children": [],
+                })
+            elif "create index" in step_lower:
+                nodes.append({
+                    "node_type": "CreateIndex",
+                    "method": step,
+                    "cost": 0.5,
+                    "estimated_time_ms": 0.5,
+                    "rows_estimated": 0,
+                    "children": [],
+                })
+            elif "indice rtree" in step_lower:
+                nodes.append({
+                    "node_type": "IndexScan (R-Tree)",
+                    "method": step,
+                    "cost": 1.15,
+                    "rows_estimated": actual_rows if actual_rows is not None else 5,
                     "children": [],
                 })
             # antes que los indices: "external hash" contiene "hash"

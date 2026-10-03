@@ -160,6 +160,9 @@ export default function ResultsPanel({ result, loading }) {
                             <span className="text-slate-400 dark:text-slate-600 italic">NULL</span>
                           ) : typeof val === 'boolean' ? (
                             val ? 'TRUE' : 'FALSE'
+                          ) : Array.isArray(val) ? (
+                            // columna POINT: (latitud, longitud)
+                            `(${val.join(', ')})`
                           ) : (
                             String(val)
                           )}

@@ -6,13 +6,15 @@ import {
   RotateCcw,
   Lock,
   Sun,
-  Moon
+  Moon,
+  Map as MapIcon
 } from 'lucide-react';
 
 import FilePanel from './components/FilePanel';
 import QueryPanel from './components/QueryPanel';
 import ResultsPanel from './components/ResultsPanel';
 import PlanPanel from './components/PlanPanel';
+import MapPanel from './components/MapPanel';
 import CsvImportModal from './components/CsvImportModal';
 
 function obtenerOCrearSessionId() {
@@ -46,7 +48,13 @@ export default function App() {
   ]);
   const [queryResult, setQueryResult] = useState(null);
   const [executionPlan, setExecutionPlan] = useState(null);
-  const [activeBottomTab, setActiveBottomTab] = useState('results'); // 'results' | 'plan'
+  const [activeBottomTab, setActiveBottomTab] = useState('results'); // 'results' | 'plan' | 'map'
+  // el mapa se monta la primera vez que se abre y luego queda vivo (conserva zoom y capas)
+  const [mapMounted, setMapMounted] = useState(false);
+
+  useEffect(() => {
+    if (activeBottomTab === 'map') setMapMounted(true);
+  }, [activeBottomTab]);
 
   const [loadingTables, setLoadingTables] = useState(false);
   const [loadingQuery, setLoadingQuery] = useState(false);
@@ -151,7 +159,7 @@ export default function App() {
     return res.json();
   };
 
-  const handleExecuteQuery = async (customQuery = null) => {
+  const handleExecuteQuery = async (customQuery = null, { keepTab = false } = {}) => {
     const q = customQuery || query;
     if (!q.trim()) return;
 
@@ -184,7 +192,11 @@ export default function App() {
       if (data && data.plan) {
         setExecutionPlan(data.plan);
       }
-      setActiveBottomTab('results');
+      // una búsqueda espacial (radio, k-NN o polígono) abre el mapa con sus resultados
+      const esBusquedaEspacial = data && data.status === 'success' && data.spatial && data.spatial.tipo !== 'puntos';
+      if (!keepTab) {
+        setActiveBottomTab(esBusquedaEspacial ? 'map' : 'results');
+      }
 
       setHistory(prev => {
         if (prev[prev.length - 1] === q) return prev;
@@ -193,7 +205,7 @@ export default function App() {
 
       const terminoTransaccion = activaAntes && data && data.transaction && !data.transaction.active;
       const qUpper = q.trim().toUpperCase();
-      if (qUpper.includes('INSERT') || qUpper.includes('DELETE') || qUpper.includes('CREATE TABLE') || qUpper.includes('DROP TABLE') || terminoTransaccion) {
+      if (qUpper.includes('INSERT') || qUpper.includes('DELETE') || qUpper.includes('UPDATE') || qUpper.includes('CREATE TABLE') || qUpper.includes('CREATE INDEX') || qUpper.includes('DROP TABLE') || terminoTransaccion) {
         fetchTables();
       }
     } catch (err) {
@@ -240,6 +252,11 @@ export default function App() {
     handleExecuteQuery(q);
   };
 
+  const handleRunFromMap = (sql) => {
+    setQuery(sql);
+    handleExecuteQuery(sql, { keepTab: true });
+  };
+
   const handleCsvScriptReady = (script) => {
     setQuery(script);
     setCsvImportOpen(false);
@@ -267,7 +284,7 @@ export default function App() {
             <h1 className="font-bold text-sm tracking-wide text-slate-800 dark:text-white flex items-center gap-2">
               <span>Minigestor Multimodal BD2</span>
               <span className="text-[10px] bg-pg-50 dark:bg-pg-950 text-pg-700 dark:text-pg-300 border border-pg-200 dark:border-pg-800 px-1.5 py-0.2 rounded font-mono font-normal">
-                Parte 1 (SQL & Storage)
+                Partes 1 y 2 (SQL, Storage & Espacial)
               </span>
             </h1>
           </div>
@@ -393,21 +410,50 @@ export default function App() {
                   <span className="w-1.5 h-1.5 rounded-full bg-violet-500 dark:bg-violet-400" />
                 )}
               </button>
+
+              <button
+                onClick={() => setActiveBottomTab('map')}
+                className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-t transition-colors ${
+                  activeBottomTab === 'map'
+                    ? 'bg-white dark:bg-slate-900 text-emerald-700 dark:text-emerald-300 border-t-2 border-emerald-500 border-x border-slate-200 dark:border-slate-800'
+                    : 'text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200'
+                }`}
+              >
+                <MapIcon className="w-3.5 h-3.5" />
+                <span>Panel de Mapa</span>
+                {queryResult?.spatial?.puntos && (
+                  <span className="ml-1 text-[10px] bg-slate-200 dark:bg-slate-800 text-slate-600 dark:text-slate-400 px-1.5 py-0.2 rounded-full font-mono">
+                    {queryResult.spatial.puntos.length}
+                  </span>
+                )}
+              </button>
             </div>
 
             {/* Tab Content */}
             <div className="flex-1 min-h-0 overflow-hidden">
-              {activeBottomTab === 'results' ? (
+              {activeBottomTab === 'results' && (
                 <ResultsPanel
                   result={queryResult}
                   loading={loadingQuery}
                 />
-              ) : (
+              )}
+              {activeBottomTab === 'plan' && (
                 <PlanPanel
                   plan={executionPlan}
                   query={query}
                   executedQuery={queryResult?.query}
                 />
+              )}
+              {mapMounted && (
+                <div className={activeBottomTab === 'map' ? 'h-full' : 'hidden'}>
+                  <MapPanel
+                    result={queryResult}
+                    tables={tables}
+                    visible={activeBottomTab === 'map'}
+                    theme={theme}
+                    onRunQuery={handleRunFromMap}
+                  />
+                </div>
               )}
             </div>
           </div>

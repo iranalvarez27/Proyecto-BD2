@@ -3,7 +3,7 @@ from query.ast import (
     SelectNode, InsertNode, DeleteNode, UpdateNode, Condition, BinaryCondition, NotCondition,
     OrderBy, JoinClause, AggregateCall, ColumnRef, SubquerySelect,
     BeginNode, CommitNode, RollbackNode, ExplainNode, ColumnDef, CreateTableNode, DropTableNode,
-    PointLiteral, PolygonLiteral, FuncCall, SpatialCondition, CreateIndexNode,
+    PointLiteral, PolygonLiteral, FuncCall, SpatialCondition, CreateIndexNode, SetVarNode,
 )
 
 class ParserError(Exception):
@@ -70,6 +70,8 @@ class Parser:
                 nodo = self.parse_create_table()
         elif self.coincide(TokenType.DROP):
             nodo = self.parse_drop_table()
+        elif self.coincide(TokenType.SET):
+            nodo = self.parse_set_var()
         else:
             raise ParserError(f"error en la consulta, empieza con {self.actual().value}")
 
@@ -91,6 +93,16 @@ class Parser:
         if self.coincide(TokenType.TRANSACTION):
             self.avanzar()
         return CommitNode()
+
+    def parse_set_var(self):
+        # SET nombre = POINT(lat, lon)
+        self.esperar(TokenType.SET)
+        nombre = self.esperar(TokenType.IDENT).value
+        self.esperar(TokenType.EQ)
+        if not self.coincide(TokenType.POINT):
+            t = self.actual()
+            raise ParserError(f"pos {t.pos}: SET {nombre} = ... solo admite un literal POINT(lat, lon)")
+        return SetVarNode(nombre, self.parse_point_literal())
 
     def parse_rollback(self):
         # ROLLBACK | ABORT
@@ -146,8 +158,12 @@ class Parser:
         return DropTableNode(tabla)
 
     def parse_create_index(self):
+        # CREATE INDEX [nombre] ON tabla (columna) [USING BTREE | HASH | RTREE]
         self.esperar(TokenType.CREATE)
         self.esperar(TokenType.INDEX)
+        nombre = None
+        if self.coincide(TokenType.IDENT):
+            nombre = self.avanzar().value
         self.esperar(TokenType.ON)
         tabla = self.esperar(TokenType.IDENT).value
         self.esperar(TokenType.LPAREN)
@@ -162,7 +178,7 @@ class Parser:
             if valor not in TIPOS_INDICE_CREATE_INDEX:
                 raise ParserError(f"pos {tok.pos}: USING debe ser BTREE, HASH o RTREE, salio '{tok.value}'")
             tipo_indice = TIPOS_INDICE_CREATE_INDEX[valor]
-        return CreateIndexNode(tabla, columna, tipo_indice)
+        return CreateIndexNode(tabla, columna, tipo_indice, nombre)
 
     def parse_column_def(self):
         nombre = self.esperar(TokenType.IDENT).value
@@ -185,7 +201,7 @@ class Parser:
 
     def parse_select(self):
         self.esperar(TokenType.SELECT)
-        cols = self.parse_columnas()
+        cols, extras = self.parse_columnas()
         self.esperar(TokenType.FROM)
         tabla = self.esperar(TokenType.IDENT).value
 
@@ -215,7 +231,7 @@ class Parser:
                 raise ParserError(f"pos {tok.pos}: LIMIT necesita un entero, salio '{tok.value}'")
             limit = int(tok.value)
 
-        return SelectNode(cols, tabla, where, order_by, group_by, joins, limit)
+        return SelectNode(cols, tabla, where, order_by, group_by, joins, limit, extras)
 
     def parse_join(self):
         self.esperar(TokenType.JOIN)
@@ -298,18 +314,34 @@ class Parser:
         raise ParserError(f"pos {t.pos}: argumento de funcion invalido '{t.value}'")
 
     def parse_columnas(self):
-        if self.coincide(TokenType.STAR):
+        cols, extras = [], []
+        while True:
+            if self.coincide(TokenType.STAR):
+                self.avanzar()
+                cols.append("*")
+            else:
+                item = self.parse_item_columna()
+                if isinstance(item, FuncCall):
+                    extras.append(item)
+                else:
+                    cols.append(item)
+            if not self.coincide(TokenType.COMMA):
+                break
             self.avanzar()
-            return ["*"]
-        cols = [self.parse_item_columna()]
-        while self.coincide(TokenType.COMMA):
-            self.avanzar()
-            cols.append(self.parse_item_columna())
-        return cols
+        if "*" in cols and cols != ["*"]:
+            raise ParserError("'*' no se puede combinar con columnas sueltas "
+                "(usa solo '*', o '*' junto con funciones como distancia(...))")
+        return cols, extras
 
     def parse_item_columna(self):
         if self.coincide(TokenType.IDENT) and self.siguiente().type == TokenType.LPAREN:
-            return self.parse_aggregate_call()
+            if self.actual().value.lower() in FUNCIONES_AGREGADAS:
+                return self.parse_aggregate_call()
+            funcion = self.parse_func_call()
+            if self.coincide(TokenType.AS):
+                self.avanzar()
+                funcion.alias = self.esperar(TokenType.IDENT).value
+            return funcion
         return self.parse_columna_ref()
 
     def parse_aggregate_call(self):

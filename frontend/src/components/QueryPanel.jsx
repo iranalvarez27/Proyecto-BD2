@@ -24,6 +24,23 @@ const SQL_TEMPLATES = [
   { label: 'CREATE TABLE (Heap, con PK indexada)', sql: 'CREATE TABLE productos (id INT PRIMARY KEY, nombre VARCHAR(30), precio FLOAT);' },
   { label: 'CREATE TABLE (Sequential, PK agrupada)', sql: 'CREATE TABLE ventas (folio INT PRIMARY KEY, monto FLOAT) USING SEQUENTIAL;' },
   { label: 'DROP TABLE (borra archivos de disco, irreversible)', sql: 'DROP TABLE productos;' },
+  { label: 'Espacial: radio de 2 km (R-Tree, Haversine)', sql: 'SELECT * FROM tiendas WHERE distancia(ubicacion, POINT(-12.1354, -77.0224)) < 2000;' },
+  { label: 'Espacial: radio con métrica Euclidiana', sql: 'SELECT * FROM tiendas WHERE distancia_euclidiana(ubicacion, POINT(-12.1354, -77.0224)) < 2000;' },
+  { label: 'Espacial: k-NN (10 más cercanas)', sql: 'SELECT * FROM tiendas ORDER BY distancia(ubicacion, POINT(-12.1354, -77.0224)) LIMIT 10;' },
+  {
+    label: 'Espacial: k-NN con variable de sesión',
+    sql: [
+      'SET mi_ubicacion = POINT(-12.1354, -77.0224);',
+      'SELECT nombre, categoria, distancia(ubicacion, mi_ubicacion) AS metros FROM tiendas ORDER BY distancia(ubicacion, mi_ubicacion) LIMIT 10;',
+    ].join('\n'),
+  },
+  { label: 'Espacial: radio + filtro (farmacias a 3 km)', sql: "SELECT * FROM tiendas WHERE distancia(ubicacion, POINT(-12.1354, -77.0224)) < 3000 AND categoria = 'Farmacia';" },
+  {
+    label: 'Espacial: dentro de un polígono (Barranco)',
+    sql: 'SELECT * FROM tiendas WHERE dentro_de(ubicacion, POLYGON(POINT(-12.135, -77.032), POINT(-12.135, -77.012), POINT(-12.158, -77.012), POINT(-12.158, -77.032)));',
+  },
+  { label: 'Espacial: CREATE TABLE con columna POINT', sql: 'CREATE TABLE lugares (id INT PRIMARY KEY, nombre VARCHAR(30), ubicacion POINT);' },
+  { label: 'Espacial: CREATE INDEX ... USING RTREE', sql: 'CREATE INDEX idx_lugares_geo ON lugares (ubicacion) USING RTREE;' },
   { label: 'Transacción: BEGIN', sql: 'BEGIN TRANSACTION;' },
   { label: 'Transacción: COMMIT', sql: 'COMMIT;' },
   { label: 'Transacción: ROLLBACK', sql: 'ROLLBACK;' },

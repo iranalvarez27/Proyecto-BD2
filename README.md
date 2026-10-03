@@ -12,6 +12,8 @@ Proyecto-BD2/
 │   ├── engine_adapter.py     # Adaptador que conecta almacenamiento, índices y catálogo
 │   └── main.py               # Endpoints REST y CORS
 ├── common/                   # Tipos comunes y estructuras de bajo nivel
+│   ├── geo.py                # Haversine, euclidiana, punto en polígono y cotas para MBR
+│   ├── datos_lima.py         # Generador de puntos de interés en Lima (demo y experimentos)
 │   ├── page.py               # Slotted Page (4096 bytes)
 │   ├── record.py             # Serialización binaria de registros
 │   └── types.py              # Definición de tipos de datos, columnas y esquemas
@@ -22,15 +24,22 @@ Proyecto-BD2/
 │   ├── bplus_tree.py         # B+ Tree no agrupado
 │   ├── clustered_bplus_tree.py # B+ Tree agrupado sobre SequentialFile
 │   ├── extendible_hash.py    # Hash Dinámico Extensible
+│   ├── rtree.py              # R-Tree en disco: radio, k-NN, polígono, carga STR
 │   └── key_codec.py          # Codificación de claves binarias
 ├── query/                    # Motor de Consultas SQL
 │   ├── lexer.py / tokens.py  # Analizador léxico
 │   ├── parser.py / ast.py    # Analizador sintáctico y AST
 │   ├── catalog.py            # Catálogo unificado de tablas e índices
+│   ├── catalog_store.py      # Persistencia del catálogo en data/catalog.json
 │   └── conexion.py           # Planificador y ejecutor de consultas
 ├── data/                     # Archivos de datos (.bin, .idx)
 │   └── generate_data.py      # Generador de datasets para benchmarks (1K, 10K, 100K)
-├── frontend/                 # Interfaz de Usuario (React + Vite + Tailwind CSS)
+├── experiments/              # Experimentos de la Parte 2
+│   ├── bench_spatial.py      # Secuencial vs R-Tree vs GiST (PostgreSQL)
+│   ├── plot_spatial.py       # Gráficas y tablas a partir del CSV
+│   └── results/              # spatial.csv, gráficas .png y resumen .md
+├── tests/                    # Pruebas del R-Tree y del SQL espacial
+├── frontend/                 # Interfaz de Usuario (React + Vite + Leaflet + Tailwind CSS)
 └── requirements.txt          # Dependencias Python
 ```
 
@@ -165,6 +174,80 @@ Abre `http://localhost:5173` y ejecuta las siguientes consultas para recolectar 
 
 ---
 
+## Parte 2: Base de Datos Espacial
+
+### 2.2.1 Índice R-Tree (`index/rtree.py`)
+
+R-Tree paginado en disco (páginas de 4 KB sobre el mismo `BufferPool` que el resto de índices) para puntos 2D `(latitud, longitud)`.
+
+| Aspecto | Implementación |
+|---|---|
+| Nodos | Hoja: `(lat, lon, RID)`, 170 entradas por página. Interno: `(MBR, página hija)`, 113 entradas por página. |
+| Inserción | ChooseLeaf por menor agrandamiento del MBR y split cuadrático de Guttman. |
+| Eliminación | FindLeaf + CondenseTree: los nodos bajo el mínimo (40 %) se disuelven y sus puntos se reinsertan. |
+| Carga masiva | STR (Sort-Tile-Recursive), usada por `CREATE INDEX` y al reorganizar una tabla. |
+| Consulta por radio | Poda por la distancia mínima punto–MBR y refinamiento con la distancia exacta. |
+| k-NN | Búsqueda best-first con cola de prioridad; es incremental, así que admite un filtro `WHERE` adicional. |
+| Polígono | Filtro por el MBR del polígono y refinamiento con ray casting. |
+| Métricas | Haversine (geodésica) y Euclidiana (proyección plana local), en `common/geo.py`. |
+
+El índice se mantiene con `INSERT`, `DELETE` y `UPDATE`, y respeta `ROLLBACK`.
+
+### 2.2.2 Panel de Mapa
+
+Tercera pestaña del área inferior (junto a Resultados y Plan de Ejecución), hecha con Leaflet y OpenStreetMap.
+
+* Muestra en gris los puntos de la tabla seleccionada (una muestra de hasta 4 000) y resalta en rojo los resultados de la última consulta.
+* Dibuja la geometría de la búsqueda: el círculo del radio, el polígono, o el centro con los k vecinos numerados.
+* Al ejecutar una búsqueda espacial desde el editor SQL, el mapa se abre solo.
+* Modos **Radio**, **k-NN** y **Polígono**: un clic en el mapa genera la consulta SQL, la ejecuta y la deja en el editor. Se puede elegir la métrica.
+* Una etiqueta indica si la consulta usó el **R-Tree** o un **escaneo secuencial**.
+
+La tabla de demostración `tiendas` (500 puntos en Lima, con R-Tree sobre `ubicacion`) se crea sola la primera vez que arranca el backend. Para un dataset más grande:
+
+```bash
+python3 data/generate_data.py --spatial 100k   # y reiniciar el backend
+```
+
+### 2.2.3 Extensión SQL
+
+```sql
+-- Tabla con columna espacial e índice R-Tree
+CREATE TABLE lugares (id INT PRIMARY KEY, nombre VARCHAR(30), ubicacion POINT);
+INSERT INTO lugares VALUES (1, 'UTEC', POINT(-12.1354, -77.0224));
+CREATE INDEX idx_lugares_geo ON lugares (ubicacion) USING RTREE;
+
+-- Consulta por rango: todo lo que está a menos de 5 km (metros, Haversine)
+SELECT * FROM tiendas WHERE distancia(ubicacion, POINT(-12.0464, -77.0428)) < 5000;
+
+-- k-NN: las 10 más cercanas a una ubicación guardada en la sesión
+SET mi_ubicacion = POINT(-12.1354, -77.0224);
+SELECT * FROM tiendas ORDER BY distancia(ubicacion, mi_ubicacion) LIMIT 10;
+
+-- Distancia como columna del resultado, con filtro adicional
+SELECT nombre, distancia(ubicacion, mi_ubicacion) AS metros
+FROM tiendas WHERE categoria = 'Farmacia'
+ORDER BY distancia(ubicacion, mi_ubicacion) LIMIT 5;
+
+-- Métrica Euclidiana en vez de Haversine
+SELECT * FROM tiendas WHERE distancia_euclidiana(ubicacion, mi_ubicacion) < 2000;
+
+-- Intersección con un polígono
+SELECT * FROM tiendas WHERE dentro_de(ubicacion,
+    POLYGON(POINT(-12.135, -77.032), POINT(-12.135, -77.012), POINT(-12.158, -77.012), POINT(-12.158, -77.032)));
+```
+
+| Patrón en la consulta | Plan con R-Tree |
+|---|---|
+| `WHERE distancia(col, POINT) < r` (también `<=` y `distancia_euclidiana`) | `IndexScan (R-Tree)`, búsqueda por radio |
+| `WHERE dentro_de(col, POLYGON(...))` | `IndexScan (R-Tree)`, intersección con polígono |
+| `ORDER BY distancia(col, POINT) LIMIT k` | `IndexScan (R-Tree)`, k-NN best-first |
+
+El resto del `WHERE` unido con `AND` se aplica como filtro sobre los candidatos. Si la columna no tiene R-Tree, o el patrón está dentro de un `OR` o un `NOT`, la consulta se resuelve con escaneo secuencial y devuelve el mismo resultado. `EXPLAIN` muestra el plan elegido, los nodos visitados y los candidatos.
+
+Las tablas e índices creados por SQL ahora persisten entre reinicios en `data/catalog.json`.
+
+
 ## Cómo Ejecutar el Proyecto
 
 ### 1. Backend (API REST)
@@ -181,3 +264,4 @@ pnpm install
 pnpm dev
 ```
 Aplicación disponible en: `http://127.0.0.1:5173`.
+

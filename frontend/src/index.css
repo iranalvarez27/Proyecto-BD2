@@ -63,3 +63,36 @@
 ::-webkit-scrollbar-thumb:hover {
   background: var(--scrollbar-thumb-hover);
 }
+
+/* Panel de mapa (Leaflet) */
+.map-crosshair .leaflet-container,
+.map-crosshair .leaflet-grab,
+.map-crosshair .leaflet-interactive {
+  cursor: crosshair;
+}
+.map-dark .leaflet-tile-pane {
+  filter: invert(1) hue-rotate(180deg) brightness(0.95) contrast(0.9);
+}
+.map-dark .leaflet-container {
+  background: #0d1826;
+}
+.map-popup {
+  font-size: 11px;
+  line-height: 1.5;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+.map-popup-key {
+  color: #64748b;
+}
+.leaflet-tooltip.map-rank {
+  padding: 0 4px;
+  font-size: 10px;
+  font-weight: 700;
+  color: #ffffff;
+  background: #e11d48;
+  border: none;
+  box-shadow: none;
+}
+.leaflet-tooltip.map-rank::before {
+  display: none;
+}

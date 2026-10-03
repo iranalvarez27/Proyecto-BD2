@@ -55,6 +55,14 @@ def execute_query(req: QueryRequest):
     return engine.execute_query(req.query, req.session_id)
 
 
+@app.get("/api/tables/{table_name}/points")
+def get_table_points(table_name: str, column: Optional[str] = None, limit: int = 5000):
+    try:
+        return engine.get_points(table_name, column, limit)
+    except ValueError as ex:
+        raise HTTPException(status_code=400, detail=str(ex))
+
+
 @app.post("/api/tables/reorganize")
 def reorganize_table(req: ReorganizeRequest):
     try:

@@ -16,6 +16,7 @@ class PolygonLiteral:
 class FuncCall:
     nombre: str
     argumentos: list
+    alias: str = None
 
 
 @dataclass
@@ -83,6 +84,8 @@ class SelectNode:
     group_by: str = None
     joins: list = field(default_factory=list)
     limit: int = None
+    # funciones espaciales en la lista del SELECT, p. ej. distancia(...) AS d
+    extras: list = field(default_factory=list)
 
 
 @dataclass
@@ -102,6 +105,12 @@ class UpdateNode:
     tabla: str
     asignaciones: list  # lista[tupla[str, object]]
     where: object = None
+
+
+@dataclass
+class SetVarNode:
+    nombre: str
+    valor: object
 
 
 @dataclass
@@ -150,3 +159,4 @@ class CreateIndexNode:
     tabla: str
     columna: str
     tipo_indice: str = "bplus"  # "bplus" | "hash" | "rtree"
+    nombre: str = None
