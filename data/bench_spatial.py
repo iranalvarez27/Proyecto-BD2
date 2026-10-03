@@ -38,7 +38,7 @@ if PROJECT_ROOT not in sys.path:
 
 from common.types import RID
 from common.record import Record
-from common.geo import haversine_m, Point
+from common.geo import HAVERSINE, get_metric, haversine_m
 from common.datos_lima import generar_tiendas, centros_de_consulta
 from engine.buffer_pool import BufferPool
 from engine.file_manager import FileManager
@@ -53,6 +53,19 @@ try:
     HAS_PSYCOPG2 = True
 except ImportError:
     HAS_PSYCOPG2 = False
+
+
+# Baselines sin indice; puntos y centro en (x, y) = (lon, lat)
+def range_query_secuencial(puntos, centro, radio: float, metric: str = HAVERSINE) -> list:
+    dist = get_metric(metric)
+    x, y = centro
+    return [(px, py) for px, py in puntos if dist(x, y, (px, py, px, py)) <= radio]
+
+
+def knn_secuencial(puntos, centro, k: int, metric: str = HAVERSINE) -> list:
+    dist = get_metric(metric)
+    x, y = centro
+    return heapq.nsmallest(k, ((dist(x, y, (px, py, px, py)), (px, py)) for px, py in puntos))
 
 
 # Línea base de referencia para PostGIS GiST (calibrada en entorno PostgreSQL 16 + PostGIS 3.4)
@@ -227,7 +240,7 @@ class SpatialBenchmarkRunner:
                         if data == b"":
                             continue
                         _id, plat, plon = struct.unpack_from("<idd", data, 0)
-                        if haversine_m(plat, plon, lat_c, lon_c) <= r:
+                        if haversine_m(lon_c, lat_c, (plon, plat, plon, plat)) <= r:
                             filas.append(Record.unpack(data, SCHEMA_TIENDAS))
             elapsed = (time.perf_counter() - t0) * 1000.0 / self.num_queries
             radius_times_sec[int(r)] = round(elapsed, 4)
@@ -248,7 +261,7 @@ class SpatialBenchmarkRunner:
                         if data == b"":
                             continue
                         _id, plat, plon = struct.unpack_from("<idd", data, 0)
-                        d = haversine_m(plat, plon, lat_c, lon_c)
+                        d = haversine_m(lon_c, lat_c, (plon, plat, plon, plat))
                         if len(mejores) < k:
                             heapq.heappush(mejores, (-d, data))
                         elif d < -mejores[0][0]:
@@ -265,14 +278,14 @@ class SpatialBenchmarkRunner:
         print("  [2/3] Evaluando R-Tree propio (Index Scan + Heap Fetch completo)...")
         rtree = RTree(pool, tmp_idx)
 
-        # Medir tiempo de construcción (STR Bulk Load)
+        # Medir tiempo de construcción
         t0 = time.perf_counter()
         rtree.bulk_load(pares_punto)
         t_build_rtree = (time.perf_counter() - t0) * 1000.0
         size_idx_kb = os.path.getsize(tmp_idx) / 1024.0
         size_res["rtree"]["build_time_ms"] = round(t_build_rtree, 2)
         size_res["rtree"]["index_size_kb"] = round(size_idx_kb, 2)
-        print(f"      Construcción STR: {t_build_rtree:.2f} ms | Espacio: {size_idx_kb:.1f} KB")
+        print(f"      Construcción: {t_build_rtree:.2f} ms | Espacio: {size_idx_kb:.1f} KB")
 
         # Radio Search R-Tree
         radius_times_rtree = {}

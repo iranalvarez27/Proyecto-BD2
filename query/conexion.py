@@ -12,8 +12,7 @@ from query.ast import (SelectNode, InsertNode, DeleteNode, UpdateNode, Condition
                         PointLiteral, PolygonLiteral, FuncCall, SpatialCondition, CreateIndexNode, AggregateCall, ColumnRef, SubquerySelect, JoinClause,
                         SetVarNode,)
 from query.tokens import TokenType
-from common.geo import (METRICA_EUCLIDIANA, METRICA_HAVERSINE, euclidiana_m as _euclidiana_aprox_m,
-                        haversine_m as _haversine_m, punto_en_poligono as _punto_en_poligono)
+from common.geo import EUCLIDEAN, HAVERSINE, get_metric, point_in_polygon
 from common.record import Record
 from common.types import Column, DataType, Schema
 from engine.external import external_group_by, external_hash_join, external_sort
@@ -37,7 +36,16 @@ FUNCIONES_DISTANCIA = ("distancia", "distancia_geo", "distancia_haversine", "dis
 
 
 def _metrica_de(nombre_funcion: str) -> str:
-    return METRICA_EUCLIDIANA if nombre_funcion == "distancia_euclidiana" else METRICA_HAVERSINE
+    return EUCLIDEAN if nombre_funcion == "distancia_euclidiana" else HAVERSINE
+
+
+def _valor_de_fila(valor):
+    return (valor.lat, valor.lon) if isinstance(valor, PointLiteral) else valor
+
+
+def _distancia_m(metrica: str, p1: tuple, p2: tuple) -> float:
+    (lat1, lon1), (lat2, lon2) = p1, p2
+    return get_metric(metrica)(lon1, lat1, (lon2, lat2, lon2, lat2))
 
 class ExecutionError(Exception):
     pass
@@ -409,17 +417,17 @@ class Conexion:
     def _evaluar_funcion_espacial(self, funcion: FuncCall, fila: dict):
         nombre = funcion.nombre
         if nombre in ("distancia", "distancia_geo", "distancia_haversine"):
-            lat1, lon1 = self._resolver_arg_punto(funcion.argumentos[0], fila)
-            lat2, lon2 = self._resolver_arg_punto(funcion.argumentos[1], fila)
-            return _haversine_m(lat1, lon1, lat2, lon2)
+            p1 = self._resolver_arg_punto(funcion.argumentos[0], fila)
+            p2 = self._resolver_arg_punto(funcion.argumentos[1], fila)
+            return _distancia_m(HAVERSINE, p1, p2)
         if nombre == "distancia_euclidiana":
-            lat1, lon1 = self._resolver_arg_punto(funcion.argumentos[0], fila)
-            lat2, lon2 = self._resolver_arg_punto(funcion.argumentos[1], fila)
-            return _euclidiana_aprox_m(lat1, lon1, lat2, lon2)
+            p1 = self._resolver_arg_punto(funcion.argumentos[0], fila)
+            p2 = self._resolver_arg_punto(funcion.argumentos[1], fila)
+            return _distancia_m(EUCLIDEAN, p1, p2)
         if nombre == "dentro_de":
             lat, lon = self._resolver_arg_punto(funcion.argumentos[0], fila)
             poligono = self._resolver_arg_poligono(funcion.argumentos[1])
-            return _punto_en_poligono(lat, lon, poligono)
+            return point_in_polygon(lon, lat, [(v_lon, v_lat) for v_lat, v_lon in poligono])
         raise ExecutionError(f"funcion desconocida: '{nombre}'")
 
     def _like_a_regex(self, patron: str) -> str:
@@ -1104,7 +1112,7 @@ class Conexion:
 
     def ejecutar_insert(self, nodo: InsertNode, dry_run: bool = False) -> dict:
         info = self.catalog.get_table(nodo.tabla)
-        record = Record(nodo.valores)
+        record = Record([_valor_de_fila(v) for v in nodo.valores])
 
         if info.tipo_storage == STORAGE_HEAP:
             pk_col = None
@@ -1288,7 +1296,7 @@ class Conexion:
         nuevos_valores = list(record.values)
         for columna, valor in asignaciones:
             idx = schema.column_index(columna)
-            nuevos_valores[idx] = valor
+            nuevos_valores[idx] = _valor_de_fila(valor)
         return Record(nuevos_valores)
 
     def ejecutar_update(self, nodo: UpdateNode, dry_run: bool = False) -> dict:
@@ -1464,7 +1472,7 @@ class Conexion:
             pares.append((valor, rid))
         if nodo.tipo_indice == INDEX_BPLUS:
             pares.sort(key=lambda p: (p[0], p[1].page_id, p[1].slot_id))
-        indice.bulk_load(pares)   # el R-Tree usa STR (Sort-Tile-Recursive)
+        indice.bulk_load(pares)
 
         self.catalog.register_index(nodo.tabla, nodo.columna, indice, nodo.tipo_indice)
         self._persistir_tabla(nodo.tabla)

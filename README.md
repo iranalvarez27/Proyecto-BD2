@@ -24,7 +24,7 @@ Proyecto-BD2/
 │   ├── bplus_tree.py         # B+ Tree no agrupado
 │   ├── clustered_bplus_tree.py # B+ Tree agrupado sobre SequentialFile
 │   ├── extendible_hash.py    # Hash Dinámico Extensible
-│   ├── rtree.py              # R-Tree en disco: radio, k-NN, polígono, carga STR
+│   ├── rtree.py              # R-Tree en disco: rango, radio, k-NN, polígono
 │   └── key_codec.py          # Codificación de claves binarias
 ├── query/                    # Motor de Consultas SQL
 │   ├── lexer.py / tokens.py  # Analizador léxico
@@ -182,10 +182,10 @@ R-Tree paginado en disco (páginas de 4 KB sobre el mismo `BufferPool` que el re
 
 | Aspecto | Implementación |
 |---|---|
-| Nodos | Hoja: `(lat, lon, RID)`, 170 entradas por página. Interno: `(MBR, página hija)`, 113 entradas por página. |
-| Inserción | ChooseLeaf por menor agrandamiento del MBR y split cuadrático de Guttman. |
-| Eliminación | FindLeaf + CondenseTree: los nodos bajo el mínimo (40 %) se disuelven y sus puntos se reinsertan. |
-| Carga masiva | STR (Sort-Tile-Recursive), usada por `CREATE INDEX` y al reorganizar una tabla. |
+| Nodos | Hoja: `(lon, lat, RID)`, 170 entradas por página. Interno: `(MBR, página hija)`, 113 entradas por página. |
+| Inserción | Se baja al hijo con menor (MINDIST, agrandamiento, área). Split: semillas = el par más lejano; el resto se reparte con la misma regla, de lo más cercano a una semilla a lo más lejano, hasta que un grupo llega a la mitad + 1. |
+| Eliminación | Lazy, como GiST: se quita la entrada, se ajustan los MBR del camino y solo se libera un nodo vacío. |
+| Reconstrucción | `bulk_load` arma un índice nuevo insertando par por par y reemplaza al anterior; la usan `CREATE INDEX` y el reorganize de una tabla. |
 | Consulta por radio | Poda por la distancia mínima punto–MBR y refinamiento con la distancia exacta. |
 | k-NN | Búsqueda best-first con cola de prioridad; es incremental, así que admite un filtro `WHERE` adicional. |
 | Polígono | Filtro por el MBR del polígono y refinamiento con ray casting. |
@@ -251,7 +251,7 @@ Las tablas e índices creados por SQL ahora persisten entre reinicios en `data/c
 
 Esta sección permite reproducir automáticamente la evaluación comparativa requerida en la rúbrica entre:
 1. **Búsqueda Secuencial** (baseline sin índice en memoria/heap).
-2. **R-Tree Propio** (implementación paginada en disco de 4KB con BufferPool y carga masiva STR).
+2. **R-Tree Propio** (implementación paginada en disco de 4KB con BufferPool, construido por inserciones).
 3. **PostgreSQL con PostGIS** (índice GiST nativo sobre `geometry(Point, 4326)`).
 
 #### Variables Evaluadas:
@@ -290,7 +290,7 @@ python3 data/plot_spatial.py
 #### Archivos de Salida Generados:
 * **Métricas en datos crudos:** `data/spatial_benchmark_results.json` y `data/spatial_benchmark_results.csv`.
 * **Gráficas PNG para el informe** (en `data/charts/`):
-  * `01_spatial_construccion_indices.png` (Tiempo de indexación: R-Tree STR vs GiST).
+  * `01_spatial_construccion_indices.png` (Tiempo de indexación: R-Tree vs GiST).
   * `02_spatial_espacio_disco.png` (Espacio en disco del índice).
   * `03_spatial_radio_1k_5k_10k.png` (Latencia por radio: 1 km, 5 km, 10 km).
   * `04_spatial_knn_10_50_100.png` (Latencia k-NN: $k=10, 50, 100$).

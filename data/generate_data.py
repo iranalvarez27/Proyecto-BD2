@@ -208,7 +208,7 @@ def build_tiendas(n: int):
 
     print(f"  ✓ HeapFile:        {t_heap * 1000:9.2f} ms  |  Disco: {_format_bytes(os.path.getsize(heap_path))}")
     print(f"  ✓ B+ Tree (id):    {t_bplus * 1000:9.2f} ms  |  Disco: {_format_bytes(os.path.getsize(bplus_path))}")
-    print(f"  ✓ R-Tree (STR):    {t_rtree * 1000:9.2f} ms  |  Disco: {_format_bytes(os.path.getsize(rtree_path))}")
+    print(f"  ✓ R-Tree:          {t_rtree * 1000:9.2f} ms  |  Disco: {_format_bytes(os.path.getsize(rtree_path))}")
     print("\n  Consultas de ejemplo para el Panel de Mapa:")
     print("    SELECT * FROM tiendas WHERE distancia(ubicacion, POINT(-12.1354, -77.0224)) < 2000;")
     print("    SELECT * FROM tiendas ORDER BY distancia(ubicacion, POINT(-12.1354, -77.0224)) LIMIT 10;")
