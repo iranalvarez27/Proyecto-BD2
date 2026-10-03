@@ -67,7 +67,7 @@ class Record:
                     )
                 fixed_values.append(raw)
             elif col.type == DataType.POINT:
-                lat, lon = (val.lat, val.lon) if hasattr(val, "lat") else val
+                lat, lon = val
                 fixed_values.append(float(lat))
                 fixed_values.append(float(lon))
             else:

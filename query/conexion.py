@@ -39,6 +39,10 @@ def _metrica_de(nombre_funcion: str) -> str:
     return EUCLIDEAN if nombre_funcion == "distancia_euclidiana" else HAVERSINE
 
 
+def _valor_de_fila(valor):
+    return (valor.lat, valor.lon) if isinstance(valor, PointLiteral) else valor
+
+
 def _distancia_m(metrica: str, p1: tuple, p2: tuple) -> float:
     (lat1, lon1), (lat2, lon2) = p1, p2
     return get_metric(metrica)(lon1, lat1, (lon2, lat2, lon2, lat2))
@@ -1108,7 +1112,7 @@ class Conexion:
 
     def ejecutar_insert(self, nodo: InsertNode, dry_run: bool = False) -> dict:
         info = self.catalog.get_table(nodo.tabla)
-        record = Record(nodo.valores)
+        record = Record([_valor_de_fila(v) for v in nodo.valores])
 
         if info.tipo_storage == STORAGE_HEAP:
             pk_col = None
@@ -1292,7 +1296,7 @@ class Conexion:
         nuevos_valores = list(record.values)
         for columna, valor in asignaciones:
             idx = schema.column_index(columna)
-            nuevos_valores[idx] = valor
+            nuevos_valores[idx] = _valor_de_fila(valor)
         return Record(nuevos_valores)
 
     def ejecutar_update(self, nodo: UpdateNode, dry_run: bool = False) -> dict:
@@ -1468,7 +1472,7 @@ class Conexion:
             pares.append((valor, rid))
         if nodo.tipo_indice == INDEX_BPLUS:
             pares.sort(key=lambda p: (p[0], p[1].page_id, p[1].slot_id))
-        indice.bulk_load(pares)   # el R-Tree usa STR (Sort-Tile-Recursive)
+        indice.bulk_load(pares)
 
         self.catalog.register_index(nodo.tabla, nodo.columna, indice, nodo.tipo_indice)
         self._persistir_tabla(nodo.tabla)

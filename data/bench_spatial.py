@@ -237,14 +237,14 @@ class SpatialBenchmarkRunner:
         size_res["secuencial"]["knn_ms"] = knn_times_sec
 
         # -------------------------------------------------------------------
-        # B. R-TREE PROPIO (BufferPool + STR Bulk Load + Disco)
+        # B. R-TREE PROPIO (BufferPool + inserciones + Disco)
         # -------------------------------------------------------------------
-        print("  [2/3] Evaluando R-Tree propio (Sort-Tile-Recursive)...")
+        print("  [2/3] Evaluando R-Tree propio...")
         tmp_idx = tempfile.mktemp(suffix=f"_bench_rtree_{n}.idx")
         pool = BufferPool(FileManager())
         rtree = RTree(pool, tmp_idx)
 
-        # Medir tiempo de construcción (STR Bulk Load)
+        # Medir tiempo de construcción (inserción par por par)
         pairs = [(row[3], RID(0, i)) for i, row in enumerate(raw_data)]
         t0 = time.perf_counter()
         rtree.bulk_load(pairs)
@@ -252,7 +252,7 @@ class SpatialBenchmarkRunner:
         size_idx_kb = os.path.getsize(tmp_idx) / 1024.0
         size_res["rtree"]["build_time_ms"] = round(t_build_rtree, 2)
         size_res["rtree"]["index_size_kb"] = round(size_idx_kb, 2)
-        print(f"      Construcción STR: {t_build_rtree:.2f} ms | Espacio: {size_idx_kb:.1f} KB")
+        print(f"      Construcción: {t_build_rtree:.2f} ms | Espacio: {size_idx_kb:.1f} KB")
 
         # Radio Search R-Tree
         radius_times_rtree = {}
