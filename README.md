@@ -35,10 +35,10 @@ Proyecto-BD2/
 ├── data/                     # Archivos de datos (.bin, .idx) y benchmarks
 │   ├── generate_data.py      # Generador de datasets para Parte 1 y 2 (1K, 10K, 100K)
 │   ├── bench_spatial.py      # Runner experimental: Secuencial vs R-Tree vs PostgreSQL GiST
-│   ├── plot_spatial.py       # Generador de gráficas espaciales (.png) y tabla resumen
-│   ├── benchmark_charts.py   # Gráficas experimentales de la Parte 1
-│   ├── charts/               # Gráficas generadas en PNG para el informe
-│   └── TABLA_RESUMEN_COMPARATIVA.md # Guía comparativa de técnicas
+│   ├── plot_spatial.py       # Genera las 5 gráficas PNG de la Parte 2
+│   ├── benchmark_charts.py   # Benchmark + 4 gráficas PNG de la Parte 1
+│   ├── bench_churn_indices.py # Inserciones/eliminaciones frecuentes sobre los 3 índices
+│   └── charts/               # Gráficas PNG generadas por los scripts anteriores
 ├── frontend/                 # Interfaz de Usuario (React + Vite + Leaflet + Tailwind CSS)
 └── requirements.txt          # Dependencias Python
 ```
@@ -95,6 +95,23 @@ python3 data/generate_data.py --reset       # Restaurar a datos de muestra inici
 > * **Tiempo de inserción masiva** (HeapFile vs SequentialFile).
 > * **Tiempo de construcción de índices** (B+ no agrupado, Hash dinámico, B+ agrupado).
 > * **Espacio en disco utilizado y espacio adicional requerido** (tamaño en KB/MB de `.bin` y `.idx`).
+
+### Paso 1b: Benchmark completo + gráficas (`data/benchmark_charts.py`)
+
+`generate_data.py` solo puebla `data/` y mide inserción/construcción por consola. Para las métricas que faltan (búsqueda por clave primaria, reorganización, búsqueda por igualdad/rango/orden en cada índice) y las gráficas comparativas, usa el runner dedicado — construye sus propios archivos temporales, no toca los datos de `data/`:
+
+```bash
+# Benchmark completo (1K, 10K, 100K) + 4 gráficas PNG:
+python3 data/benchmark_charts.py --sizes 1k 10k 100k --plot
+
+# Prueba rápida (sólo 1K):
+python3 data/benchmark_charts.py --sizes 1k --plot
+
+# Rendimiento con inserciones/eliminaciones frecuentes (churn) sobre los 3 índices:
+python3 data/bench_churn_indices.py
+```
+
+**Salidas:** `data/relational_benchmark_results.json`, `data/charts/06_rel_insercion_busqueda.png`, `07_rel_espacio_reorganizacion.png`, `08_indices_construccion_espacio.png`, `09_indices_consultas.png`, `11_churn_mutaciones.png`.
 
 ---
 
@@ -283,7 +300,7 @@ python3 data/bench_spatial.py --sizes 1k --plot
 # 3. Forzar parámetros específicos de conexión por terminal (opcional):
 python3 data/bench_spatial.py --sizes 1k 10k 100k --pg-port 5433 --pg-user postgres --plot
 
-# 4. Re-generar únicamente las gráficas y la tabla resumen a partir del JSON existente:
+# 4. Re-generar unicamente las graficas a partir del JSON existente:
 python3 data/plot_spatial.py
 ```
 
@@ -295,7 +312,6 @@ python3 data/plot_spatial.py
   * `03_spatial_radio_1k_5k_10k.png` (Latencia por radio: 1 km, 5 km, 10 km).
   * `04_spatial_knn_10_50_100.png` (Latencia k-NN: $k=10, 50, 100$).
   * `05_spatial_escalamiento.png` (Curva de escalabilidad asintótica log-log).
-* **Tabla de decisión:** `data/TABLA_RESUMEN_COMPARATIVA.md` (resumen de rendimiento y guía de cuándo usar cada técnica).
 
 ---
 
