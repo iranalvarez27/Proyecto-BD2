@@ -314,3 +314,39 @@ class ExtendibleHash(Index):
                 page = self._read_bucket(page_id)
                 yield page_id, page
                 page_id = page.overflow_page_id
+
+    def snapshot(self) -> dict:
+        buckets = []
+        for primary_id in dict.fromkeys(self._dir):
+            chain = []
+            current = primary_id
+            while current != NIL:
+                page = self._read_bucket(current)
+                chain.append((current, page))
+                current = page.overflow_page_id
+            _, primary = chain[0]
+            buckets.append({
+                "id": primary_id,
+                "local_depth": primary.local_depth,
+                "count": sum(len(page.entries) for _pid, page in chain),
+                "capacity": self._capacity,
+                "keys": [],
+                "dir_slots": [i for i, pid in enumerate(self._dir) if pid == primary_id],
+                "chain": [{
+                    "id": pid,
+                    "kind": "overflow" if page.is_overflow else "primary",
+                    "local_depth": page.local_depth,
+                    "count": len(page.entries),
+                    "keys": [],
+                    "hashes": [f"{h & 0xFFFF:04x}" for h, _rid in page.entries],
+                    "overflow": page.overflow_page_id if page.overflow_page_id != NIL else None,
+                } for pid, page in chain],
+            })
+        return {
+            "kind": "hash",
+            "global_depth": self._global_depth,
+            "capacity": self._capacity,
+            "directory": list(self._dir),
+            "directory_size": len(self._dir),
+            "buckets": buckets,
+        }

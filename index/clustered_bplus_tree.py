@@ -86,6 +86,9 @@ class ClusteredBPlusTree:
     def reload(self) -> None:
         self._tree.reload()
 
+    def snapshot(self) -> dict:
+        return self._tree.snapshot()
+
     # policy
 
     def aux_limit(self) -> int:

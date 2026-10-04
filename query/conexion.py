@@ -639,10 +639,16 @@ class Conexion:
                 return indice
         return None
 
-    def _marcar_uso_rtree(self) -> None:
+    def _marcar_rtree(self, rtree, trace: list, stats: dict) -> None:
         espacial = getattr(self._local, "espacial", None)
-        if espacial is not None:
-            espacial["usa_indice"] = True
+        if espacial is None:
+            return
+        espacial["usa_indice"] = True
+        espacial["rtree"] = {
+            "tree": rtree.snapshot(),
+            "trace": {"order": trace},
+            "stats": dict(stats),
+        }
 
     def _plan_espacial(self, nodo: SelectNode, info: TableInfo, where, nombres_col: list):
         for cond in self._conjuntos_and(where):
@@ -653,14 +659,15 @@ class Conexion:
             if rtree is None:
                 continue
             stats = {}
+            trace = []
             if patron["tipo"] == "radio":
                 lat, lon = patron["centro"]
-                hallados = rtree.radius_search((lat, lon), patron["radio_m"], patron["metrica"], stats)
+                hallados = rtree.radius_search((lat, lon), patron["radio_m"], patron["metrica"], stats, trace)
                 rids = [rid for _d, rid, _p in hallados]
                 detalle = (f"busqueda por radio en indice rtree sobre '{patron['columna']}' "
                            f"(centro {lat}, {lon}; radio {patron['radio_m']} m; metrica {patron['metrica']}")
             else:
-                rids = [rid for rid, _p in rtree.polygon_search(patron["poligono"], stats)]
+                rids = [rid for rid, _p in rtree.polygon_search(patron["poligono"], stats, trace)]
                 detalle = (f"interseccion con poligono en indice rtree sobre '{patron['columna']}' "
                            f"({len(patron['poligono'])} vertices")
             # leer en orden fisico: menos saltos de pagina y mismo orden que un escaneo
@@ -675,7 +682,7 @@ class Conexion:
                     filas.append(fila)
             self.plan.append(f"{detalle}; {stats['nodos_visitados']} nodos visitados, "
                              f"{stats['candidatos']} candidatos, {len(filas)} filas)")
-            self._marcar_uso_rtree()
+            self._marcar_rtree(rtree, trace, stats)
             return filas, False
 
         knn = self._patron_knn(nodo)
@@ -686,9 +693,10 @@ class Conexion:
         if rtree is None:
             return None
         stats = {}
+        trace = []
         lat, lon = knn["centro"]
         filas = []
-        for _d, rid, _p in rtree.nearest_iter((lat, lon), knn["metrica"], stats):
+        for _d, rid, _p in rtree.nearest_iter((lat, lon), knn["metrica"], stats, trace):
             record = info.storage.read(rid, info.schema)
             if record is None:
                 continue
@@ -702,7 +710,7 @@ class Conexion:
                          f"(k {knn['k']}; centro {lat}, {lon}; metrica {knn['metrica']}; "
                          f"{stats.get('nodos_visitados', 0)} nodos visitados, "
                          f"{stats.get('candidatos', 0)} candidatos){filtro}")
-        self._marcar_uso_rtree()
+        self._marcar_rtree(rtree, trace, stats)
         return filas, True
 
     def ejecutar_select(self, nodo: SelectNode) -> list:

@@ -503,6 +503,31 @@ class BPlusTree(Index):
             node = self._read_node(page_id)
         return page_id
 
+    def snapshot(self) -> dict:
+        nodes = []
+
+        def walk(page_id: int, level: int) -> int:
+            node = self._read_node(page_id)
+            keys = [decode(k, self._key_type) for k in node.keys]
+            if node.is_leaf:
+                nodes.append({
+                    "id": page_id, "level": level, "leaf": True,
+                    "keys": keys, "count": node.count,
+                    "children": [],
+                    "next": node.next_page if node.next_page != NIL else None,
+                })
+                return level
+            children = [node.child(i) for i in range(node.count + 1)]
+            nodes.append({
+                "id": page_id, "level": level, "leaf": False,
+                "keys": keys, "count": node.count,
+                "children": children, "next": None,
+            })
+            return max(walk(child, level + 1) for child in children)
+
+        altura = walk(self._root, 0) + 1
+        return {"kind": "bplus", "root": self._root, "height": altura, "nodes": nodes}
+
     # pages
 
     def _alloc_page(self) -> int:

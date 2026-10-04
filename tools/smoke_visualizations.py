@@ -35,9 +35,19 @@ def main() -> None:
             "viz-test",
         )
         assert spatial["status"] == "success", spatial
-        trace = spatial["spatial"]["rtree"]["trace"]
-        assert all("type" in event for event in trace["order"])
-        print("rtree", len(trace["visited"]), len(trace["pruned"]), len(trace["order"]))
+        rtree_info = spatial["spatial"]["rtree"]
+        trace = rtree_info["trace"]
+        order = trace["order"]
+        assert order, "la traza del R-Tree vino vacia"
+        assert all("type" in event for event in order)
+        assert all(event["type"] in ("visit", "prune", "hit") for event in order)
+        tree = rtree_info["tree"]
+        assert tree["nodes"], "el snapshot del R-Tree vino vacio"
+        node_ids = {node["id"] for node in tree["nodes"]}
+        assert all(event["id"] in node_ids for event in order if event["type"] in ("visit", "prune"))
+        visited = {e["id"] for e in order if e["type"] == "visit"}
+        pruned = {e["id"] for e in order if e["type"] == "prune"}
+        print("rtree", len(visited), len(pruned), len(order))
 
         reorganized = engine.reorganize_table("cursos")
         sequential = reorganized["visualize"]["sequential"]

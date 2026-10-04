@@ -747,3 +747,39 @@ class SequentialFile:
 
         return self.wasted_ratio() > threshold
 
+    @staticmethod
+    def _pointer_dict(pointer: FilePointer | None) -> dict | None:
+        if pointer is None:
+            return None
+        return {"file": "MAIN" if pointer.file_type == MAIN_FILE else "AUX",
+                "page": pointer.page_id, "slot": pointer.slot_id}
+
+    def snapshot(self) -> dict:
+        def row(file_type: int, pointer: FilePointer, entry: SequentialEntry) -> dict:
+            prefix = "M" if file_type == MAIN_FILE else "A"
+            return {
+                "id": f"{prefix}-{pointer.page_id}-{pointer.slot_id}",
+                "page": pointer.page_id,
+                "slot": pointer.slot_id,
+                "key": self._get_key(entry),
+                "values": list(entry.record.values),
+                "next": self._pointer_dict(entry.next_pointer),
+                "deleted": entry.deleted,
+            }
+
+        main_rows, aux_rows = [], []
+        for file_type, bucket in ((MAIN_FILE, main_rows), (AUX_FILE, aux_rows)):
+            for pointer, entry in self._iter_file_entries(file_type):
+                bucket.append(row(file_type, pointer, entry))
+
+        return {
+            "main": main_rows,
+            "aux": aux_rows,
+            "head": self._pointer_dict(self._head),
+            "tail": self._pointer_dict(self._tail),
+            "key_column": self._key_column,
+            "wasted_ratio": self.wasted_ratio(),
+            "n_aux": self._n_aux,
+            "needs_reorganization": self.needs_reorganization(),
+        }
+

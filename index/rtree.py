@@ -73,9 +73,10 @@ class RTree(Index):
         x, y = _xy(key)
         return [rid for rid, _p in self._rect_search(MBR.of_point(x, y), None)]
 
-    def range_search(self, low: Any, high: Any, stats: dict | None = None) -> list[RID]:
+    def range_search(self, low: Any, high: Any, stats: dict | None = None,
+                     trace: list | None = None) -> list[RID]:
         rect = MBR.of_points([_xy(low), _xy(high)])
-        return [rid for rid, _p in self._rect_search(rect, stats)]
+        return [rid for rid, _p in self._rect_search(rect, stats, trace)]
 
     def delete(self, key: Any, rid: RID) -> bool:
         x, y = _xy(key)
@@ -93,7 +94,7 @@ class RTree(Index):
     # consultas espaciales
 
     def radius_search(self, center: Any, radius_m: float, metrica: str = HAVERSINE,
-                      stats: dict | None = None) -> list:
+                      stats: dict | None = None, trace: list | None = None) -> list:
         x, y = _xy(center)
         mindist = get_metric(metrica)
         maxdist = get_max_metric(metrica)
@@ -104,70 +105,102 @@ class RTree(Index):
             page_id, completo = pila.pop()
             node = self._read(page_id)
             nodos += 1
+            evento = {"type": "visit", "id": page_id, **({"full": True} if completo and trace is not None else {})} if trace is not None else None
             if node.is_leaf:
                 hojas += 1
+                matches = []
                 for px, py, pid, slot in node.entries:
                     # en un subarbol completo no se calcula la distancia
                     d = None if completo else mindist(x, y, (px, py, px, py))
                     if completo or d <= radius_m:
                         encontrados.append((d, RID(pid, slot), (py, px)))
+                        if trace is not None:
+                            matches.append([py, px])
+                if trace is not None:
+                    evento["matches"] = matches
+                    evento["hits"] = len(matches)
+                    trace.append(evento)
             elif completo:
+                if trace is not None:
+                    trace.append(evento)
                 pila.extend((e[4], True) for e in node.entries)
             else:
+                full_hijos, podados = [], []
                 for e in node.entries:
                     if mindist(x, y, e[:4]) <= radius_m:
-                        pila.append((e[4], maxdist(x, y, e[:4]) <= radius_m))
+                        es_full = maxdist(x, y, e[:4]) <= radius_m
+                        pila.append((e[4], es_full))
+                        if es_full and trace is not None:
+                            full_hijos.append(e[4])
+                    elif trace is not None:
+                        podados.append(e[4])
+                if trace is not None:
+                    evento["full_children"] = full_hijos
+                    trace.append(evento)
+                    for hijo_id in podados:
+                        trace.append({"type": "prune", "id": hijo_id, "parent": page_id})
         self._fill_stats(stats, nodos, hojas, len(encontrados))
         return encontrados
 
-    def nearest_iter(self, center: Any, metrica: str = HAVERSINE, stats: dict | None = None):
+    def nearest_iter(self, center: Any, metrica: str = HAVERSINE, stats: dict | None = None,
+                     trace: list | None = None):
         x, y = _xy(center)
         mindist = get_metric(metrica)
         contador = itertools.count()
         cola = [(0.0, next(contador), True, self._root)]
         if stats is not None:
             stats.update(nodos_visitados=0, hojas_visitadas=0, candidatos=0)
-        while cola:
-            d, _n, es_nodo, payload = heapq.heappop(cola)
-            if not es_nodo:
+        try:
+            while cola:
+                d, _n, es_nodo, payload = heapq.heappop(cola)
+                if not es_nodo:
+                    if stats is not None:
+                        stats["candidatos"] += 1
+                    if trace is not None:
+                        trace.append({"type": "hit", "point": [payload[1][0], payload[1][1]], "dist": d})
+                    yield d, payload[0], payload[1]
+                    continue
+                node = self._read(payload)
                 if stats is not None:
-                    stats["candidatos"] += 1
-                yield d, payload[0], payload[1]
-                continue
-            node = self._read(payload)
-            if stats is not None:
-                stats["nodos_visitados"] += 1
-                stats["hojas_visitadas"] += 1 if node.is_leaf else 0
-            if node.is_leaf:
-                for px, py, page_id, slot_id in node.entries:
-                    heapq.heappush(cola, (mindist(x, y, (px, py, px, py)), next(contador), False,
-                                          (RID(page_id, slot_id), (py, px))))
-            else:
-                for e in node.entries:
-                    heapq.heappush(cola, (mindist(x, y, e[:4]), next(contador), True, e[4]))
+                    stats["nodos_visitados"] += 1
+                    stats["hojas_visitadas"] += 1 if node.is_leaf else 0
+                if trace is not None:
+                    trace.append({"type": "visit", "id": payload, "dist": d})
+                if node.is_leaf:
+                    for px, py, page_id, slot_id in node.entries:
+                        heapq.heappush(cola, (mindist(x, y, (px, py, px, py)), next(contador), False,
+                                              (RID(page_id, slot_id), (py, px))))
+                else:
+                    for e in node.entries:
+                        heapq.heappush(cola, (mindist(x, y, e[:4]), next(contador), True, e[4]))
+        finally:
+            if trace is not None:
+                for _d, _n, es_nodo, payload in cola:
+                    if es_nodo:
+                        trace.append({"type": "prune", "id": payload})
 
     def knn(self, center: Any, k: int, metrica: str = HAVERSINE,
-            stats: dict | None = None) -> list:
-        return list(itertools.islice(self.nearest_iter(center, metrica, stats), k))
+            stats: dict | None = None, trace: list | None = None) -> list:
+        return list(itertools.islice(self.nearest_iter(center, metrica, stats, trace), k))
 
-    def polygon_search(self, vertices: list, stats: dict | None = None) -> list:
+    def polygon_search(self, vertices: list, stats: dict | None = None, trace: list | None = None) -> list:
         vertices = [_xy(v) for v in vertices]
         caja = MBR.of_points(vertices)
         return self._collect(
             lambda px, py: caja.contains(px, py) and point_in_polygon(px, py, vertices),
             caja.intersects,
             lambda r: caja.contains_rect(r) and rect_in_polygon(r, vertices),
-            stats)
+            stats, trace)
 
     @staticmethod
     def _fill_stats(stats: dict | None, nodos: int, hojas: int, candidatos: int) -> None:
         if stats is not None:
             stats.update(nodos_visitados=nodos, hojas_visitadas=hojas, candidatos=candidatos)
 
-    def _rect_search(self, rect: MBR, stats: dict | None) -> list:
-        return self._collect(rect.contains, rect.intersects, rect.contains_rect, stats)
+    def _rect_search(self, rect: MBR, stats: dict | None, trace: list | None = None) -> list:
+        return self._collect(rect.contains, rect.intersects, rect.contains_rect, stats, trace)
 
-    def _collect(self, keep, may_have, has_all, stats: dict | None) -> list:
+    def _collect(self, keep, may_have, has_all, stats: dict | None, trace: list | None = None) -> list:
         encontrados = []
         nodos = hojas = 0
         pila = [(self._root, False)]
@@ -175,19 +208,64 @@ class RTree(Index):
             page_id, completo = pila.pop()
             node = self._read(page_id)
             nodos += 1
+            evento = {"type": "visit", "id": page_id, **({"full": True} if completo and trace is not None else {})} if trace is not None else None
             if node.is_leaf:
                 hojas += 1
+                matches = []
                 for px, py, pid, slot in node.entries:
                     if completo or keep(px, py):
                         encontrados.append((RID(pid, slot), (py, px)))
+                        if trace is not None:
+                            matches.append([py, px])
+                if trace is not None:
+                    evento["matches"] = matches
+                    evento["hits"] = len(matches)
+                    trace.append(evento)
             elif completo:
+                if trace is not None:
+                    trace.append(evento)
                 pila.extend((e[4], True) for e in node.entries)
             else:
+                full_hijos, podados = [], []
                 for e in node.entries:
                     if may_have(e[:4]):
-                        pila.append((e[4], has_all(e[:4])))
+                        es_full = has_all(e[:4])
+                        pila.append((e[4], es_full))
+                        if es_full and trace is not None:
+                            full_hijos.append(e[4])
+                    elif trace is not None:
+                        podados.append(e[4])
+                if trace is not None:
+                    evento["full_children"] = full_hijos
+                    trace.append(evento)
+                    for hijo_id in podados:
+                        trace.append({"type": "prune", "id": hijo_id, "parent": page_id})
         self._fill_stats(stats, nodos, hojas, len(encontrados))
         return encontrados
+
+    def snapshot(self) -> dict:
+        nodes = []
+
+        def walk(page_id: int, level: int) -> int:
+            node = self._read(page_id)
+            mbr = node.mbr() if node.entries else None
+            entry = {
+                "id": page_id,
+                "level": level,
+                "leaf": node.is_leaf,
+                "mbr": list(mbr) if mbr is not None else None,
+                "count": len(node.entries),
+            }
+            if node.is_leaf:
+                entry["points"] = [[py, px] for px, py, _pid, _slot in node.entries]
+                nodes.append(entry)
+                return level
+            entry["children"] = [e[4] for e in node.entries]
+            nodes.append(entry)
+            return max((walk(e[4], level + 1) for e in node.entries), default=level)
+
+        altura = walk(self._root, 0) + 1
+        return {"root": self._root, "height": altura, "nodes": nodes}
 
     # insercion
 
