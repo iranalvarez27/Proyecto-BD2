@@ -13,33 +13,10 @@ from common.types import RID
 from engine.buffer_pool import BufferPool
 from engine.segment import NIL, Segment
 from index.base import Index
+from index.rtree_page import MAX_INNER, MAX_LEAF, RTreePage
 
 META_PAGE = 0
 META_FORMAT = "<ii"               # raiz | free_list_head
-
-HEADER = struct.Struct("<BxH")    # es_hoja | cantidad
-LEAF = struct.Struct("<ddii")     # x (lon) | y (lat) | rid.page_id | rid.slot_id
-INNER = struct.Struct("<ddddi")   # x_min | y_min | x_max | y_max | hijo
-
-MAX_LEAF = (PAGE_SIZE - HEADER.size) // LEAF.size
-MAX_INNER = (PAGE_SIZE - HEADER.size) // INNER.size
-
-
-class _Node:
-    __slots__ = ("is_leaf", "entries")
-
-    def __init__(self, is_leaf: bool, entries: list | None = None):
-        self.is_leaf = is_leaf
-        self.entries = entries if entries is not None else []
-
-    def capacity(self) -> int:
-        return MAX_LEAF if self.is_leaf else MAX_INNER
-
-    def mbr(self) -> MBR:
-        if self.is_leaf:
-            return MBR.of_points(self.entries)
-        return MBR(min(e[0] for e in self.entries), min(e[1] for e in self.entries),
-                   max(e[2] for e in self.entries), max(e[3] for e in self.entries))
 
 
 def _rect(entry: tuple, is_leaf: bool) -> MBR:
@@ -245,22 +222,22 @@ class RTree(Index):
 
         if split is not None:
             new_root_id = self._alloc_page()
-            self._write(new_root_id, _Node(False, [(*child_mbr, child_id), split]))
+            self._write(new_root_id, RTreePage(False, [(*child_mbr, child_id), split]))
             self._root = new_root_id
             self._flush_meta()
 
     @staticmethod
-    def _choose_subtree(node: _Node, rect: MBR) -> int:
+    def _choose_subtree(node: RTreePage, rect: MBR) -> int:
         mbrs = [MBR(*e[:4]) for e in node.entries]
         return min(range(len(mbrs)), key=lambda i: _preference(mbrs[i], rect))
 
-    def _write_or_split(self, page_id: int, node: _Node):
+    def _write_or_split(self, page_id: int, node: RTreePage):
         if len(node.entries) <= node.capacity():
             self._write(page_id, node)
             return None
         g1, g2 = self._split(node.entries, node.is_leaf)
         node.entries = g1
-        sibling = _Node(node.is_leaf, g2)
+        sibling = RTreePage(node.is_leaf, g2)
         sibling_id = self._alloc_page()
         self._write(page_id, node)
         self._write(sibling_id, sibling)
@@ -319,7 +296,7 @@ class RTree(Index):
             page_id, node = parent_id, parent
 
         if not node.entries:
-            node = _Node(True)
+            node = RTreePage(True)
         self._write(page_id, node)
         while not node.is_leaf and len(node.entries) == 1:
             child = node.entries[0][4]
@@ -346,12 +323,12 @@ class RTree(Index):
         while True:
             level = []
             for group in _str_groups(entries, MAX_LEAF if is_leaf else MAX_INNER, is_leaf):
-                node = _Node(is_leaf, group)
+                node = RTreePage(is_leaf, group)
                 if spare is not None:
                     page_id, spare = spare, None
                     self._write(page_id, node)
                 else:
-                    page_id = self._seg.append(self._encode(node))
+                    page_id = self._seg.append(node.to_bytes())
                 level.append((*node.mbr(), page_id))
             if len(level) == 1:
                 break
@@ -361,22 +338,11 @@ class RTree(Index):
 
     # paginas y metapagina
 
-    @staticmethod
-    def _encode(node: _Node) -> bytes:
-        codec = LEAF if node.is_leaf else INNER
-        cuerpo = b"".join(codec.pack(*e) for e in node.entries)
-        buf = HEADER.pack(1 if node.is_leaf else 0, len(node.entries)) + cuerpo
-        return buf + bytes(PAGE_SIZE - len(buf))
+    def _read(self, page_id: int) -> RTreePage:
+        return RTreePage.from_bytes(self._seg.read(page_id))
 
-    def _read(self, page_id: int) -> _Node:
-        buf = self._seg.read(page_id)
-        is_leaf, count = HEADER.unpack_from(buf, 0)
-        codec = LEAF if is_leaf else INNER
-        fin = HEADER.size + count * codec.size
-        return _Node(bool(is_leaf), list(codec.iter_unpack(buf[HEADER.size:fin])))
-
-    def _write(self, page_id: int, node: _Node) -> None:
-        self._seg.write(page_id, self._encode(node))
+    def _write(self, page_id: int, node: RTreePage) -> None:
+        self._seg.write(page_id, node.to_bytes())
 
     def _alloc_page(self) -> int:
         reused = self._seg.free_head != NIL
@@ -391,7 +357,7 @@ class RTree(Index):
 
     def _create(self) -> None:
         self._seg.append(bytes(PAGE_SIZE))
-        self._root = self._seg.append(self._encode(_Node(True)))
+        self._root = self._seg.append(RTreePage(True).to_bytes())
         self._flush_meta()
 
     def _load(self) -> None:
