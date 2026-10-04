@@ -1,4 +1,5 @@
 import random
+from common.geo import point_in_polygon
 
 # (distrito, latitud, longitud, peso relativo)
 DISTRITOS = [
@@ -33,6 +34,33 @@ UTEC = (-12.1354, -77.0224)
 DISPERSION_GRADOS = 0.012   # ~1.3 km de desviacion estandar
 LIMA_BBOX = (-12.30, -77.20, -11.85, -76.80)  # lat_min, lon_min, lat_max, lon_max
 
+# Polígono que delimita la tierra firme de Lima Metropolitana y Callao (excluyendo el Océano Pacífico).
+# Vértices en formato (lon, lat) requeridos por point_in_polygon(x, y, vertices).
+POLIGONO_TIERRA_LIMA = [
+    (-77.1750, -11.750),  # Ancón norte
+    (-77.1450, -11.870),  # Ventanilla
+    (-77.1350, -12.010),  # Bocanegra / Callao norte
+    (-77.1480, -12.055),  # Callao centro / Puerto
+    (-77.1650, -12.070),  # La Punta (extremo oeste)
+    (-77.1600, -12.074),  # La Punta sur
+    (-77.1450, -12.068),  # Chucuito
+    (-77.1150, -12.075),  # Costanera Callao / Bellavista
+    (-77.0950, -12.085),  # San Miguel (Costanera)
+    (-77.0720, -12.097),  # Magdalena del Mar
+    (-77.0520, -12.108),  # San Isidro (Costa Verde)
+    (-77.0405, -12.122),  # Miraflores (Faro de la Marina / Acantilado)
+    (-77.0305, -12.133),  # Miraflores (Larcomar / Armendáriz)
+    (-77.0235, -12.150),  # Barranco (Bajada de Baños)
+    (-77.0260, -12.162),  # Chorrillos (Agua Dulce)
+    (-77.0350, -12.176),  # Chorrillos (Morro Solar / La Herradura)
+    (-77.0250, -12.205),  # La Chira
+    (-76.9750, -12.235),  # Villa El Salvador (Litoral)
+    (-76.9150, -12.280),  # Lurín costa
+    (-76.8500, -12.350),  # Extremo sur litoral
+    (-76.6000, -12.350),  # Límite este (tierra / sierra sur)
+    (-76.6000, -11.750),  # Límite este (tierra / sierra norte)
+]
+
 
 def generar_tiendas(n: int, seed: int = 2026) -> list:
     rng = random.Random(seed + n)
@@ -41,8 +69,11 @@ def generar_tiendas(n: int, seed: int = 2026) -> list:
     lat_min, lon_min, lat_max, lon_max = LIMA_BBOX
     for i in range(1, n + 1):
         distrito, lat0, lon0, _peso = rng.choices(DISTRITOS, weights=pesos, k=1)[0]
-        lat = min(lat_max, max(lat_min, rng.gauss(lat0, DISPERSION_GRADOS)))
-        lon = min(lon_max, max(lon_min, rng.gauss(lon0, DISPERSION_GRADOS)))
+        while True:
+            lat = min(lat_max, max(lat_min, rng.gauss(lat0, DISPERSION_GRADOS)))
+            lon = min(lon_max, max(lon_min, rng.gauss(lon0, DISPERSION_GRADOS)))
+            if point_in_polygon(lon, lat, POLIGONO_TIERRA_LIMA):
+                break
         categoria = rng.choice(CATEGORIAS)
         nombre = f"{categoria} {distrito} {i}"[:40]
         filas.append((i, nombre, categoria, (round(lat, 6), round(lon, 6))))
@@ -52,7 +83,13 @@ def generar_tiendas(n: int, seed: int = 2026) -> list:
 def centros_de_consulta(n: int, seed: int = 99) -> list:
     rng = random.Random(seed)
     centros = []
+    lat_min, lon_min, lat_max, lon_max = LIMA_BBOX
     for _ in range(n):
         _d, lat0, lon0, _p = rng.choice(DISTRITOS)
-        centros.append((rng.gauss(lat0, DISPERSION_GRADOS), rng.gauss(lon0, DISPERSION_GRADOS)))
+        while True:
+            lat = min(lat_max, max(lat_min, rng.gauss(lat0, DISPERSION_GRADOS)))
+            lon = min(lon_max, max(lon_min, rng.gauss(lon0, DISPERSION_GRADOS)))
+            if point_in_polygon(lon, lat, POLIGONO_TIERRA_LIMA):
+                break
+        centros.append((round(lat, 6), round(lon, 6)))
     return centros
