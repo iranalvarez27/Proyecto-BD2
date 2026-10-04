@@ -1,4 +1,3 @@
-import heapq
 import os
 import sys
 from dataclasses import dataclass
@@ -693,11 +692,6 @@ class SequentialFile:
         return self._n_deleted / total
 
     def reorganize(self) -> None:
-        # MAIN is already sorted on disk, only AUX needs sorting
-        key = lambda record: record.values[self._key_index]
-        aux = sorted((e.record for _, e in self._iter_file_entries(AUX_FILE) if not e.deleted), key=key)
-        main = (e.record for _, e in self._iter_file_entries(MAIN_FILE) if not e.deleted)
-
         pool = self._segs[MAIN_FILE].pool
         tmp_path = self._data_path + ".reorg"
         pool.truncate(tmp_path, 0)
@@ -706,7 +700,7 @@ class SequentialFile:
         prev = None
         head = tail = None
         n_live = 0
-        for record in heapq.merge(main, aux, key=key):
+        for record in self.scan():
             data = SequentialEntry(record=record).pack(self._schema)
             new_page = page.slot_count > 0 and page.free_space() < len(data) + SLOT_SIZE
             if new_page:
@@ -733,7 +727,7 @@ class SequentialFile:
         self._segs[AUX_FILE].truncate(0)
         self._head = head
         self._tail = tail
-        self._tail_key = None if prev is None else key(prev[1])
+        self._tail_key = None if prev is None else prev[1].values[self._key_index]
         self._n_aux = 0
         self._n_live = n_live
         self._n_deleted = 0
