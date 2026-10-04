@@ -7,7 +7,10 @@ import {
   Lock,
   Sun,
   Moon,
-  Map as MapIcon
+  Map as MapIcon,
+  Sparkles,
+  Activity,
+  Box
 } from 'lucide-react';
 
 import FilePanel from './components/FilePanel';
@@ -15,6 +18,7 @@ import QueryPanel from './components/QueryPanel';
 import ResultsPanel from './components/ResultsPanel';
 import PlanPanel from './components/PlanPanel';
 import MapPanel from './components/MapPanel';
+import VisualizePanel from './components/VisualizePanel';
 import CsvImportModal from './components/CsvImportModal';
 
 function obtenerOCrearSessionId() {
@@ -48,7 +52,8 @@ export default function App() {
   ]);
   const [queryResult, setQueryResult] = useState(null);
   const [executionPlan, setExecutionPlan] = useState(null);
-  const [activeBottomTab, setActiveBottomTab] = useState('results'); // 'results' | 'plan' | 'map'
+  const [activeBottomTab, setActiveBottomTab] = useState('results'); // 'results' | 'plan' | 'map' | 'viz'
+  const [visualize, setVisualize] = useState(null);
   // el mapa se monta la primera vez que se abre y luego queda vivo (conserva zoom y capas)
   const [mapMounted, setMapMounted] = useState(false);
 
@@ -192,10 +197,16 @@ export default function App() {
       if (data && data.plan) {
         setExecutionPlan(data.plan);
       }
+      if (data && data.visualize) {
+        setVisualize(data.visualize);
+      }
       // una búsqueda espacial (radio, k-NN o polígono) abre el mapa con sus resultados
       const esBusquedaEspacial = data && data.status === 'success' && data.spatial && data.spatial.tipo !== 'puntos';
+      const hayAnimacion = data && data.visualize && (data.visualize.animations?.length || data.visualize.sequential);
       if (!keepTab) {
-        setActiveBottomTab(esBusquedaEspacial ? 'map' : 'results');
+        if (esBusquedaEspacial) setActiveBottomTab('map');
+        else if (hayAnimacion) setActiveBottomTab('viz');
+        else setActiveBottomTab('results');
       }
 
       setHistory(prev => {
@@ -229,11 +240,17 @@ export default function App() {
         body: JSON.stringify({ table_name: tableName }),
       });
       const data = await res.json();
-      alert(`Reorganización completada para '${tableName}':\nTiempo: ${data.duration_ms} ms\nNuevo ratio de desperdicio: ${(data.new_wasted_ratio * 100).toFixed(1)}%`);
+      if (data.visualize) setVisualize(data.visualize);
+      setActiveBottomTab('viz');
       fetchTables();
     } catch (err) {
       alert('Error en reorganización: ' + err.message);
     }
+  };
+
+  const handleOpenVisualize = (tableName) => {
+    setSelectedTable(tableName);
+    setActiveBottomTab('viz');
   };
 
   const handleDropTable = async (tableName) => {
@@ -273,20 +290,25 @@ export default function App() {
   };
 
   return (
-    <div className={`flex flex-col h-screen w-screen bg-slate-50 dark:bg-slate-950 text-slate-800 dark:text-slate-100 overflow-hidden font-sans transition-colors ${resizing ? 'select-none cursor-row-resize' : ''}`}>
+    <div className={`app-shell flex flex-col h-screen w-screen text-slate-800 dark:text-slate-100 overflow-hidden font-sans transition-colors ${resizing ? 'select-none cursor-row-resize' : ''}`}>
       {/* Top Navbar */}
-      <header className="h-12 bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 px-4 flex items-center justify-between shrink-0">
-        <div className="flex items-center gap-3">
-          <div className="w-7 h-7 rounded-md bg-pg-500 flex items-center justify-center shadow-sm">
+      <header className="app-header shrink-0">
+        <div className="flex items-center gap-3 min-w-0">
+          <div className="app-brand-mark">
             <Database className="w-4 h-4 text-white" />
+            <span className="app-brand-pulse" />
           </div>
-          <div>
-            <h1 className="font-bold text-sm tracking-wide text-slate-800 dark:text-white flex items-center gap-2">
-              <span>Minigestor Multimodal BD2</span>
-              <span className="text-[10px] bg-pg-50 dark:bg-pg-950 text-pg-700 dark:text-pg-300 border border-pg-200 dark:border-pg-800 px-1.5 py-0.2 rounded font-mono font-normal">
-                Partes 1 y 2 (SQL, Storage & Espacial)
-              </span>
-            </h1>
+          <div className="min-w-0">
+            <div className="flex items-center gap-2">
+              <h1 className="font-bold text-sm tracking-tight text-slate-900 dark:text-white">MINIGESTOR DB LAB</h1>
+              <span className="app-version">BD2 · multimodal</span>
+            </div>
+            <p className="text-[10px] text-slate-400 truncate">Motor, almacenamiento e índices observables en tiempo real</p>
+          </div>
+          <div className="hidden lg:flex items-center gap-2 ml-5 pl-5 border-l border-slate-200 dark:border-slate-800 text-[10px] text-slate-400">
+            <Box className="w-3.5 h-3.5" />
+            <span>tabla activa</span>
+            <strong className="font-mono text-slate-700 dark:text-slate-200">{selectedTable || '—'}</strong>
           </div>
         </div>
 
@@ -294,7 +316,7 @@ export default function App() {
         <div className="flex items-center gap-3 text-xs">
           {transactionState.active && (
             <div
-              className="flex items-center gap-1.5 px-2.5 py-1 bg-amber-50 dark:bg-amber-950/60 rounded-full border border-amber-300 dark:border-amber-700/60 text-[11px] text-amber-700 dark:text-amber-300"
+              className="app-status-pill is-transaction"
               title={`session_id: ${sessionId}`}
             >
               <Lock className="w-3 h-3" />
@@ -305,7 +327,7 @@ export default function App() {
           <button
             onClick={handleReseed}
             title="Reiniciar datos de demostración en disco"
-            className="flex items-center gap-1.5 px-2.5 py-1 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-600 hover:text-slate-900 dark:text-slate-300 dark:hover:text-white rounded border border-slate-200 dark:border-slate-700/60 transition text-xs"
+            className="app-tool-button"
           >
             <RotateCcw className="w-3.5 h-3.5 text-amber-500 dark:text-amber-400" />
             <span className="hidden sm:inline">Reiniciar Tablas</span>
@@ -314,16 +336,16 @@ export default function App() {
           <button
             onClick={toggleTheme}
             title={theme === 'dark' ? 'Cambiar a tema claro' : 'Cambiar a tema oscuro'}
-            className="flex items-center justify-center w-7 h-7 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-600 hover:text-slate-900 dark:text-slate-300 dark:hover:text-white rounded-full border border-slate-200 dark:border-slate-700/60 transition"
+            className="app-icon-button"
           >
             {theme === 'dark' ? <Sun className="w-3.5 h-3.5" /> : <Moon className="w-3.5 h-3.5" />}
           </button>
 
-          <div className="flex items-center gap-1.5 px-2.5 py-1 bg-slate-100 dark:bg-slate-950/80 rounded-full border border-slate-200 dark:border-slate-800 text-[11px]">
+          <div className={`app-status-pill ${engineConnected ? 'is-online' : 'is-offline'}`}>
             {engineConnected ? (
               <>
-                <span className="w-2 h-2 rounded-full bg-emerald-500 dark:bg-emerald-400 animate-pulse" />
-                <span className="text-slate-600 dark:text-slate-300">Motor Activo</span>
+                <Activity className="w-3.5 h-3.5" />
+                <span>Motor activo</span>
               </>
             ) : (
               <>
@@ -338,13 +360,14 @@ export default function App() {
       {/* Main Workspace Layout */}
       <div className="flex-1 flex overflow-hidden">
         {/* Panel 1: Panel de Archivos (Left Sidebar) */}
-        <aside className="w-80 shrink-0 h-full border-r border-slate-200 dark:border-slate-800">
+        <aside className="app-sidebar w-80 shrink-0 h-full">
           <FilePanel
             tables={tables}
             selectedTable={selectedTable}
             onSelectTable={setSelectedTable}
             onRunSelectStar={handleRunSelectStar}
             onReorganize={handleReorganize}
+            onVisualize={handleOpenVisualize}
             onDropTable={handleDropTable}
             onRefresh={fetchTables}
             loading={loadingTables}
@@ -352,9 +375,9 @@ export default function App() {
         </aside>
 
         {/* Center / Right Section */}
-        <main ref={workspaceRef} className="flex-1 flex flex-col h-full min-w-0 overflow-hidden">
+        <main ref={workspaceRef} className="app-workspace flex-1 flex flex-col h-full min-w-0 overflow-hidden">
           {/* Panel 2: Panel de Consultas (altura arrastrable) */}
-          <div style={{ height: queryPanelHeight }} className="shrink-0 min-h-0 overflow-hidden">
+          <div style={{ height: queryPanelHeight }} className="workspace-query shrink-0 min-h-0 overflow-hidden">
             <QueryPanel
               query={query}
               setQuery={setQuery}
@@ -376,19 +399,15 @@ export default function App() {
           </div>
 
           {/* Bottom Area: Panel 3 (Resultados) & Panel 4 (Plan de Ejecución) */}
-          <div className="flex-1 flex flex-col min-h-0 bg-white dark:bg-slate-900">
+          <div className="workspace-output flex-1 flex flex-col min-h-0">
             {/* Tab selector between Resultados and Plan de Ejecución */}
-            <div className="h-9 bg-slate-100 dark:bg-slate-950/80 border-b border-slate-200 dark:border-slate-800 px-3 flex items-center gap-1 shrink-0">
+            <div className="workspace-tabs shrink-0">
               <button
                 onClick={() => setActiveBottomTab('results')}
-                className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-t transition-colors ${
-                  activeBottomTab === 'results'
-                    ? 'bg-white dark:bg-slate-900 text-pg-700 dark:text-pg-300 border-t-2 border-pg-500 border-x border-slate-200 dark:border-slate-800'
-                    : 'text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200'
-                }`}
+                className={`workspace-tab tone-blue ${activeBottomTab === 'results' ? 'is-active' : ''}`}
               >
                 <Table2 className="w-3.5 h-3.5" />
-                <span>Panel de Resultados</span>
+                <span>Resultados</span>
                 {queryResult && queryResult.rows && (
                   <span className="ml-1 text-[10px] bg-slate-200 dark:bg-slate-800 text-slate-600 dark:text-slate-400 px-1.5 py-0.2 rounded-full font-mono">
                     {queryResult.rows.length}
@@ -398,29 +417,32 @@ export default function App() {
 
               <button
                 onClick={() => setActiveBottomTab('plan')}
-                className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-t transition-colors ${
-                  activeBottomTab === 'plan'
-                    ? 'bg-white dark:bg-slate-900 text-violet-700 dark:text-violet-300 border-t-2 border-violet-500 border-x border-slate-200 dark:border-slate-800'
-                    : 'text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200'
-                }`}
+                className={`workspace-tab tone-violet ${activeBottomTab === 'plan' ? 'is-active' : ''}`}
               >
                 <GitBranch className="w-3.5 h-3.5" />
-                <span>Panel de Plan de Ejecución</span>
+                <span>Plan de ejecución</span>
                 {executionPlan && (
                   <span className="w-1.5 h-1.5 rounded-full bg-violet-500 dark:bg-violet-400" />
                 )}
               </button>
 
               <button
+                onClick={() => setActiveBottomTab('viz')}
+                className={`workspace-tab tone-amber ${activeBottomTab === 'viz' ? 'is-active' : ''}`}
+              >
+                <Sparkles className="w-3.5 h-3.5" />
+                <span>Inspector físico</span>
+                {visualize && (
+                  <span className="w-1.5 h-1.5 rounded-full bg-amber-500 dark:bg-amber-400" />
+                )}
+              </button>
+
+              <button
                 onClick={() => setActiveBottomTab('map')}
-                className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-t transition-colors ${
-                  activeBottomTab === 'map'
-                    ? 'bg-white dark:bg-slate-900 text-emerald-700 dark:text-emerald-300 border-t-2 border-emerald-500 border-x border-slate-200 dark:border-slate-800'
-                    : 'text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200'
-                }`}
+                className={`workspace-tab tone-emerald ${activeBottomTab === 'map' ? 'is-active' : ''}`}
               >
                 <MapIcon className="w-3.5 h-3.5" />
-                <span>Panel de Mapa</span>
+                <span>Laboratorio espacial</span>
                 {queryResult?.spatial?.puntos && (
                   <span className="ml-1 text-[10px] bg-slate-200 dark:bg-slate-800 text-slate-600 dark:text-slate-400 px-1.5 py-0.2 rounded-full font-mono">
                     {queryResult.spatial.puntos.length}
@@ -442,6 +464,15 @@ export default function App() {
                   plan={executionPlan}
                   query={query}
                   executedQuery={queryResult?.query}
+                />
+              )}
+              {activeBottomTab === 'viz' && (
+                <VisualizePanel
+                  tableName={selectedTable}
+                  tables={tables}
+                  visualize={visualize && visualize.table === selectedTable ? visualize : null}
+                  onSelectTable={setSelectedTable}
+                  onOpenMap={() => setActiveBottomTab('map')}
                 />
               )}
               {mapMounted && (

@@ -3,7 +3,7 @@ import re
 import sys
 import time
 import uuid
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from common.types import Schema, Column, DataType
@@ -29,6 +29,34 @@ from query.catalog import (
 from query import catalog_store
 from query.conexion import Conexion
 from transaction.manager import TransactionManager
+try:
+    from backend.visualize import (
+        animate_mutation,
+        begin_traces,
+        sequential_reorganize,
+        snapshot_table,
+        take_traces,
+    )
+except ModuleNotFoundError:
+    from visualize import (
+        animate_mutation,
+        begin_traces,
+        sequential_reorganize,
+        snapshot_table,
+        take_traces,
+    )
+
+
+def _mutating_table(sql: str) -> Tuple[Optional[str], Optional[str]]:
+    match = re.match(
+        r"\s*(INSERT\s+INTO|DELETE\s+FROM|UPDATE)\s+([A-Za-z_][A-Za-z0-9_]*)",
+        sql,
+        re.IGNORECASE,
+    )
+    if not match:
+        return None, None
+    verb = match.group(1).split()[0].upper()
+    return verb, match.group(2)
 
 
 class EngineAdapter:
@@ -273,6 +301,9 @@ class EngineAdapter:
             "points": [[p[0], p[1]] for p in todos],
         }
 
+    def visualize_table(self, table_name: str) -> Dict[str, Any]:
+        return snapshot_table(self.catalog, table_name)
+
     def reorganize_table(self, table_name: str) -> Dict[str, Any]:
         if not self.catalog.existe_tabla(table_name):
             raise ValueError(f"Tabla '{table_name}' no encontrada")
@@ -282,16 +313,21 @@ class EngineAdapter:
             raise ValueError(f"La tabla '{table_name}' es {info.tipo_storage}; solo se reorganizan tablas SEQUENTIAL")
 
         seq: SequentialFile = info.storage
+        before = seq.snapshot()
         start_time = time.time()
         self.conexion.reorganizar_tabla(table_name)
 
         duration_ms = (time.time() - start_time) * 1000
+        after = seq.snapshot()
 
+        viz = sequential_reorganize(before, after, table_name)
+        viz["operation"] = "REORGANIZE"
         return {
             "success": True,
             "message": f"Tabla '{table_name}' reorganizada y sus índices reconstruidos con éxito.",
             "duration_ms": round(duration_ms, 2),
             "new_wasted_ratio": round(seq.wasted_ratio(), 3),
+            "visualize": viz,
         }
 
     def execute_query(self, sql: str, session_id: Optional[str] = None) -> Dict[str, Any]:
@@ -310,8 +346,15 @@ class EngineAdapter:
                 "error": "Consulta SQL vacía.",
                 "plan": None,
                 "spatial": None,
+                "visualize": None,
                 "transaction": {"active": False, "xact_id": None},
             }
+
+        op_guess, table_guess = _mutating_table(sql_clean)
+        before_view = None
+        if op_guess in ("INSERT", "DELETE", "UPDATE") and table_guess and self.catalog.existe_tabla(table_guess):
+            before_view = snapshot_table(self.catalog, table_guess)
+            begin_traces(self.catalog, table_guess)
 
         # Ejecuta via Conexion real (Lexer -> Parser -> Semantico -> Ejecucion),
         # incluidos BEGIN TRANSACTION / END TRANSACTION / ROLLBACK, que ahora
@@ -319,6 +362,7 @@ class EngineAdapter:
         res = self.conexion.execute(sql_clean, session_id)
         duration_ms = (time.time() - start_time) * 1000
         transaction_info = {"active": res.transaccion_activa, "xact_id": res.xact_id}
+        visualize = self._build_visualize(res, before_view, op_guess, table_guess)
 
         if not res.ok:
             return {
@@ -331,6 +375,7 @@ class EngineAdapter:
                 "error": f"Error [{res.tipo_error.upper()}]: {res.error}",
                 "plan": None,
                 "spatial": None,
+                "visualize": None,
                 "transaction": transaction_info,
             }
 
@@ -372,6 +417,7 @@ class EngineAdapter:
                 "plan": plan_tree,
                 # consulta espacial detectada (radio / knn / poligono) y el punto de cada fila
                 "spatial": res.espacial,
+                "visualize": visualize,
                 "transaction": transaction_info,
             }
 
@@ -387,6 +433,7 @@ class EngineAdapter:
                     "rows": [[res.resumen["mensaje"]]],
                     "error": None,
                     "plan": plan_tree,
+                    "visualize": visualize,
                     "transaction": transaction_info,
                 }
             operacion = res.resumen.get("operacion", "Operación")
@@ -400,6 +447,7 @@ class EngineAdapter:
                 "rows": [[operacion, filas_afectadas]],
                 "error": None,
                 "plan": plan_tree,
+                "visualize": visualize,
                 "transaction": transaction_info,
             }
 
@@ -412,8 +460,48 @@ class EngineAdapter:
             "rows": [["Consulta ejecutada sin retorno de datos"]],
             "error": None,
             "plan": plan_tree,
+            "visualize": visualize,
             "transaction": transaction_info,
         }
+
+    def _build_visualize(self, res, before_view, op_guess: Optional[str], table_guess: Optional[str]):
+        if not res.ok:
+            return None
+        tabla = None
+        operacion = None
+        if res.resumen:
+            tabla = res.resumen.get("tabla") or table_guess
+            operacion = res.resumen.get("operacion") or op_guess
+        if operacion in ("INSERT", "DELETE", "UPDATE") and tabla and before_view is not None:
+            try:
+                after_view = snapshot_table(self.catalog, tabla)
+                traces = take_traces(self.catalog, tabla)
+                return animate_mutation(self.catalog, tabla, before_view, after_view, operacion, traces)
+            except Exception:
+                return None
+        espacial = getattr(res, "espacial", None)
+        if espacial and espacial.get("rtree"):
+            # geometria de la consulta para dibujarla junto a los MBR
+            rtree_query = dict(espacial["rtree"])
+            rtree_query["query"] = {
+                clave: espacial.get(clave)
+                for clave in ("tipo", "columna", "centro", "radio_m", "poligono", "k", "metrica")
+                if espacial.get(clave) is not None
+            }
+            return {
+                "table": espacial.get("tabla"),
+                "operation": (espacial.get("tipo") or "spatial").upper(),
+                "rtree_query": rtree_query,
+                "animations": [{
+                    "kind": "rtree",
+                    "column": espacial.get("columna"),
+                    "disk": espacial["rtree"].get("tree"),
+                    "trace": espacial["rtree"].get("trace"),
+                    "stats": espacial["rtree"].get("stats"),
+                }],
+                "sequential": None,
+            }
+        return None
 
     def _build_plan_tree(self, plan_steps: List[str], sql: str, actual_rows: Optional[int] = None) -> Dict[str, Any]:
         default_rows = actual_rows if actual_rows is not None else 1

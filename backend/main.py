@@ -63,6 +63,14 @@ def get_table_points(table_name: str, column: Optional[str] = None, limit: int =
         raise HTTPException(status_code=400, detail=str(ex))
 
 
+@app.get("/api/visualize/{table_name}")
+def visualize_table(table_name: str):
+    try:
+        return engine.visualize_table(table_name)
+    except ValueError as ex:
+        raise HTTPException(status_code=400, detail=str(ex))
+
+
 @app.post("/api/tables/reorganize")
 def reorganize_table(req: ReorganizeRequest):
     try:

@@ -299,6 +299,21 @@ python3 data/plot_spatial.py
 
 ---
 
+## Inspector visual de estructuras
+
+La pestaña **Inspector físico** consume snapshots y trazas generados por el motor; no usa árboles o buckets inventados en el navegador.
+
+* **B+ Tree:** muestra el árbol paginado real antes y después de cada `INSERT` o `DELETE`, resalta páginas involucradas en `split`, `borrow`, `merge` y cambios de raíz, y ofrece una reproducción didáctica de orden 4 con las mismas claves.
+* **Hash extensible:** presenta el directorio binario, profundidad global, profundidad local, referencias compartidas, cubetas y páginas de overflow. La vista animada separa la duplicación del directorio de la redistribución del bucket.
+* **Sequential File:** agrupa los registros por página y slot en MAIN/AUX, reconstruye la cadena de punteros `next` y anima las cuatro fases de `REORGANIZE`.
+* **R-Tree:** el Laboratorio espacial dibuja los MBR sobre Leaflet por nivel. Durante búsquedas radiales, poligonales o k-NN reproduce en orden las visitas y podas, con controles para pausar y avanzar evento por evento.
+
+El contrato completo puede comprobarse sin abrir el navegador:
+
+```bash
+python tools/smoke_visualizations.py
+```
+
 ## Cómo Ejecutar el Proyecto
 
 ### 1. Backend (API REST)

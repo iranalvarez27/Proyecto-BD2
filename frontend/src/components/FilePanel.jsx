@@ -10,7 +10,8 @@ import {
   HardDrive,
   Zap,
   Play,
-  Trash2
+  Trash2,
+  Eye
 } from 'lucide-react';
 
 export default function FilePanel({
@@ -19,6 +20,7 @@ export default function FilePanel({
   onSelectTable,
   onRunSelectStar,
   onReorganize,
+  onVisualize,
   onDropTable,
   onRefresh,
   loading
@@ -133,6 +135,18 @@ export default function FilePanel({
                     </span>
 
                     {/* Quick Query Button */}
+                    {onVisualize && (
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onVisualize(table.name);
+                        }}
+                        title={`Ver estructura de ${table.name}`}
+                        className="p-1 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-500 hover:text-amber-600 dark:text-slate-400 dark:hover:text-amber-300 rounded transition opacity-70 group-hover:opacity-100"
+                      >
+                        <Eye className="w-3.5 h-3.5" />
+                      </button>
+                    )}
                     <button
                       onClick={(e) => {
                         e.stopPropagation();

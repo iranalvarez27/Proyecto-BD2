@@ -8,6 +8,9 @@ import {
   Hexagon,
   Hand,
   Play,
+  Pause,
+  SkipBack,
+  StepForward,
   Trash2,
   Zap,
   HardDrive,
@@ -20,6 +23,10 @@ const MAX_ETIQUETAS_KNN = 25;    // por encima de esto los vecinos no llevan num
 const COLOR_FONDO = '#64748b';
 const COLOR_RESULTADO = '#e11d48';
 const COLOR_CONSULTA = '#336791';
+const COLOR_MBR_HOJA = '#059669';
+const COLOR_MBR_INTERNO = '#d97706';
+const COLOR_MBR_PODADO = '#94a3b8';
+const COLOR_MBR_VISITADO = '#2563eb';
 
 const MODOS = [
   { id: 'radio', label: 'Radio', Icon: Circle, ayuda: 'Haz clic en el mapa para buscar todos los puntos dentro del radio.' },
@@ -85,6 +92,10 @@ export default function MapPanel({ result, tables, visible, theme, onRunQuery })
   const [draft, setDraft] = useState([]);
   const [fondo, setFondo] = useState(null);
   const [errorFondo, setErrorFondo] = useState(null);
+  const [showMbrs, setShowMbrs] = useState(true);
+  const [rtreeSnap, setRtreeSnap] = useState(null);
+  const [pruneTick, setPruneTick] = useState(-1);
+  const [tracePlaying, setTracePlaying] = useState(false);
 
   const espaciales = useMemo(() => tablasEspaciales(tables), [tables]);
   const actual = espaciales.find((t) => t.name === tableName) || null;
@@ -117,6 +128,7 @@ export default function MapPanel({ result, tables, visible, theme, onRunQuery })
       consulta: L.layerGroup().addTo(map),
       resultados: L.layerGroup().addTo(map),
       borrador: L.layerGroup().addTo(map),
+      mbrs: L.layerGroup().addTo(map),
     };
     map.on('click', (e) => clickRef.current(e.latlng));
     mapRef.current = map;
@@ -156,6 +168,22 @@ export default function MapPanel({ result, tables, visible, theme, onRunQuery })
       .catch((err) => { if (!cancelado) { setFondo(null); setErrorFondo(err.message); } });
     return () => { cancelado = true; };
   }, [tableName, registros]);
+
+  useEffect(() => {
+    if (!tableName) return undefined;
+    let cancelado = false;
+    fetch(`/api/visualize/${encodeURIComponent(tableName)}`)
+      .then((res) => (res.ok ? res.json() : Promise.reject(new Error('sin rtree'))))
+      .then((data) => {
+        if (cancelado) return;
+        const rtree = (data.indexes || []).find((i) => i.type === 'rtree');
+        setRtreeSnap(rtree?.disk || null);
+      })
+      .catch(() => {
+        if (!cancelado) setRtreeSnap(null);
+      });
+    return () => { cancelado = true; };
+  }, [tableName, registros, spatial]);
 
   useEffect(() => {
     const capas = capasRef.current;
@@ -230,7 +258,105 @@ export default function MapPanel({ result, tables, visible, theme, onRunQuery })
     if (limites.isValid() && (spatial.tipo !== 'puntos' || (puntos.length && puntos.length < 2000))) {
       encuadrar(limites, { padding: [32, 32], maxZoom: 16 });
     }
+    setPruneTick(-1);
   }, [result]);
+
+  const rtreeTrace = spatial?.rtree?.trace || null;
+  const rtreeTree = spatial?.rtree?.tree || rtreeSnap;
+  const traceEvents = useMemo(() => {
+    if (!rtreeTrace) return [];
+    const ordered = rtreeTrace.order || [];
+    if (ordered.some((event) => event.type === 'prune')) return ordered;
+    return [
+      ...ordered.map((event) => ({ ...event, type: event.type || 'visit' })),
+      ...(rtreeTrace.pruned || []).map((event) => ({ ...event, type: 'prune' })),
+    ];
+  }, [rtreeTrace]);
+
+  useEffect(() => {
+    if (!traceEvents.length) {
+      setPruneTick(-1);
+      setTracePlaying(false);
+      return undefined;
+    }
+    setPruneTick(0);
+    setTracePlaying(true);
+    return undefined;
+  }, [traceEvents]);
+
+  useEffect(() => {
+    if (!tracePlaying || !traceEvents.length) return undefined;
+    const timer = setInterval(() => {
+      setPruneTick((step) => {
+        if (step >= traceEvents.length) {
+          setTracePlaying(false);
+          return traceEvents.length;
+        }
+        return step + 1;
+      });
+    }, 520);
+    return () => clearInterval(timer);
+  }, [tracePlaying, traceEvents]);
+
+  useEffect(() => {
+    const capas = capasRef.current;
+    if (!capas || !capas.mbrs) return;
+    capas.mbrs.clearLayers();
+    if (!showMbrs || !rtreeTree || !rtreeTree.nodes) return;
+
+    const played = traceEvents.slice(0, Math.max(0, pruneTick));
+    const visited = new Set(played.filter((event) => event.type !== 'prune').map((event) => event.id));
+    const prunedNow = played.filter((event) => event.type === 'prune');
+    const prunedIds = new Set(prunedNow.map((p) => p.id));
+    const treeById = Object.fromEntries(rtreeTree.nodes.map((n) => [n.id, n]));
+
+    rtreeTree.nodes.forEach((node) => {
+      if (!node.mbr) return;
+      const [xmin, ymin, xmax, ymax] = node.mbr;
+      const bounds = [[ymin, xmin], [ymax, xmax]];
+      const isPruned = prunedIds.has(node.id);
+      const isVisited = visited.has(node.id);
+      let color = node.leaf ? COLOR_MBR_HOJA : COLOR_MBR_INTERNO;
+      let dash = node.leaf ? null : '4 3';
+      let opacity = node.leaf ? 0.10 : 0.06;
+      let weight = node.leaf ? 1.4 : 2;
+      if (isPruned) {
+        color = COLOR_MBR_PODADO;
+        dash = '6 4';
+        opacity = 0.03;
+        weight = 1.2;
+      } else if (isVisited && rtreeTrace) {
+        color = COLOR_MBR_VISITADO;
+        opacity = 0.12;
+        weight = 2.4;
+        dash = null;
+      }
+      L.rectangle(bounds, {
+        color,
+        weight,
+        dashArray: dash,
+        fillColor: color,
+        fillOpacity: opacity,
+        interactive: true,
+        className: isPruned ? 'mbr-pruned' : '',
+      }).bindTooltip(
+        `${node.leaf ? 'Hoja' : 'Interno'} p${node.id} · nivel ${node.level} · ${node.count} entradas${isPruned ? ' · PODADO' : isVisited ? ' · visitado' : ''}`,
+        { sticky: true },
+      ).addTo(capas.mbrs);
+    });
+
+    prunedNow.forEach((p) => {
+      if (!p.mbr || treeById[p.id]) return;
+      const [xmin, ymin, xmax, ymax] = p.mbr;
+      L.rectangle([[ymin, xmin], [ymax, xmax]], {
+        color: COLOR_MBR_PODADO,
+        weight: 1.2,
+        dashArray: '6 4',
+        fillOpacity: 0.03,
+        interactive: false,
+      }).addTo(capas.mbrs);
+    });
+  }, [showMbrs, rtreeTree, rtreeTrace, traceEvents, pruneTick]);
 
   // Borrador del polígono mientras se marcan vértices.
   useEffect(() => {
@@ -284,6 +410,7 @@ export default function MapPanel({ result, tables, visible, theme, onRunQuery })
 
   const modoActual = MODOS.find((m) => m.id === mode);
   const nResultados = spatial && spatial.puntos ? spatial.puntos.length : null;
+  const currentTraceEvent = pruneTick > 0 ? traceEvents[Math.min(pruneTick, traceEvents.length) - 1] : null;
   const campo = 'bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 text-xs text-slate-700 dark:text-slate-200 rounded px-2 py-1 outline-none focus:border-pg-500';
 
   return (
@@ -341,6 +468,15 @@ export default function MapPanel({ result, tables, visible, theme, onRunQuery })
             <option value="euclidiana">Euclidiana</option>
           </select>
         )}
+        <label className="flex items-center gap-1.5 text-xs text-slate-600 dark:text-slate-300">
+          <input
+            type="checkbox"
+            checked={showMbrs}
+            onChange={(e) => setShowMbrs(e.target.checked)}
+            className="accent-emerald-600"
+          />
+          <span>MBR del R-Tree</span>
+        </label>
         {mode === 'poligono' && (
           <>
             <button
@@ -389,6 +525,48 @@ export default function MapPanel({ result, tables, visible, theme, onRunQuery })
           reescribe al cambiar de modo, el mapa pierde su CSS y se desarma. */}
       <div className={`relative z-0 flex-1 min-h-0 overflow-hidden ${theme === 'dark' ? 'map-dark' : ''} ${mode === 'mover' ? '' : 'map-crosshair'}`}>
         <div ref={containerRef} className="absolute inset-0" />
+        {traceEvents.length > 0 && (
+          <div className="absolute z-[800] top-3 left-3 w-[290px] rounded-2xl border border-white/70 dark:border-slate-700/80 bg-white/92 dark:bg-slate-950/92 shadow-2xl shadow-slate-900/15 backdrop-blur-xl overflow-hidden">
+            <div className="px-3 py-2.5 border-b border-slate-200/80 dark:border-slate-800 flex items-center justify-between">
+              <div>
+                <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-400">Recorrido del R-Tree</p>
+                <p className="text-xs font-semibold text-slate-800 dark:text-slate-100 mt-0.5">
+                  {currentTraceEvent?.type === 'prune'
+                    ? `Poda de p${currentTraceEvent.id}`
+                    : currentTraceEvent
+                      ? `Visita a p${currentTraceEvent.id}`
+                      : 'Estado inicial'}
+                </p>
+              </div>
+              <span className={`w-2.5 h-2.5 rounded-full ${currentTraceEvent?.type === 'prune' ? 'bg-slate-400' : 'bg-blue-500'} ${tracePlaying ? 'animate-pulse' : ''}`} />
+            </div>
+            <div className="px-3 py-2.5">
+              <div className="h-1.5 rounded-full bg-slate-100 dark:bg-slate-800 overflow-hidden">
+                <div
+                  className="h-full rounded-full bg-gradient-to-r from-blue-500 via-emerald-500 to-amber-500 transition-[width] duration-300"
+                  style={{ width: `${(Math.max(0, pruneTick) / traceEvents.length) * 100}%` }}
+                />
+              </div>
+              <div className="mt-2 flex items-center gap-1.5">
+                <button type="button" onClick={() => { setTracePlaying(false); setPruneTick(0); }} className="map-trace-button" title="Reiniciar recorrido">
+                  <SkipBack className="w-3.5 h-3.5" />
+                </button>
+                <button type="button" onClick={() => setTracePlaying((value) => !value)} className="map-trace-button map-trace-button-primary" title={tracePlaying ? 'Pausar' : 'Continuar'}>
+                  {tracePlaying ? <Pause className="w-3.5 h-3.5" /> : <Play className="w-3.5 h-3.5 fill-current" />}
+                </button>
+                <button type="button" onClick={() => { setTracePlaying(false); setPruneTick((value) => Math.min(traceEvents.length, Math.max(0, value) + 1)); }} className="map-trace-button" title="Siguiente evento">
+                  <StepForward className="w-3.5 h-3.5" />
+                </button>
+                <span className="ml-auto text-[10px] font-mono text-slate-500 dark:text-slate-400">
+                  {Math.max(0, pruneTick)}/{traceEvents.length}
+                </span>
+              </div>
+              {currentTraceEvent?.reason && (
+                <p className="mt-2 text-[10px] leading-relaxed text-slate-500 dark:text-slate-400">{currentTraceEvent.reason}</p>
+              )}
+            </div>
+          </div>
+        )}
         {!espaciales.length && (
           <div className="absolute inset-0 z-[1000] flex items-center justify-center bg-white/85 dark:bg-slate-900/85 p-6 text-center text-xs text-slate-600 dark:text-slate-300">
             <div>
@@ -402,6 +580,30 @@ export default function MapPanel({ result, tables, visible, theme, onRunQuery })
       {/* Pie: ayuda del modo + leyenda */}
       <div className="px-3 py-1.5 border-t border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950/40 flex items-center justify-between gap-3 text-[11px] text-slate-500 dark:text-slate-400 shrink-0">
         <span className="truncate">{errorFondo ? `No se pudieron cargar los puntos: ${errorFondo}` : modoActual.ayuda}</span>
+        {showMbrs && rtreeTree && (
+          <span className="flex items-center gap-2 shrink-0">
+            <span className="flex items-center gap-1">
+              <span className="w-3 h-2 border-2 border-dashed" style={{ borderColor: COLOR_MBR_INTERNO }} />
+              interno
+            </span>
+            <span className="flex items-center gap-1">
+              <span className="w-3 h-2 border-2" style={{ borderColor: COLOR_MBR_HOJA }} />
+              hoja
+            </span>
+            {rtreeTrace && (
+              <>
+                <span className="flex items-center gap-1">
+                  <span className="w-3 h-2 border-2" style={{ borderColor: COLOR_MBR_VISITADO }} />
+                  visitado
+                </span>
+                <span className="flex items-center gap-1">
+                  <span className="w-3 h-2 border-2 border-dashed" style={{ borderColor: COLOR_MBR_PODADO }} />
+                  podado {rtreeTrace.pruned?.length || 0}
+                </span>
+              </>
+            )}
+          </span>
+        )}
         {fondo && (
           <span className="flex items-center gap-1.5 shrink-0">
             <span className="w-2 h-2 rounded-full" style={{ backgroundColor: COLOR_FONDO }} />
