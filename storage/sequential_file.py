@@ -1,10 +1,11 @@
+import heapq
 import os
 import sys
 from dataclasses import dataclass
 import struct
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from common.page import SlottedPage
+from common.page import SLOT_SIZE, SlottedPage
 from common.record import Record
 from common.types import Schema, RID
 from engine.buffer_pool import BufferPool
@@ -692,31 +693,49 @@ class SequentialFile:
         return self._n_deleted / total
 
     def reorganize(self) -> None:
-        records = list(self.scan())
-        for seg in self._segs.values():
-            seg.truncate(0)
-        pages: list[SlottedPage] = []
-        pointers = []
-        for record in records:
+        # MAIN is already sorted on disk, only AUX needs sorting
+        key = lambda record: record.values[self._key_index]
+        aux = sorted((e.record for _, e in self._iter_file_entries(AUX_FILE) if not e.deleted), key=key)
+        main = (e.record for _, e in self._iter_file_entries(MAIN_FILE) if not e.deleted)
+
+        pool = self._segs[MAIN_FILE].pool
+        tmp_path = self._data_path + ".reorg"
+        pool.truncate(tmp_path, 0)
+        page = SlottedPage()
+        page_id = 0
+        prev = None
+        head = tail = None
+        n_live = 0
+        for record in heapq.merge(main, aux, key=key):
             data = SequentialEntry(record=record).pack(self._schema)
-            if not pages:
-                pages.append(SlottedPage())
-            try:
-                slot_id = pages[-1].insert(data)
-            except ValueError:
-                pages.append(SlottedPage())
-                slot_id = pages[-1].insert(data)
-            pointers.append(FilePointer(file_type=MAIN_FILE, page_id=len(pages) - 1, slot_id=slot_id))
-        for i in range(len(pointers) - 1):
-            entry = SequentialEntry(record=records[i], next_pointer=pointers[i + 1])
-            pages[pointers[i].page_id].update(pointers[i].slot_id, entry.pack(self._schema))
-        for page in pages:
-            self.append_page(MAIN_FILE, page)
-        self._head = pointers[0] if pointers else None
-        self._tail = pointers[-1] if pointers else None
-        self._tail_key = None if not records else records[-1].values[self._key_index]
+            new_page = page.slot_count > 0 and page.free_space() < len(data) + SLOT_SIZE
+            if new_page:
+                pointer = FilePointer(file_type=MAIN_FILE, page_id=page_id + 1, slot_id=0)
+            else:
+                pointer = FilePointer(file_type=MAIN_FILE, page_id=page_id, slot_id=page.slot_count)
+            # the previous entry is always in the current page
+            if prev is not None:
+                prev_slot, prev_record = prev
+                entry = SequentialEntry(record=prev_record, next_pointer=pointer)
+                page.update(prev_slot, entry.pack(self._schema))
+            if new_page:
+                pool.append_page(tmp_path, page.to_bytes())
+                page = SlottedPage()
+                page_id += 1
+            prev = (page.insert(data), record)
+            head = head or pointer
+            tail = pointer
+            n_live += 1
+        if page.slot_count > 0:
+            pool.append_page(tmp_path, page.to_bytes())
+
+        pool.replace(tmp_path, self._data_path)
+        self._segs[AUX_FILE].truncate(0)
+        self._head = head
+        self._tail = tail
+        self._tail_key = None if prev is None else key(prev[1])
         self._n_aux = 0
-        self._n_live = len(pointers)
+        self._n_live = n_live
         self._n_deleted = 0
         self._save_state()
 
