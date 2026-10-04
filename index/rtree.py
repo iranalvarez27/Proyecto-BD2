@@ -7,7 +7,7 @@ import sys
 from typing import Any
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from common.geo import HAVERSINE, MBR, get_metric, point_in_polygon
+from common.geo import HAVERSINE, MBR, get_max_metric, get_metric, point_in_polygon, rect_in_polygon
 from common.page import PAGE_SIZE
 from common.types import RID
 from engine.buffer_pool import BufferPool
@@ -119,22 +119,27 @@ class RTree(Index):
                       stats: dict | None = None) -> list:
         x, y = _xy(center)
         mindist = get_metric(metrica)
+        maxdist = get_max_metric(metrica)
         encontrados = []
         nodos = hojas = 0
-        pila = [self._root]
+        pila = [(self._root, False)]
         while pila:
-            node = self._read(pila.pop())
+            page_id, completo = pila.pop()
+            node = self._read(page_id)
             nodos += 1
             if node.is_leaf:
                 hojas += 1
-                for px, py, page_id, slot_id in node.entries:
-                    d = mindist(x, y, (px, py, px, py))
-                    if d <= radius_m:
-                        encontrados.append((d, RID(page_id, slot_id), (py, px)))
+                for px, py, pid, slot in node.entries:
+                    # en un subarbol completo no se calcula la distancia
+                    d = None if completo else mindist(x, y, (px, py, px, py))
+                    if completo or d <= radius_m:
+                        encontrados.append((d, RID(pid, slot), (py, px)))
+            elif completo:
+                pila.extend((e[4], True) for e in node.entries)
             else:
                 for e in node.entries:
                     if mindist(x, y, e[:4]) <= radius_m:
-                        pila.append(e[4])
+                        pila.append((e[4], maxdist(x, y, e[:4]) <= radius_m))
         self._fill_stats(stats, nodos, hojas, len(encontrados))
         return encontrados
 
@@ -171,23 +176,11 @@ class RTree(Index):
     def polygon_search(self, vertices: list, stats: dict | None = None) -> list:
         vertices = [_xy(v) for v in vertices]
         caja = MBR.of_points(vertices)
-        encontrados = []
-        nodos = hojas = 0
-        pila = [self._root]
-        while pila:
-            node = self._read(pila.pop())
-            nodos += 1
-            if node.is_leaf:
-                hojas += 1
-                for px, py, page_id, slot_id in node.entries:
-                    if caja.contains(px, py) and point_in_polygon(px, py, vertices):
-                        encontrados.append((RID(page_id, slot_id), (py, px)))
-            else:
-                for e in node.entries:
-                    if caja.intersects(e[:4]):
-                        pila.append(e[4])
-        self._fill_stats(stats, nodos, hojas, len(encontrados))
-        return encontrados
+        return self._collect(
+            lambda px, py: caja.contains(px, py) and point_in_polygon(px, py, vertices),
+            caja.intersects,
+            lambda r: caja.contains_rect(r) and rect_in_polygon(r, vertices),
+            stats)
 
     @staticmethod
     def _fill_stats(stats: dict | None, nodos: int, hojas: int, candidatos: int) -> None:
@@ -195,21 +188,27 @@ class RTree(Index):
             stats.update(nodos_visitados=nodos, hojas_visitadas=hojas, candidatos=candidatos)
 
     def _rect_search(self, rect: MBR, stats: dict | None) -> list:
+        return self._collect(rect.contains, rect.intersects, rect.contains_rect, stats)
+
+    def _collect(self, keep, may_have, has_all, stats: dict | None) -> list:
         encontrados = []
         nodos = hojas = 0
-        pila = [self._root]
+        pila = [(self._root, False)]
         while pila:
-            node = self._read(pila.pop())
+            page_id, completo = pila.pop()
+            node = self._read(page_id)
             nodos += 1
             if node.is_leaf:
                 hojas += 1
-                for px, py, page_id, slot_id in node.entries:
-                    if rect.contains(px, py):
-                        encontrados.append((RID(page_id, slot_id), (py, px)))
+                for px, py, pid, slot in node.entries:
+                    if completo or keep(px, py):
+                        encontrados.append((RID(pid, slot), (py, px)))
+            elif completo:
+                pila.extend((e[4], True) for e in node.entries)
             else:
                 for e in node.entries:
-                    if rect.intersects(e[:4]):
-                        pila.append(e[4])
+                    if may_have(e[:4]):
+                        pila.append((e[4], has_all(e[:4])))
         self._fill_stats(stats, nodos, hojas, len(encontrados))
         return encontrados
 
