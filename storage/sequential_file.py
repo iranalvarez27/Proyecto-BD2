@@ -552,8 +552,11 @@ class SequentialFile:
             current_pointer = entry.next_pointer
 
     def _find_by_key(self, key):
-        previous_pointer = None
-        current_pointer = self._head
+        previous_pointer = self._find_live_main_predecessor(key)
+        if previous_pointer is None:
+            current_pointer = self._head
+        else:
+            current_pointer = self._read_entry(previous_pointer).next_pointer
         while current_pointer is not None:
             current_entry = self._read_entry(current_pointer)
             current_key = self._get_key(current_entry)
