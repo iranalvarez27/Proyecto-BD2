@@ -495,6 +495,34 @@ class BPlusTree(Index):
                 return
             node = self._read_node(node.next_page)
 
+    def snapshot(self) -> dict:
+        nodes = []
+        stack = [(self._root, 0)]
+        while stack:
+            page_id, level = stack.pop()
+            node = self._read_node(page_id)
+            children = [] if node.is_leaf else list(node.payloads) + [node.last_child]
+            nodes.append({
+                "id": page_id,
+                "level": level,
+                "leaf": node.is_leaf,
+                "keys": [decode(k, self._key_type) for k in node.keys],
+                "count": node.count,
+                "children": children,
+                "next": None if not node.is_leaf or node.next_page == NIL else node.next_page,
+                "bytes": node.byte_size(),
+                "page_size": PAGE_SIZE,
+            })
+            stack.extend((child, level + 1) for child in reversed(children))
+        return {
+            "kind": "bplus",
+            "root": self._root,
+            "height": self._height,
+            "order": None,
+            "clustered": self._clustered,
+            "nodes": nodes,
+        }
+
     def _leftmost_leaf(self) -> int:
         page_id = self._root
         node = self._read_node(page_id)

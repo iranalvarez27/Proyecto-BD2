@@ -57,11 +57,14 @@ class DidacticBPlus:
         self.next_id = 1
         self.events: list[dict] = []
         self.frames: list[dict] = []
+        # la precarga no graba pasos: solo la operación que se anima
+        self.recording = False
         self.nodes[0] = {"id": 0, "leaf": True, "keys": [], "children": [], "next": None}
 
     def reset_frames(self) -> None:
         self.events = []
         self.frames = []
+        self.recording = True
 
     def _node(self, nid: int) -> dict:
         return self.nodes[nid]
@@ -121,6 +124,8 @@ class DidacticBPlus:
         }
 
     def _push_frame(self, event: dict | None) -> None:
+        if not self.recording:
+            return
         if event is not None:
             self.events.append(event)
         self.frames.append({"event": event, "tree": self.snapshot()})
@@ -370,6 +375,8 @@ class DidacticHash:
         self.next_id = 1
         self.events: list[dict] = []
         self.frames: list[dict] = []
+        # la precarga no graba pasos: solo la operación que se anima
+        self.recording = False
 
     @staticmethod
     def _page(pid: int, local_depth: int, kind: str, keys=None, overflow=None) -> dict:
@@ -384,6 +391,7 @@ class DidacticHash:
     def reset_frames(self) -> None:
         self.events = []
         self.frames = []
+        self.recording = True
 
     def _chain(self, pid: int) -> list[dict]:
         chain = []
@@ -430,6 +438,8 @@ class DidacticHash:
         }
 
     def _push_frame(self, event: dict | None) -> None:
+        if not self.recording:
+            return
         if event is not None:
             self.events.append(event)
         self.frames.append({"event": event, "hash": self.snapshot()})
@@ -604,9 +614,43 @@ def _bplus_keys(tree) -> list:
     return [key for key, _payload in tree.scan()]
 
 
+# La réplica didáctica (orden 4) se arma con una ventana de claves alrededor de
+# la que cambia: con la tabla entera saldrían miles de nodos imposibles de leer.
+DIDACTIC_BPLUS_KEYS = 40
+DIDACTIC_HASH_KEYS = 24
+
+
+def _sort_key(value):
+    return (0, value) if isinstance(value, (int, float)) else (1, str(value))
+
+
+def _bplus_window(keys: list, changed: list, limit: int = DIDACTIC_BPLUS_KEYS) -> list:
+    if len(keys) <= limit:
+        return list(keys)
+    ordered = sorted(keys, key=_sort_key)
+    if not changed:
+        return ordered[:limit]
+    ranks = [_sort_key(k) for k in ordered]
+    half = max(1, limit // (2 * len(changed)))
+    picked: set[int] = set()
+    for key in changed:
+        pos = bisect_left(ranks, _sort_key(key))
+        picked.update(range(max(0, pos - half), min(len(ordered), pos + half)))
+    return [ordered[i] for i in sorted(picked)]
+
+
+def _hash_window(values: list, changed: list, limit: int = DIDACTIC_HASH_KEYS) -> list:
+    if len(values) <= limit:
+        return list(values)
+    window = list(values[:limit])
+    window.extend(changed)   # en un INSERT la clave nueva está al final de values
+    return window
+
+
 def replay_bplus(keys: list, changed=None, operation: str = "insert") -> dict:
     tree = DidacticBPlus(order=4)
     changed_list = [] if changed is None else list(changed)
+    keys = _bplus_window(keys, changed_list)
     if operation == "insert" and changed_list:
         keep = list(keys)
         for key in changed_list:
@@ -655,6 +699,7 @@ def replay_bplus(keys: list, changed=None, operation: str = "insert") -> dict:
 def replay_hash(values: list, changed=None, operation: str = "insert") -> dict:
     table = DidacticHash(capacity=2)
     changed_list = [] if changed is None else list(changed)
+    values = _hash_window(values, changed_list)
     if operation == "insert" and changed_list:
         keep = list(values)
         for key in changed_list:
@@ -715,11 +760,9 @@ def snapshot_table(catalog, table_name: str) -> dict:
                 entry["keys"] = [json_val(k) for k in _bplus_keys(obj)]
             except Exception:
                 entry["keys"] = [json_val(v) for v in _column_values(info, column)]
-            entry["didactic"] = replay_bplus(entry["keys"])
         elif tipo == INDEX_HASH and hasattr(obj, "snapshot"):
             entry["disk"] = obj.snapshot()
             entry["keys"] = [json_val(v) for v in _column_values(info, column)]
-            entry["didactic"] = replay_hash(_column_values(info, column))
         elif tipo == INDEX_RTREE and hasattr(obj, "snapshot"):
             entry["disk"] = obj.snapshot()
         indexes.append(entry)

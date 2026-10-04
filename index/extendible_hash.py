@@ -308,6 +308,42 @@ class ExtendibleHash(Index):
         for k in range(len(self._dir_pages)):
             self._write_dir_page(k)
 
+    def snapshot(self) -> dict:
+        # las cubetas guardan solo el hash de la clave, no la clave
+        buckets = []
+        for head_id in dict.fromkeys(self._dir):
+            chain = []
+            page_id = head_id
+            while page_id != NIL:
+                page = self._read_bucket(page_id)
+                chain.append({
+                    "id": page_id,
+                    "kind": "overflow" if page.is_overflow else "primary",
+                    "local_depth": page.local_depth,
+                    "count": len(page.entries),
+                    "keys": [],
+                    "hashes": [f"{h:016x}" for h, _rid in page.entries],
+                    "overflow": None if page.overflow_page_id == NIL else page.overflow_page_id,
+                })
+                page_id = page.overflow_page_id
+            buckets.append({
+                "id": head_id,
+                "local_depth": chain[0]["local_depth"],
+                "count": sum(p["count"] for p in chain),
+                "capacity": self._capacity,
+                "keys": [],
+                "dir_slots": [i for i, pid in enumerate(self._dir) if pid == head_id],
+                "chain": chain,
+            })
+        return {
+            "kind": "hash",
+            "global_depth": self._global_depth,
+            "capacity": self._capacity,
+            "directory": list(self._dir),
+            "directory_size": len(self._dir),
+            "buckets": buckets,
+        }
+
     def _iter_pages(self):
         for page_id in dict.fromkeys(self._dir):  # dedup, keep order
             while page_id != NIL:
