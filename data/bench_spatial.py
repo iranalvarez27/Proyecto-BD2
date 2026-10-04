@@ -376,39 +376,52 @@ class SpatialBenchmarkRunner:
 
             # Medir tiempo de construcción de índice GiST
             t0 = time.perf_counter()
-            cur.execute(f"CREATE INDEX idx_{tbl_name}_gist ON {tbl_name} USING GIST(geom);")
+            cur.execute(f"CREATE INDEX idx_{tbl_name}_gist ON {tbl_name} USING GIST((geom::geography));")
             t_build_pg = (time.perf_counter() - t0) * 1000.0
+
+            # Actualizar estadísticas para que el planificador estime bien
+            cur.execute(f"ANALYZE {tbl_name};")
 
             # Medir tamaño en disco
             cur.execute(f"SELECT pg_relation_size('idx_{tbl_name}_gist');")
             pg_size_bytes = cur.fetchone()[0]
             pg_size_kb = pg_size_bytes / 1024.0
 
-            # Consultas de radio (ST_DWithin directamente sobre geography + fetchall de todas las columnas)
+            # 3. Verificar que use el índice (con 100K y 1 km)
+            if n >= 100_000:
+                print("      [Verificación de Plan GiST (100K, 1 km)]:")
+                cur.execute(f"""
+                    EXPLAIN SELECT id, geom FROM {tbl_name}
+                    WHERE ST_DWithin(geom::geography, ST_SetSRID(ST_MakePoint(-77.03, -12.12), 4326)::geography, 1000);
+                """)
+                for r_exp in cur.fetchall():
+                    print(f"        {r_exp[0]}")
+
+            # Consultas de radio (devolver id, geom con fetchall)
             radius_times_pg = {}
             for r in self.radios:
                 t0 = time.perf_counter()
                 for c in centros:
                     lat, lon = c
                     cur.execute(f"""
-                        SELECT id, nombre, categoria, ST_Y(geom::geometry), ST_X(geom::geometry)
+                        SELECT id, geom
                         FROM {tbl_name}
-                        WHERE ST_DWithin(geom, ST_SetSRID(ST_MakePoint({lon}, {lat}), 4326)::geography, {r});
+                        WHERE ST_DWithin(geom::geography, ST_SetSRID(ST_MakePoint({lon}, {lat}), 4326)::geography, {r});
                     """)
                     _ = cur.fetchall()
                 elapsed = (time.perf_counter() - t0) * 1000.0 / self.num_queries
                 radius_times_pg[int(r)] = round(elapsed, 4)
 
-            # Consultas k-NN con el operador <-> de GiST sobre geography + fetchall de todas las columnas
+            # Consultas k-NN con el operador <-> de GiST sobre geom::geography + fetchall
             knn_times_pg = {}
             for k in self.k_values:
                 t0 = time.perf_counter()
                 for c in centros:
                     lat, lon = c
                     cur.execute(f"""
-                        SELECT id, nombre, categoria, ST_Y(geom::geometry), ST_X(geom::geometry)
+                        SELECT id, geom
                         FROM {tbl_name}
-                        ORDER BY geom <-> ST_SetSRID(ST_MakePoint({lon}, {lat}), 4326)::geography
+                        ORDER BY geom::geography <-> ST_SetSRID(ST_MakePoint({lon}, {lat}), 4326)::geography
                         LIMIT {k};
                     """)
                     _ = cur.fetchall()
