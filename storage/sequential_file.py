@@ -695,16 +695,23 @@ class SequentialFile:
         records = list(self.scan())
         for seg in self._segs.values():
             seg.truncate(0)
+        pages: list[SlottedPage] = []
         pointers = []
         for record in records:
-            entry = SequentialEntry(record=record, next_pointer=None, deleted=False)
-            pointer = self._append_entry(MAIN_FILE, entry)
-            pointers.append(pointer)
+            data = SequentialEntry(record=record).pack(self._schema)
+            if not pages:
+                pages.append(SlottedPage())
+            try:
+                slot_id = pages[-1].insert(data)
+            except ValueError:
+                pages.append(SlottedPage())
+                slot_id = pages[-1].insert(data)
+            pointers.append(FilePointer(file_type=MAIN_FILE, page_id=len(pages) - 1, slot_id=slot_id))
         for i in range(len(pointers) - 1):
-            pointer = pointers[i]
-            entry = self._read_entry(pointer)
-            entry.next_pointer = pointers[i + 1]
-            self._write_entry(pointer, entry)
+            entry = SequentialEntry(record=records[i], next_pointer=pointers[i + 1])
+            pages[pointers[i].page_id].update(pointers[i].slot_id, entry.pack(self._schema))
+        for page in pages:
+            self.append_page(MAIN_FILE, page)
         self._head = pointers[0] if pointers else None
         self._tail = pointers[-1] if pointers else None
         self._tail_key = None if not records else records[-1].values[self._key_index]
