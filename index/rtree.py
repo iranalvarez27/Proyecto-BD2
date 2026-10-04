@@ -1,5 +1,6 @@
 import heapq
 import itertools
+import math
 import os
 import struct
 import sys
@@ -49,6 +50,21 @@ def _rect(entry: tuple, is_leaf: bool) -> MBR:
 
 def _preference(cover: MBR, rect: MBR) -> tuple:
     return cover.mindist(rect), cover.enlargement(rect), cover.area()
+
+
+def _str_groups(entries: list, cap: int, is_leaf: bool) -> list:
+    if is_leaf:
+        cx, cy = (lambda e: e[0]), (lambda e: e[1])
+    else:
+        cx, cy = (lambda e: e[0] + e[2]), (lambda e: e[1] + e[3])
+    slices = math.ceil(math.sqrt(math.ceil(len(entries) / cap)))
+    per_slice = slices * cap
+    entries = sorted(entries, key=cx)
+    groups = []
+    for i in range(0, len(entries), per_slice):
+        tira = sorted(entries[i:i + per_slice], key=cy)
+        groups.extend(tira[j:j + cap] for j in range(0, len(tira), cap))
+    return groups
 
 
 def _xy(point) -> tuple:
@@ -319,10 +335,30 @@ class RTree(Index):
         tmp_path = path + ".rebuild"
         pool.truncate(tmp_path, 0)
         fresh = RTree(pool, tmp_path)
-        for key, rid in pairs:
-            fresh.insert(key, rid)
+        entries = [(*_xy(key), rid.page_id, rid.slot_id) for key, rid in pairs]
+        if entries:
+            fresh._str_build(entries)
         pool.replace(tmp_path, path)
         self._load()
+
+    def _str_build(self, entries: list) -> None:
+        is_leaf = True
+        spare = self._root
+        while True:
+            level = []
+            for group in _str_groups(entries, MAX_LEAF if is_leaf else MAX_INNER, is_leaf):
+                node = _Node(is_leaf, group)
+                if spare is not None:
+                    page_id, spare = spare, None
+                    self._write(page_id, node)
+                else:
+                    page_id = self._seg.append(self._encode(node))
+                level.append((*node.mbr(), page_id))
+            if len(level) == 1:
+                break
+            entries, is_leaf = level, False
+        self._root = level[0][4]
+        self._flush_meta()
 
     # paginas y metapagina
 
