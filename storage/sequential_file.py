@@ -688,6 +688,45 @@ class SequentialFile:
     def aux_record_count(self) -> int:
         return self._n_aux
 
+    def snapshot(self) -> dict:
+        def ptr(pointer: FilePointer | None):
+            if pointer is None:
+                return None
+            name = "MAIN" if pointer.file_type == MAIN_FILE else "AUX"
+            return {"file": name, "page": pointer.page_id, "slot": pointer.slot_id}
+
+        def rows(file_type: int) -> list[dict]:
+            prefix = "M" if file_type == MAIN_FILE else "A"
+            out = []
+            for pointer, entry in self._iter_file_entries(file_type):
+                values = [v if isinstance(v, (int, float, str, bool)) or v is None else str(v)
+                          for v in entry.record.values]
+                out.append({
+                    "id": f"{prefix}-{pointer.page_id}-{pointer.slot_id}",
+                    "page": pointer.page_id,
+                    "slot": pointer.slot_id,
+                    "key": values[self._key_index],
+                    "values": values,
+                    "deleted": entry.deleted,
+                    "next": ptr(entry.next_pointer),
+                })
+            return out
+
+        return {
+            "kind": "sequential",
+            "key_column": self._schema.columns[self._key_index].name,
+            "head": ptr(self._head),
+            "tail": ptr(self._tail),
+            "main": rows(MAIN_FILE),
+            "aux": rows(AUX_FILE),
+            "main_pages": self.page_count(MAIN_FILE),
+            "aux_pages": self.page_count(AUX_FILE),
+            "n_aux": self._n_aux,
+            "n_live": self._n_live,
+            "n_deleted": self._n_deleted,
+            "wasted_ratio": round(self.wasted_ratio(), 3),
+        }
+
     def deleted_ratio(self) -> float:
         total = self._n_live + self._n_deleted
         if total == 0:

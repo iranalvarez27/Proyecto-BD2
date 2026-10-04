@@ -86,6 +86,14 @@ class ClusteredBPlusTree:
     def reload(self) -> None:
         self._tree.reload()
 
+    # visualización: el índice disperso (clave mínima -> página de MAIN)
+
+    def snapshot(self) -> dict:
+        return self._tree.snapshot()
+
+    def scan(self):
+        return self._tree.scan()
+
     # policy
 
     def aux_limit(self) -> int:

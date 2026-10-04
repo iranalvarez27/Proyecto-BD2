@@ -355,6 +355,33 @@ class RTree(Index):
         self._seg.free(page_id)
         self._flush_meta()
 
+    def snapshot(self) -> dict:
+        nodes = []
+        stack = [(self._root, 0)]
+        while stack:
+            page_id, level = stack.pop()
+            node = self._read(page_id)
+            mbr = list(node.mbr()) if node.entries else None
+            if node.is_leaf:
+                children = []
+                points = [[y, x] for x, y, _pid, _sid in node.entries]   # [lat, lon]
+            else:
+                children = [e[4] for e in node.entries]
+                points = []
+            nodes.append({
+                "id": page_id,
+                "level": level,
+                "leaf": node.is_leaf,
+                "mbr": mbr,
+                "count": len(node.entries),
+                "capacity": node.capacity(),
+                "children": children,
+                "points": points,
+            })
+            stack.extend((child, level + 1) for child in reversed(children))
+        height = max((n["level"] for n in nodes), default=-1) + 1
+        return {"kind": "rtree", "root": self._root, "height": height, "nodes": nodes}
+
     def _create(self) -> None:
         self._seg.append(bytes(PAGE_SIZE))
         self._root = self._seg.append(RTreePage(True).to_bytes())
