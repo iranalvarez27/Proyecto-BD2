@@ -10,6 +10,7 @@ __pycache__/
 data/*
 !data/generate_data.py
 !data/bench_spatial.py
+!data/bench_churn_indices.py
 node_modules/
 .DS_Store
 storage/DOCUMENTACION.md
