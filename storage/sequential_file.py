@@ -17,6 +17,10 @@ ENTRY_HEADER_SIZE = struct.calcsize(ENTRY_HEADER_FORMAT)
 META_FORMAT = "<biibiiiii"
 META_SAVE_EVERY = 256
 
+
+class DuplicateKeyError(ValueError):
+    pass
+
 @dataclass(frozen=True)
 class FilePointer:
     file_type: int
@@ -323,7 +327,14 @@ class SequentialFile:
                 best = FilePointer(file_type=MAIN_FILE, page_id=page_id, slot_id=slot_id)
         return best
 
-    def _find_live_main_predecessor(self, key) -> FilePointer | None:
+    def _find_live_main_predecessor(self, key, start_page: int | None = None) -> FilePointer | None:
+        # start_page: last MAIN page that can hold the predecessor (e.g. from an index)
+        if start_page is not None:
+            for page_id in range(min(start_page, self.page_count(MAIN_FILE) - 1), -1, -1):
+                candidate = self._last_live_before(self.read_page(MAIN_FILE, page_id), page_id, key)
+                if candidate is not None:
+                    return candidate
+            return None
         left = 0
         right = self.page_count(MAIN_FILE) - 1
         best = None
@@ -348,8 +359,8 @@ class SequentialFile:
                 break
         return best
 
-    def _find_insert_position(self, new_key):
-        previous_pointer = self._find_live_main_predecessor(new_key)
+    def _find_insert_position(self, new_key, start_page: int | None = None):
+        previous_pointer = self._find_live_main_predecessor(new_key, start_page)
         if previous_pointer is None:
             current_pointer = self._head
         else:
@@ -359,19 +370,14 @@ class SequentialFile:
             if current_entry.deleted:
                 current_pointer = current_entry.next_pointer
                 continue
-            if new_key < self._get_key(current_entry):
+            current_key = self._get_key(current_entry)
+            if new_key < current_key:
                 break
+            if self._key_is_pk and new_key == current_key:
+                raise DuplicateKeyError(f"Key {new_key} already exists")
             previous_pointer = current_pointer
             current_pointer = current_entry.next_pointer
         return previous_pointer, current_pointer
-
-    def _duplicate_key(self, new_key) -> bool:
-        if self._tail_key is not None:
-            if new_key == self._tail_key:
-                return True
-            if new_key > self._tail_key:
-                return False
-        return self.search(new_key) is not None
 
     def _last_main_key(self):
         for page_id in range(
@@ -403,11 +409,8 @@ class SequentialFile:
 
         return None
 
-    def insert(self, record: Record) -> RID:
+    def insert(self, record: Record, start_page: int | None = None) -> RID:
         new_key = record.values[self._key_index]
-
-        if self._key_is_pk and self._duplicate_key(new_key):
-            raise ValueError(f"Key {new_key} already exists")
 
         last_main_key = self._last_main_key()
         if self._head is None:
@@ -483,7 +486,7 @@ class SequentialFile:
 
             return new_pointer.to_rid()
         previous_pointer, current_pointer = (
-            self._find_insert_position(new_key)
+            self._find_insert_position(new_key, start_page)
         )
 
         new_entry = SequentialEntry(
@@ -551,8 +554,8 @@ class SequentialFile:
                 yield entry.record
             current_pointer = entry.next_pointer
 
-    def _find_by_key(self, key):
-        previous_pointer = self._find_live_main_predecessor(key)
+    def _find_by_key(self, key, start_page: int | None = None):
+        previous_pointer = self._find_live_main_predecessor(key, start_page)
         if previous_pointer is None:
             current_pointer = self._head
         else:
@@ -627,8 +630,8 @@ class SequentialFile:
             return entry.record
         return None
 
-    def delete(self, key) -> tuple[RID, Record] | None:
-        previous_pointer, current_pointer, current_entry = self._find_by_key(key)
+    def delete(self, key, start_page: int | None = None) -> tuple[RID, Record] | None:
+        previous_pointer, current_pointer, current_entry = self._find_by_key(key, start_page)
         if current_pointer is None:
             return None
         next_pointer = current_entry.next_pointer

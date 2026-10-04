@@ -1228,10 +1228,11 @@ class Conexion:
             if es_por_clave:
                 clave = where.valor
                 self.plan.append(f"DELETE por clave '{info.key_column}={clave}' en '{info.nombre}'{sufijo}")
-                if dry_run:
-                    existe = info.storage.search(clave) is not None
-                    return {"operacion": "DELETE", "filas_afectadas": 1 if existe else 0}
                 indice_clustered = self._indice_clustered(nodo.tabla, info.key_column)
+                if dry_run:
+                    buscador = indice_clustered if indice_clustered is not None else info.storage
+                    existe = buscador.search(clave) is not None
+                    return {"operacion": "DELETE", "filas_afectadas": 1 if existe else 0}
                 if indice_clustered is not None:
                     borrado = indice_clustered.delete(clave)
                 else:

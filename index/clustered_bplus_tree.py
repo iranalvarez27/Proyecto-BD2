@@ -8,7 +8,7 @@ from common.record import Record
 from common.types import DataType
 from engine.buffer_pool import BufferPool
 from index.bplus_tree import BPlusTree, DuplicateKey
-from storage.sequential_file import AUX_FILE, MAIN_FILE, SequentialEntry, SequentialFile
+from storage.sequential_file import AUX_FILE, MAIN_FILE, DuplicateKeyError, SequentialEntry, SequentialFile
 
 DELETED_LIMIT = 0.30
 
@@ -69,14 +69,15 @@ class ClusteredBPlusTree:
 
     def insert(self, record: Record):
         key = record.values[self._key_index]
-        if self.search(key) is not None:
-            raise DuplicateKey(key)
-        rid = self._seq.insert(record)
+        try:
+            rid = self._seq.insert(record, start_page=self._start_page(key))
+        except DuplicateKeyError:
+            raise DuplicateKey(key) from None
         self._track(key, rid)
         return rid
 
     def delete(self, key):
-        return self._seq.delete(key)
+        return self._seq.delete(key, start_page=self._start_page(key))
 
     def reorganize(self) -> None:
         self._seq.reorganize()
@@ -100,6 +101,11 @@ class ClusteredBPlusTree:
         )
 
     # internals
+
+    def _start_page(self, key) -> int:
+        # the predecessor of key lives in this page or an earlier one
+        page_id = self._tree.floor(key)
+        return -1 if page_id is None else page_id
 
     def _key_of(self, entry: SequentialEntry):
         return entry.record.values[self._key_index]
