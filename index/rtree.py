@@ -243,30 +243,6 @@ class RTree(Index):
         self._fill_stats(stats, nodos, hojas, len(encontrados))
         return encontrados
 
-    def snapshot(self) -> dict:
-        nodes = []
-
-        def walk(page_id: int, level: int) -> int:
-            node = self._read(page_id)
-            mbr = node.mbr() if node.entries else None
-            entry = {
-                "id": page_id,
-                "level": level,
-                "leaf": node.is_leaf,
-                "mbr": list(mbr) if mbr is not None else None,
-                "count": len(node.entries),
-            }
-            if node.is_leaf:
-                entry["points"] = [[py, px] for px, py, _pid, _slot in node.entries]
-                nodes.append(entry)
-                return level
-            entry["children"] = [e[4] for e in node.entries]
-            nodes.append(entry)
-            return max((walk(e[4], level + 1) for e in node.entries), default=level)
-
-        altura = walk(self._root, 0) + 1
-        return {"root": self._root, "height": altura, "nodes": nodes}
-
     # insercion
 
     def _insert_entry(self, entry: tuple) -> None:
