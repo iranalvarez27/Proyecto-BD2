@@ -65,6 +65,8 @@ class QueryResult:
         self.xact_id = xact_id
         # descripcion de la consulta espacial (para el panel de mapa) o None
         self.espacial = None
+        # R-Tree usado por la consulta, para sacar su snapshot fuera del tiempo medido
+        self.rtree = None
 
     @property
     def ok(self):
@@ -136,6 +138,7 @@ class Conexion:
             return QueryResult(error=str(e), tipo_error="sintactico")
 
         self._local.espacial = None
+        self._local.rtree = None
         self._sustituir_variables(nodo, session_id)
 
         try:
@@ -182,6 +185,7 @@ class Conexion:
                     filas = self.ejecutar_select(nodo)
                     resultado = QueryResult(filas=filas, plan=self.plan)
                     resultado.espacial = self._local.espacial
+                    resultado.rtree = getattr(self._local, "rtree", None)
                 elif isinstance(nodo, InsertNode):
                     resumen = self.ejecutar_insert(nodo)
                     resultado = QueryResult(resumen=resumen, plan=self.plan)
@@ -386,6 +390,7 @@ class Conexion:
                                  error=error, tipo_error=tipo_error)
         if filas_salida is not None:
             resultado.espacial = self._local.espacial
+            resultado.rtree = getattr(self._local, "rtree", None)
         txn_activa = self.txn_manager.is_active(session_id)
         txn = self.txn_manager.get_active(session_id)
         resultado.transaccion_activa = txn_activa
@@ -644,8 +649,9 @@ class Conexion:
         if espacial is None:
             return
         espacial["usa_indice"] = True
+        self._local.rtree = rtree
         espacial["rtree"] = {
-            "tree": rtree.snapshot(),
+            "tree": None,
             "trace": {"order": trace},
             "stats": dict(stats),
         }

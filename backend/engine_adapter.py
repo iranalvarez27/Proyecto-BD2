@@ -361,6 +361,8 @@ class EngineAdapter:
         # pasan por TransactionManager/LockManager en vez de ser un mock.
         res = self.conexion.execute(sql_clean, session_id)
         duration_ms = (time.time() - start_time) * 1000
+        if res.rtree is not None and res.espacial and res.espacial.get("rtree"):
+            res.espacial["rtree"]["tree"] = res.rtree.snapshot()
         transaction_info = {"active": res.transaccion_activa, "xact_id": res.xact_id}
         visualize = self._build_visualize(res, before_view, op_guess, table_guess)
 
