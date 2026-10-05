@@ -12,6 +12,7 @@ from query.ast import (SelectNode, InsertNode, DeleteNode, UpdateNode, Condition
                         PointLiteral, PolygonLiteral, FuncCall, SpatialCondition, CreateIndexNode, AggregateCall, ColumnRef, SubquerySelect, JoinClause,
                         SetVarNode,)
 from query.tokens import TokenType
+from common.bitmap import RidBitmap
 from common.geo import EUCLIDEAN, HAVERSINE, get_metric, point_in_polygon
 from common.record import Record
 from common.types import Column, DataType, Schema
@@ -790,20 +791,12 @@ class Conexion:
                     filas = [dict(zip(nombres_col, record.values))] if record is not None else []
                 elif tipo_indice == "bplus":
                     self.plan.append(f"busqueda por indice bplus no agrupado en '{where.columna}={where.valor}'")
-                    rids = indice.search(where.valor)
-                    filas = []
-                    for rid in rids:
-                        record = info.storage.read(rid, info.schema)
-                        if record is not None:
-                            filas.append(dict(zip(nombres_col, record.values)))
+                    rids = RidBitmap.from_rids(indice.search(where.valor))
+                    filas = [dict(zip(nombres_col, r.values)) for _rid, r in self._leer_bitmap(info, rids)]
                 elif tipo_indice == "hash":
                     self.plan.append(f"busqueda por indice hash en '{where.columna}={where.valor}'")
-                    rids = indice.search(where.valor)
-                    filas = []
-                    for rid in rids:
-                        record = info.storage.read(rid, info.schema)
-                        if record is not None:
-                            filas.append(dict(zip(nombres_col, record.values)))
+                    rids = RidBitmap.from_rids(indice.search(where.valor))
+                    filas = [dict(zip(nombres_col, r.values)) for _rid, r in self._leer_bitmap(info, rids)]
                 else:
                     self.plan.append(f"escaneo completo de '{info.nombre}' ({info.tipo_storage}) + filtro WHERE")
                     filas = [f for f in self.leer_todo(info) if self.cumple_where(where, f)]
@@ -812,6 +805,10 @@ class Conexion:
                 self.plan.append(f"busqueda binaria por clave '{info.key_column}={where.valor}' en '{info.nombre}'")
                 record = info.storage.search(where.valor)
                 filas = [dict(zip(nombres_col, record.values))] if record is not None else []
+
+            elif (self._admite_bitmap(where, rango_info)
+                  and (filas_bitmap := self._plan_bitmap(where, info, nombres_col)) is not None):
+                filas = filas_bitmap
 
             elif rango_info is not None:
                 col_r, indice_r, tipo_r, low, high = rango_info
@@ -825,14 +822,12 @@ class Conexion:
                             filas.append(fila)
                 elif tipo_r == "bplus":
                     self.plan.append(f"busqueda por rango en indice bplus no agrupado sobre '{col_r}' [{low} a {high}]")
-                    rids = indice_r.range_search(low, high)
+                    rids = RidBitmap.from_rids(indice_r.range_search(low, high))
                     filas = []
-                    for rid in rids:
-                        record = info.storage.read(rid, info.schema)
-                        if record is not None:
-                            fila = dict(zip(nombres_col, record.values))
-                            if self.cumple_where(where, fila):
-                                filas.append(fila)
+                    for _rid, record in self._leer_bitmap(info, rids):
+                        fila = dict(zip(nombres_col, record.values))
+                        if self.cumple_where(where, fila):
+                            filas.append(fila)
                 else:
                     self.plan.append(f"escaneo completo de '{info.nombre}' ({info.tipo_storage}) + filtro WHERE")
                     filas = [f for f in self.leer_todo(info) if self.cumple_where(where, f)]
@@ -845,6 +840,145 @@ class Conexion:
                     self.plan.append(f"escaneo completo de '{info.nombre}' ({info.tipo_storage}) + filtro WHERE")
                 filas = [f for f in self.leer_todo(info) if self.cumple_where(where, f)]
         return self._finalizar_select(nodo, filas, info.schema, orden_ya_resuelto)
+
+    # ------------------------------------------------------------------
+    # bitmap: AND / OR entre indices y lectura de cada pagina una sola vez
+    # ------------------------------------------------------------------
+
+    def _leer_bitmap(self, info: TableInfo, bitmap: RidBitmap):
+        if info.tipo_storage == STORAGE_HEAP:
+            return info.storage.read_bitmap(bitmap, info.schema)
+        return info.storage.read_bitmap(bitmap)
+
+    def _admite_bitmap(self, where, rango_info) -> bool:
+        # el agrupado devuelve registros en orden de clave, no RIDs
+        if rango_info is not None and rango_info[2] == INDEX_CLUSTERED:
+            return False
+        if isinstance(where, BinaryCondition):
+            return True
+        return isinstance(where, Condition) and where.operador == TokenType.IN
+
+    def _indice_bitmap(self, tabla: str, columna: str, tipos: tuple):
+        if not self.catalog.tiene_indice(tabla, columna):
+            return None
+        indice, tipo = self.catalog.get_indice(tabla, columna)
+        return (indice, tipo) if tipo in tipos else None
+
+    def _bitmap_rango(self, cond, columna: str, info: TableInfo, pasos: list):
+        par = self._indice_bitmap(info.nombre, columna, (INDEX_BPLUS,))
+        if par is None:
+            return None
+        bnds = self._extraer_rango_columna(cond, columna, info.schema)
+        if bnds is None:
+            return None
+        bitmap = RidBitmap.from_rids(par[0].range_search(bnds[0], bnds[1]))
+        pasos.append(f"bitmap index scan en indice bplus no agrupado sobre '{columna}' "
+                     f"[{bnds[0]} a {bnds[1]}]: {len(bitmap)} rids")
+        return bitmap
+
+    def _bitmap_hoja(self, cond, info: TableInfo, pasos: list):
+        if isinstance(cond, SpatialCondition):
+            patron = self._patron_espacial(cond)
+            if patron is None:
+                return None
+            rtree = self._indice_rtree(info.nombre, patron["columna"])
+            if rtree is None:
+                return None
+            stats, trace = {}, []
+            if patron["tipo"] == "radio":
+                hallados = rtree.radius_search(tuple(patron["centro"]), patron["radio_m"],
+                                               patron["metrica"], stats, trace)
+                bitmap = RidBitmap.from_rids(rid for _d, rid, _p in hallados)
+            else:
+                bitmap = RidBitmap.from_rids(rid for rid, _p in rtree.polygon_search(patron["poligono"], stats, trace))
+            pasos.append((rtree, trace, stats))
+            pasos.append(f"bitmap index scan en indice rtree sobre '{patron['columna']}' "
+                         f"({patron['tipo']}): {len(bitmap)} rids")
+            return bitmap
+
+        if not isinstance(cond, Condition) or isinstance(cond.valor, ColumnRef):
+            return None
+        if cond.operador in (TokenType.GT, TokenType.GTE, TokenType.LT, TokenType.LTE):
+            return self._bitmap_rango(cond, cond.columna, info, pasos)
+        if cond.operador not in (TokenType.EQ, TokenType.IN):
+            return None
+        par = self._indice_bitmap(info.nombre, cond.columna, (INDEX_HASH, INDEX_BPLUS))
+        if par is None:
+            return None
+        indice, tipo = par
+        valores = cond.valor if cond.operador == TokenType.IN else [cond.valor]
+        bitmap = RidBitmap()
+        for valor in valores:
+            for rid in indice.search(valor):
+                bitmap.add(rid)
+        nombre = "hash" if tipo == INDEX_HASH else "bplus no agrupado"
+        pasos.append(f"bitmap index scan en indice {nombre} sobre '{cond.columna}' "
+                     f"({len(valores)} valor(es)): {len(bitmap)} rids")
+        return bitmap
+
+    def _bitmap_and(self, cond, info: TableInfo, pasos: list):
+        # los rangos sobre una misma columna se juntan en un solo range_search
+        resultado = None
+        rangos_hechos = set()
+        for c in self._conjuntos_and(cond):
+            if (isinstance(c, Condition) and not isinstance(c.valor, ColumnRef)
+                    and c.operador in (TokenType.GT, TokenType.GTE, TokenType.LT, TokenType.LTE)):
+                if c.columna in rangos_hechos:
+                    continue
+                rangos_hechos.add(c.columna)
+                bitmap = self._bitmap_rango(cond, c.columna, info, pasos)
+            else:
+                bitmap = self._bitmap_de(c, info, pasos)
+            if bitmap is None:
+                continue
+            if resultado is None:
+                resultado = bitmap
+            else:
+                antes = len(resultado)
+                resultado = resultado & bitmap
+                pasos.append(f"bitmap AND ({antes} y {len(bitmap)} rids): {len(resultado)} rids")
+        return resultado
+
+    def _bitmap_de(self, cond, info: TableInfo, pasos: list):
+        # None = esta parte del WHERE no se puede resolver con indices
+        if isinstance(cond, BinaryCondition):
+            if cond.operador == TokenType.AND:
+                return self._bitmap_and(cond, info, pasos)
+            propios = []
+            izq = self._bitmap_de(cond.izquierda, info, propios)
+            if izq is None:
+                return None
+            der = self._bitmap_de(cond.derecha, info, propios)
+            if der is None:
+                return None
+            resultado = izq | der
+            pasos.extend(propios)
+            pasos.append(f"bitmap OR ({len(izq)} y {len(der)} rids): {len(resultado)} rids")
+            return resultado
+        return self._bitmap_hoja(cond, info, pasos)
+
+    def _plan_bitmap(self, where, info: TableInfo, nombres_col: list):
+        pasos = []
+        try:
+            bitmap = self._bitmap_de(where, info, pasos)
+        except (KeyTypeMismatch, KeyTooLong, UnorderableKey, UnhashableKeyType):
+            return None
+        if bitmap is None:
+            return None
+        filas = []
+        for _rid, record in self._leer_bitmap(info, bitmap):
+            fila = dict(zip(nombres_col, record.values))
+            if self.cumple_where(where, fila):
+                filas.append(fila)
+        for paso in pasos:
+            # las tuplas son R-Trees usados, para la visualizacion
+            if isinstance(paso, tuple):
+                self._marcar_rtree(*paso)
+            else:
+                self.plan.append(paso)
+        self.plan.append(f"bitmap heap scan de '{info.nombre}': {bitmap.page_count()} paginas leidas "
+                         f"una vez, {len(bitmap)} rids, {len(filas)} filas tras verificar el WHERE")
+        return filas
 
     def _finalizar_select(self, nodo: SelectNode, filas, schema: Schema, orden_ya_resuelto: bool) -> list:
         hay_estrella = nodo.columnas == ["*"]

@@ -539,6 +539,20 @@ class SequentialFile:
             return None
         return entry.record
 
+    def read_bitmap(self, bitmap, schema: Schema | None = None):
+        for page_id, slots in bitmap.pages():
+            pointer = FilePointer.from_rid(RID(page_id, 0))
+            if pointer.page_id >= self.page_count(pointer.file_type):
+                continue
+            page = self.read_page(pointer.file_type, pointer.page_id)
+            for slot_id in slots:
+                data = page.read(slot_id)
+                if data == b"":
+                    continue
+                entry = SequentialEntry.unpack(data, self._schema)
+                if not entry.deleted:
+                    yield RID(page_id, slot_id), entry.record
+
     def scan_con_rid(self, schema: Schema | None = None):
         for file_type in (MAIN_FILE, AUX_FILE):
             for pointer, entry in self._iter_file_entries(file_type):

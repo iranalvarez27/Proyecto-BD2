@@ -575,6 +575,26 @@ class EngineAdapter:
                     "rows_estimated": 0,
                     "children": [],
                 })
+            elif step_lower.startswith("bitmap"):
+                if step_lower.startswith("bitmap heap scan"):
+                    tipo = "Bitmap Heap Scan"
+                elif step_lower.startswith("bitmap and"):
+                    tipo = "BitmapAnd"
+                elif step_lower.startswith("bitmap or"):
+                    tipo = "BitmapOr"
+                elif "rtree" in step_lower:
+                    tipo = "Bitmap Index Scan (R-Tree)"
+                elif "hash" in step_lower:
+                    tipo = "Bitmap Index Scan (Extendible Hash)"
+                else:
+                    tipo = "Bitmap Index Scan (B+ Tree No Agrupado)"
+                nodes.append({
+                    "node_type": tipo,
+                    "method": step,
+                    "cost": 1.0,
+                    "rows_estimated": actual_rows if actual_rows is not None else 5,
+                    "children": [],
+                })
             elif "indice rtree" in step_lower:
                 nodes.append({
                     "node_type": "IndexScan (R-Tree)",

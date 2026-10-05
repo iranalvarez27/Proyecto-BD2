@@ -241,6 +241,16 @@ class HeapFile:
             return None
         return Record.unpack(data, schema)
 
+    def read_bitmap(self, bitmap, schema: Schema):
+        for page_id, slots in bitmap.pages():
+            if page_id >= self.page_count():
+                continue
+            page = self.read_page(page_id)
+            for slot_id in slots:
+                data = page.read(slot_id)
+                if data != b"":
+                    yield RID(page_id, slot_id), Record.unpack(data, schema)
+
     def delete(self, rid: RID) -> None:
         page = self.read_page(
             rid.page_id
