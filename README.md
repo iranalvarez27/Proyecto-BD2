@@ -1,47 +1,196 @@
 # Minigestor de Base de Datos Multimodal - BD2 (2026-2)
 
-Sistema gestor de base de datos multimodal desarrollado desde cero, que soporta datos relacionales (tablas y almacenamiento físico), espaciales, texto y multimedia.
+Sistema gestor de base de datos multimodal desarrollado desde cero. Esta versión cubre la Parte 1 (datos relacionales con almacenamiento paginado, índices, SQL, transacciones y algoritmos externos) y la Parte 2 (datos espaciales con R-Tree).
 
 ---
 
-## Estructura del Proyecto
+## Arquitectura del sistema
+
+El sistema está organizado en capas. Una consulta baja desde la interfaz hasta el disco, y cada capa corresponde a un directorio del repositorio.
+
+```mermaid
+flowchart TD
+    FE["Frontend<br/>React + Vite + Leaflet"] -->|HTTP /api| API["API REST<br/>FastAPI · backend/"]
+    API --> PAR["SQL parser<br/>lexer, parser, semántico · query/"]
+    PAR --> EJ["Ejecutor y planificador<br/>query/conexion.py"]
+    EJ --> CAT["Catálogo<br/>query/catalog.py"]
+    EJ --> TX["Transacciones y locks<br/>transaction/"]
+    EJ --> EXT["External sort y external hash<br/>engine/external.py"]
+    EJ --> ARC["Archivos<br/>Heap File · Sequential File<br/>storage/"]
+    EJ --> IDX["Índices<br/>B+ agrupado · B+ no agrupado<br/>Hash extendible · R-Tree<br/>index/"]
+    ARC --> BP["Buffer pool<br/>engine/buffer_pool.py"]
+    IDX --> BP
+    BP --> FM["FileManager y Segment<br/>engine/"]
+    FM --> DISK[("Disco<br/>data/*.bin, data/*.idx")]
+```
+
+| Capa | Directorio | Responsabilidad |
+|---|---|---|
+| Interfaz | `frontend/` | Paneles de archivos, consultas, resultados, plan de ejecución, mapa e inspector físico. |
+| API | `backend/` | Recibe el SQL por HTTP (FastAPI) y lo pasa al motor a través de `EngineAdapter`, que también arma el plan que se muestra en la interfaz. |
+| SQL | `query/` | El lexer y el parser convierten el texto en un AST, el analizador semántico valida tablas, columnas y tipos, y `conexion.py` elige el plan y lo ejecuta. |
+| Catálogo | `query/catalog.py`, `query/catalog_store.py` | Registra las tablas, su organización física y sus índices, y los persiste en `data/catalog.json`. |
+| Transacciones | `transaction/` | Locks compartidos y exclusivos por tabla, `BEGIN TRANSACTION`, `END TRANSACTION` (o `COMMIT`) y `ROLLBACK`, verificación de serializabilidad y simulación con hilos. |
+| Algoritmos externos | `engine/external.py` | External sort (k-way merge) para `ORDER BY` y external hash para `GROUP BY` y `JOIN`. |
+| Archivos | `storage/` | Heap File con reutilización de espacio libre y Sequential File con MAIN, AUX, eliminación lazy y reorganización. |
+| Índices | `index/` | B+ Tree agrupado y no agrupado, hash extendible y R-Tree, todos paginados en disco. |
+| Almacenamiento | `engine/` | Buffer pool de páginas de 4 KB, `Segment` (archivo de páginas con free list y metapágina) y `FileManager` (lectura y escritura en disco). |
+| Común | `common/` | Tipos de datos, slotted page, formato de registros y funciones geométricas. |
+
+### Flujo de una consulta
+
+1. El frontend envía el SQL y un `session_id` a `POST /api/query`.
+2. El lexer produce tokens, el parser construye el AST y el analizador semántico lo valida.
+3. El gestor de transacciones toma un lock compartido o exclusivo sobre la tabla.
+4. El planificador elige índice, búsqueda secuencial, escaneo completo o algoritmo externo.
+5. Los archivos e índices traducen la operación a RIDs y páginas, que se leen y escriben a través del buffer pool.
+6. El backend devuelve las filas, el plan y el tiempo de ejecución, y la interfaz los muestra.
+
+---
+
+## Organización del código fuente
 
 ```
 Proyecto-BD2/
-├── backend/                  # Servidor de API REST (FastAPI) & Adaptador de motor
-│   ├── engine_adapter.py     # Adaptador que conecta almacenamiento, índices y catálogo
-│   └── main.py               # Endpoints REST y CORS
-├── common/                   # Tipos comunes y estructuras de bajo nivel
-│   ├── geo.py                # Haversine, euclidiana, punto en polígono y cotas para MBR
-│   ├── datos_lima.py         # Generador de puntos de interés en Lima (demo y experimentos)
-│   ├── page.py               # Slotted Page (4096 bytes)
-│   ├── record.py             # Serialización binaria de registros
-│   └── types.py              # Definición de tipos de datos, columnas y esquemas
-├── storage/                  # Almacenamiento físico en disco
-│   ├── heap_file.py          # Heap File con Slotted Pages
-│   └── sequential_file.py    # Archivo Secuencial Paginado (Main + Aux / Lazy deletion)
-├── index/                    # Estructuras de Indexación
-│   ├── bplus_tree.py         # B+ Tree no agrupado
-│   ├── clustered_bplus_tree.py # B+ Tree agrupado sobre SequentialFile
-│   ├── extendible_hash.py    # Hash Dinámico Extensible
-│   ├── rtree.py              # R-Tree en disco: rango, radio, k-NN, polígono
-│   └── key_codec.py          # Codificación de claves binarias
-├── query/                    # Motor de Consultas SQL
-│   ├── lexer.py / tokens.py  # Analizador léxico
-│   ├── parser.py / ast.py    # Analizador sintáctico y AST
-│   ├── catalog.py            # Catálogo unificado de tablas e índices
-│   ├── catalog_store.py      # Persistencia del catálogo en data/catalog.json
-│   └── conexion.py           # Planificador y ejecutor de consultas
-├── data/                     # Archivos de datos (.bin, .idx) y benchmarks
-│   ├── generate_data.py      # Generador de datasets para Parte 1 y 2 (1K, 10K, 100K)
-│   ├── bench_spatial.py      # Runner experimental: Secuencial vs R-Tree vs PostgreSQL GiST
-│   ├── plot_spatial.py       # Genera las 5 gráficas PNG de la Parte 2
-│   ├── benchmark_charts.py   # Benchmark + 4 gráficas PNG de la Parte 1
-│   ├── bench_churn_indices.py # Inserciones/eliminaciones frecuentes sobre los 3 índices
-│   └── charts/               # Gráficas PNG generadas por los scripts anteriores
-├── frontend/                 # Interfaz de Usuario (React + Vite + Leaflet + Tailwind CSS)
-└── requirements.txt          # Dependencias Python
+├── backend/                     # API REST
+│   ├── main.py                  # Endpoints FastAPI (/api/query, /api/tables, /api/visualize, ...)
+│   ├── engine_adapter.py        # Une catálogo, almacenamiento, índices y transacciones; crea las tablas de demo
+│   └── visualize.py             # Snapshots y trazas para el inspector físico
+├── common/                      # Lo que comparten todas las capas
+│   ├── types.py                 # Tipos de datos, columnas y esquemas
+│   ├── page.py                  # Slotted page de 4096 bytes
+│   ├── record.py                # Serialización binaria de registros
+│   ├── geo.py                   # MBR, Haversine, euclidiana, cotas punto-MBR y punto en polígono
+│   └── datos_lima.py            # Generador de puntos de interés en Lima
+├── engine/                      # Gestión de almacenamiento y memoria externa
+│   ├── file_manager.py          # Lectura y escritura de páginas en disco
+│   ├── buffer_pool.py           # Buffer pool de páginas
+│   ├── segment.py               # Archivo de páginas con metapágina y free list
+│   └── external.py              # External sort y external hash
+├── storage/                     # Organización de archivos
+│   ├── heap_file.py             # Heap File
+│   └── sequential_file.py       # Sequential File (MAIN + AUX, eliminación lazy, reorganización)
+├── index/                       # Estructuras de indexación
+│   ├── base.py                  # Interfaz común de los índices
+│   ├── key_codec.py             # Codificación binaria de claves
+│   ├── node_page.py             # Página de nodo del B+ Tree
+│   ├── bplus_tree.py            # B+ Tree no agrupado
+│   ├── clustered_bplus_tree.py  # B+ Tree agrupado sobre el Sequential File
+│   ├── bucket_page.py           # Página de bucket del hash
+│   ├── hash_utils.py            # Función de hash de claves
+│   ├── extendible_hash.py       # Hash extendible
+│   ├── rtree_page.py            # Página de nodo del R-Tree
+│   └── rtree.py                 # R-Tree: radio, rectángulo, polígono, k-NN y carga masiva STR
+├── query/                       # Procesamiento de consultas SQL
+│   ├── tokens.py, lexer.py      # Análisis léxico
+│   ├── ast.py, parser.py        # Análisis sintáctico y AST
+│   ├── semantic.py              # Análisis semántico
+│   ├── catalog.py               # Catálogo de tablas e índices
+│   ├── catalog_store.py         # Persistencia del catálogo en data/catalog.json
+│   └── conexion.py              # Planificador y ejecutor
+├── transaction/                 # Transacciones y concurrencia
+│   ├── locks.py                 # Lock manager
+│   ├── manager.py               # Transaction manager
+│   ├── serializability.py       # Grafo de precedencia
+│   └── simulation.py            # Simulación con hilos (race condition y deadlock)
+├── data/                        # Datos generados (.bin, .idx, catalog.json) y benchmarks
+│   ├── generate_data.py         # Datasets de 1K, 10K y 100K para las Partes 1 y 2
+│   ├── benchmark_charts.py      # Benchmark y gráficas de la Parte 1
+│   ├── bench_churn_indices.py   # Benchmark de índices con inserciones y eliminaciones frecuentes
+│   ├── bench_spatial.py         # Benchmark espacial: secuencial vs R-Tree vs GiST de PostgreSQL
+│   ├── plot_spatial.py          # Gráficas de la Parte 2
+│   └── charts/                  # Gráficas PNG generadas por los benchmarks
+├── tools/
+│   └── smoke_visualizations.py  # Verificación de los snapshots del inspector físico
+├── frontend/                    # Interfaz de usuario (React + Vite + Tailwind CSS + Leaflet)
+│   └── src/
+│       ├── App.jsx              # Layout y llamadas a la API
+│       └── components/          # Paneles (archivos, consultas, resultados, plan, mapa, inspector)
+├── .env.example                 # Conexión a PostgreSQL para el benchmark espacial
+└── requirements.txt             # Dependencias del backend
 ```
+
+Todos los archivos de datos se guardan en `data/` y no se suben al repositorio. Cada tabla e índice es un archivo de páginas de 4 KB, por ejemplo `data/tiendas.bin` y `data/tiendas_ubicacion_rtree.idx`.
+
+---
+
+## Manual de instalación
+
+### Requisitos
+
+| Herramienta | Versión | Para qué |
+|---|---|---|
+| Python | 3.10 o superior | Motor y API |
+| Node.js | 20.19+ o 22.12+ | Frontend (Vite 8) |
+| pnpm | 9 o superior | Dependencias del frontend (`pnpm-lock.yaml`) |
+| PostgreSQL + PostGIS | Opcional | Solo para comparar con GiST en el benchmark espacial |
+
+Si no tienes pnpm, se puede activar con `corepack enable` (viene con Node) o instalar con `npm install -g pnpm`.
+
+### 1. Clonar el repositorio
+
+```bash
+git clone <url-del-repositorio> Proyecto-BD2
+cd Proyecto-BD2
+```
+
+Todos los comandos de Python se ejecutan **desde la raíz del repositorio**, porque el motor guarda sus archivos en `data/` relativo al directorio actual.
+
+### 2. Backend
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate          # En Windows: .venv\Scripts\activate
+pip install -r requirements.txt
+python3 -m uvicorn backend.main:app --host 127.0.0.1 --port 8000 --reload
+```
+
+La API queda en `http://127.0.0.1:8000`, con la documentación Swagger en `http://127.0.0.1:8000/docs`. La primera vez que arranca crea `data/` y las tablas de demostración `estudiantes` (Heap File con B+ sobre `id` y hash sobre `carrera`), `cursos` (Sequential File con B+ agrupado) y `tiendas` (500 puntos en Lima con R-Tree sobre `ubicacion`).
+
+### 3. Frontend
+
+En otra terminal:
+
+```bash
+cd frontend
+pnpm install
+pnpm dev
+```
+
+La aplicación queda en `http://127.0.0.1:5173`. Vite redirige las llamadas a `/api` al backend en el puerto 8000, así que el backend tiene que estar corriendo.
+
+### 4. Datos de prueba (opcional)
+
+```bash
+python3 data/generate_data.py --size 10k      # tablas de la Parte 1 con 1k, 10k o 100k registros
+python3 data/generate_data.py --spatial 100k  # tabla tiendas con 1k, 10k o 100k puntos
+python3 data/generate_data.py --reset         # vuelve a los datos de muestra
+```
+
+Después de generar datos hay que reiniciar el backend.
+
+### 5. Simulación de concurrencia
+
+```bash
+python3 transaction/simulation.py --scenario race       # transacciones compitiendo por las mismas claves
+python3 transaction/simulation.py --scenario deadlock   # dos transacciones que se bloquean mutuamente
+```
+
+Al final verifica que las claves primarias sigan siendo únicas, que los índices sean coherentes y que el schedule sea serializable.
+
+### 6. Benchmarks y gráficas (opcional)
+
+```bash
+pip install matplotlib numpy psycopg2-binary
+```
+
+`matplotlib` y `numpy` hacen falta para las gráficas, y `psycopg2-binary` solo para comparar con PostgreSQL en el benchmark espacial. Para esa comparación:
+
+```bash
+cp .env.example .env               # y completar host, port, user, password y dbname
+```
+
+El usuario de PostgreSQL necesita poder ejecutar `CREATE EXTENSION postgis`. Los comandos de los benchmarks están en las secciones 2.1.6 y 2.2.4.
 
 ---
 
@@ -202,7 +351,7 @@ R-Tree paginado en disco (páginas de 4 KB sobre el mismo `BufferPool` que el re
 | Nodos | Hoja: `(lon, lat, RID)`, 170 entradas por página. Interno: `(MBR, página hija)`, 113 entradas por página. |
 | Inserción | Se baja al hijo con menor (MINDIST, agrandamiento, área). Split: semillas = el par más lejano; el resto se reparte con la misma regla, de lo más cercano a una semilla a lo más lejano, hasta que un grupo llega a la mitad + 1. |
 | Eliminación | Lazy, como GiST: se quita la entrada, se ajustan los MBR del camino y solo se libera un nodo vacío. |
-| Reconstrucción | `bulk_load` arma un índice nuevo insertando par por par y reemplaza al anterior; la usan `CREATE INDEX` y el reorganize de una tabla. |
+| Carga masiva | `bulk_load` arma el árbol con STR (Sort-Tile-Recursive), de abajo hacia arriba y con nodos llenos, en un archivo nuevo que reemplaza al anterior; la usan `CREATE INDEX` y el reorganize de una tabla. |
 | Consulta por radio | Poda por la distancia mínima punto–MBR y refinamiento con la distancia exacta. |
 | k-NN | Búsqueda best-first con cola de prioridad; es incremental, así que admite un filtro `WHERE` adicional. |
 | Polígono | Filtro por el MBR del polígono y refinamiento con ray casting. |
@@ -268,7 +417,7 @@ Las tablas e índices creados por SQL ahora persisten entre reinicios en `data/c
 
 Esta sección permite reproducir automáticamente la evaluación comparativa requerida en la rúbrica entre:
 1. **Búsqueda Secuencial** (baseline sin índice en memoria/heap).
-2. **R-Tree Propio** (implementación paginada en disco de 4KB con BufferPool, construido por inserciones).
+2. **R-Tree Propio** (implementación paginada en disco de 4KB con BufferPool, construido con carga masiva STR).
 3. **PostgreSQL con PostGIS** (índice GiST nativo sobre `geometry(Point, 4326)`).
 
 #### Variables Evaluadas:
@@ -329,21 +478,3 @@ El contrato completo puede comprobarse sin abrir el navegador:
 ```bash
 python tools/smoke_visualizations.py
 ```
-
-## Cómo Ejecutar el Proyecto
-
-### 1. Backend (API REST)
-```bash
-pip install -r requirements.txt
-python3 -m uvicorn backend.main:app --host 127.0.0.1 --port 8000 --reload
-```
-API activa en: `http://127.0.0.1:8000` (Documentación Swagger interactiva en `http://127.0.0.1:8000/docs`).
-
-### 2. Frontend (Vite + React)
-```bash
-cd frontend
-pnpm install
-pnpm dev
-```
-Aplicación disponible en: `http://127.0.0.1:5173`.
-
