@@ -13,6 +13,7 @@ data/*
 !data/bench_churn_indices.py
 !data/plot_spatial.py
 !data/benchmark_charts.py
+!data/bench_indices_consultas.py
 node_modules/
 .DS_Store
 storage/DOCUMENTACION.md
