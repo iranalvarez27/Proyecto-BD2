@@ -541,3 +541,27 @@
 }
 
 .rtv-plane rect, .rtv-plane circle, .rtv-plane polygon, .rtv-plane line { vector-effect: non-scaling-stroke; }
+
+/* R-Tree · árbol compacto para índices con muchas hojas */
+.rtv-ctree { max-height: 320px; overflow: auto; display: flex; flex-direction: column; gap: 10px; padding-right: 2px; }
+.rtv-ctree-label { display: block; margin-bottom: 4px; font: 700 8.5px/1 ui-monospace, monospace; letter-spacing: .08em; text-transform: uppercase; color: #94a3b8; }
+.rtv-ctree-row { display: flex; flex-wrap: wrap; justify-content: center; gap: 6px; }
+.rtv-ctree-group { padding: 8px; border-radius: 10px; border: 1px dashed rgba(148,163,184,.45); transition: border-color .3s, background .3s, opacity .3s; }
+.rtv-ctree-group.is-current, .rtv-ctree-group.is-visited { border-color: #2563eb; border-style: solid; }
+.rtv-ctree-group.is-pruned { opacity: .5; }
+.rtv-ctree-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(50px, 1fr)); gap: 5px; }
+.rtv-chip { display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 4px 2px; border-radius: 7px; border: 1.5px solid var(--mbr-color); background: #fff; transition: background .3s, border-color .3s, opacity .3s, transform .2s; }
+.dark .rtv-chip { background: #111c2e; }
+.rtv-chip b { font: 800 10px/1 ui-monospace, monospace; color: #334155; }
+.dark .rtv-chip b { color: #e2e8f0; }
+.rtv-chip small { font: 600 8px/1 ui-monospace, monospace; color: #94a3b8; }
+.rtv-chip.is-visited { border-color: #2563eb; background: #eff6ff; }
+.dark .rtv-chip.is-visited { background: rgba(37,99,235,.2); }
+.rtv-chip.is-full { border-color: #059669; background: #d1fae5; }
+.dark .rtv-chip.is-full { background: rgba(16,185,129,.25); }
+.rtv-chip.is-current { border-color: #2563eb; border-width: 2.5px; background: #dbeafe; transform: scale(1.08); }
+.dark .rtv-chip.is-current { background: rgba(37,99,235,.4); }
+.rtv-chip.is-pruned { opacity: .4; border-style: dashed; border-color: #94a3b8; }
+.rtv-chip.is-pruned-now { opacity: 1; border-color: #e11d48; background: #fff1f2; }
+.dark .rtv-chip.is-pruned-now { background: rgba(136,19,55,.35); }
+.rtv-chip.is-hover { transform: scale(1.08); box-shadow: 0 0 0 2px var(--mbr-color); }

@@ -215,6 +215,63 @@ function nodeState(id, frame) {
   return '';
 }
 
+
+/* Árbol compacto: con muchas hojas, los niveles superiores van arriba y las
+   hojas en una cuadrícula agrupada por su nodo padre. */
+const COMPACT_LEAVES = 16;
+
+function CompactTree({ tree, frame, hover, setHover, colorOf }) {
+  const byId = Object.fromEntries(tree.nodes.map((node) => [node.id, node]));
+  const levels = [];
+  tree.nodes.forEach((node) => { (levels[node.level] ||= []).push(node); });
+  const upper = levels.filter((level) => level && !level[0].leaf);
+  const parents = tree.nodes.filter((node) => !node.leaf && (node.children || []).some((id) => byId[id]?.leaf));
+  const containerRef = React.useRef(null);
+
+  useEffect(() => {
+    const id = frame?.current;
+    if (id == null || !containerRef.current) return;
+    const el = containerRef.current.querySelector(`[data-node="${id}"]`);
+    if (el) el.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'smooth' });
+  }, [frame]);
+
+  const chip = (node) => (
+    <button
+      type="button"
+      key={node.id}
+      data-node={node.id}
+      className={`rtv-chip ${nodeState(node.id, frame)} ${hover === node.id ? 'is-hover' : ''}`}
+      style={{ '--mbr-color': colorOf(node) }}
+      onMouseEnter={() => setHover(node.id)}
+      onMouseLeave={() => setHover(null)}
+      title={`P${node.id} · ${node.leaf ? 'hoja' : `nivel ${node.level}`} · ${node.count} entradas`}
+    >
+      <b>P{node.id}</b>
+      <small>{node.count}</small>
+    </button>
+  );
+
+  return (
+    <div className="rtv-ctree" ref={containerRef}>
+      {upper.map((level) => (
+        <div key={level[0].level} className="rtv-ctree-level">
+          <span className="rtv-ctree-label">{level[0].level === 0 ? 'raíz' : `nivel ${level[0].level}`}</span>
+          <div className="rtv-ctree-row">{level.map(chip)}</div>
+        </div>
+      ))}
+      {parents.map((parent) => {
+        const leaves = (parent.children || []).map((id) => byId[id]).filter(Boolean);
+        return (
+          <div key={parent.id} className={`rtv-ctree-group ${nodeState(parent.id, frame)}`}>
+            <span className="rtv-ctree-label">hojas de P{parent.id} · {leaves.length}</span>
+            <div className="rtv-ctree-grid">{leaves.map(chip)}</div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 export default function RTreeViz({ query, staticView, onOpenMap }) {
   const tree = query?.tree || staticView?.disk || null;
   const trace = query?.trace || null;
@@ -436,42 +493,46 @@ export default function RTreeViz({ query, staticView, onOpenMap }) {
 
           <section className="rtv-card">
             <p className="viz-eyebrow mb-2">Árbol · páginas</p>
-            <svg viewBox={`0 0 ${diagram.width} ${diagram.height}`} className="rtv-tree" style={{ maxHeight: 260 }}>
-              {tree.nodes.flatMap((node) => (node.children || []).map((child) => {
-                const a = diagram.pos[node.id];
-                const b = diagram.pos[child];
-                if (!a || !b) return null;
-                const state = nodeState(child, frame);
-                return (
-                  <line
-                    key={`t-${node.id}-${child}`}
-                    x1={a.x + diagram.BOX_W / 2}
-                    y1={a.y + diagram.BOX_H}
-                    x2={b.x + diagram.BOX_W / 2}
-                    y2={b.y}
-                    className={`rtv-tree-edge ${state}`}
-                  />
-                );
-              }))}
-              {tree.nodes.map((node) => {
-                const p = diagram.pos[node.id];
-                if (!p) return null;
-                return (
-                  <g
-                    key={`n-${node.id}`}
-                    transform={`translate(${p.x}, ${p.y})`}
-                    className={`rtv-node ${nodeState(node.id, frame)} ${hover === node.id ? 'is-hover' : ''}`}
-                    style={{ '--mbr-color': colorOf(node) }}
-                    onMouseEnter={() => setHover(node.id)}
-                    onMouseLeave={() => setHover(null)}
-                  >
-                    <rect width={diagram.BOX_W} height={diagram.BOX_H} rx="6" />
-                    <text x={diagram.BOX_W / 2} y={13} textAnchor="middle" className="rtv-node-id">P{node.id}</text>
-                    <text x={diagram.BOX_W / 2} y={24} textAnchor="middle" className="rtv-node-count">{node.count}</text>
-                  </g>
-                );
-              })}
-            </svg>
+            {tree.nodes.filter((node) => node.leaf).length > COMPACT_LEAVES ? (
+              <CompactTree tree={tree} frame={frame} hover={hover} setHover={setHover} colorOf={colorOf} />
+            ) : (
+              <svg viewBox={`0 0 ${diagram.width} ${diagram.height}`} className="rtv-tree" style={{ maxHeight: 260 }}>
+                {tree.nodes.flatMap((node) => (node.children || []).map((child) => {
+                  const a = diagram.pos[node.id];
+                  const b = diagram.pos[child];
+                  if (!a || !b) return null;
+                  const state = nodeState(child, frame);
+                  return (
+                    <line
+                      key={`t-${node.id}-${child}`}
+                      x1={a.x + diagram.BOX_W / 2}
+                      y1={a.y + diagram.BOX_H}
+                      x2={b.x + diagram.BOX_W / 2}
+                      y2={b.y}
+                      className={`rtv-tree-edge ${state}`}
+                    />
+                  );
+                }))}
+                {tree.nodes.map((node) => {
+                  const p = diagram.pos[node.id];
+                  if (!p) return null;
+                  return (
+                    <g
+                      key={`n-${node.id}`}
+                      transform={`translate(${p.x}, ${p.y})`}
+                      className={`rtv-node ${nodeState(node.id, frame)} ${hover === node.id ? 'is-hover' : ''}`}
+                      style={{ '--mbr-color': colorOf(node) }}
+                      onMouseEnter={() => setHover(node.id)}
+                      onMouseLeave={() => setHover(null)}
+                    >
+                      <rect width={diagram.BOX_W} height={diagram.BOX_H} rx="6" />
+                      <text x={diagram.BOX_W / 2} y={13} textAnchor="middle" className="rtv-node-id">P{node.id}</text>
+                      <text x={diagram.BOX_W / 2} y={24} textAnchor="middle" className="rtv-node-count">{node.count}</text>
+                    </g>
+                  );
+                })}
+              </svg>
+            )}
 
             {query?.stats && (
               <div className="grid grid-cols-3 gap-2 mt-3">
