@@ -220,7 +220,7 @@ function nodeState(id, frame) {
    hojas en una cuadrícula agrupada por su nodo padre. */
 const COMPACT_LEAVES = 16;
 
-function CompactTree({ tree, frame, hover, setHover, colorOf }) {
+function CompactTree({ tree, frame, hover, setHover, colorOf, selected, onSelect }) {
   const byId = Object.fromEntries(tree.nodes.map((node) => [node.id, node]));
   const levels = [];
   tree.nodes.forEach((node) => { (levels[node.level] ||= []).push(node); });
@@ -240,8 +240,9 @@ function CompactTree({ tree, frame, hover, setHover, colorOf }) {
       type="button"
       key={node.id}
       data-node={node.id}
-      className={`rtv-chip ${nodeState(node.id, frame)} ${hover === node.id ? 'is-hover' : ''}`}
+      className={`rtv-chip ${nodeState(node.id, frame)} ${hover === node.id ? 'is-hover' : ''} ${selected === node.id ? 'is-selected' : ''}`}
       style={{ '--mbr-color': colorOf(node) }}
+      onClick={() => onSelect(node.id)}
       onMouseEnter={() => setHover(node.id)}
       onMouseLeave={() => setHover(null)}
       title={`P${node.id} · ${node.leaf ? 'hoja' : `nivel ${node.level}`} · ${node.count} entradas`}
@@ -283,6 +284,13 @@ export default function RTreeViz({ query, staticView, onOpenMap }) {
   const [level, setLevel] = useState('all');
   const [hover, setHover] = useState(null);
   const [zoomed, setZoomed] = useState(true);
+  const [selected, setSelected] = useState(null);
+  const [zoomNode, setZoomNode] = useState(false);
+  const toggleSelect = (id) => {
+    setZoomNode(false);
+    setSelected((current) => (current === id ? null : id));
+  };
+  useEffect(() => { setSelected(null); setZoomNode(false); }, [tree]);
 
   useEffect(() => {
     setIndex(0);
@@ -339,7 +347,43 @@ export default function RTreeViz({ query, staticView, onOpenMap }) {
     const h = w * (PLANE_H / PLANE_W);
     return { x: cx - w / 2, y: cy - h / 2, w, h };
   })();
-  const view = zoomed && focus ? focus : { x: 0, y: 0, w: PLANE_W, h: PLANE_H };
+  const byNode = Object.fromEntries(tree.nodes.map((node) => [node.id, node]));
+  const selNode = selected != null ? byNode[selected] : null;
+  const nodeBox = (() => {
+    if (!selNode?.mbr) return null;
+    const [x1, y1, x2, y2] = selNode.mbr;
+    const cx = (proj.x(x1) + proj.x(x2)) / 2;
+    const cy = (proj.y(y1) + proj.y(y2)) / 2;
+    const span = Math.max(30, (proj.x(x2) - proj.x(x1)) * 1.25, (proj.y(y1) - proj.y(y2)) * 1.25 * (PLANE_W / PLANE_H));
+    const w = Math.min(PLANE_W, span);
+    const h = w * (PLANE_H / PLANE_W);
+    return { x: cx - w / 2, y: cy - h / 2, w, h };
+  })();
+  const view = zoomNode && nodeBox ? nodeBox : zoomed && focus ? focus : { x: 0, y: 0, w: PLANE_W, h: PLANE_H };
+
+  // Puntos del subárbol seleccionado (hoja: sus puntos; interno: los de sus hojas)
+  const subtreeLeaves = (id) => {
+    const node = byNode[id];
+    if (!node) return [];
+    return node.leaf ? [node] : (node.children || []).flatMap(subtreeLeaves);
+  };
+  const selLeaves = selNode ? subtreeLeaves(selNode.id) : [];
+  const selLeafIds = new Set(selLeaves.map((leaf) => leaf.id));
+  const selPoints = selLeaves.flatMap((leaf) => leaf.points || []);
+  const parentOf = (id) => tree.nodes.find((node) => (node.children || []).includes(id));
+  const stepOf = (id) => {
+    const read = frames.findIndex((item) => item.current === id);
+    if (read >= 0) return { kind: 'leída', step: read + 1 };
+    const pruned = frames.findIndex((item) => item.prunedNow?.has(id));
+    if (pruned >= 0) return { kind: 'podada', step: pruned + 1 };
+    return null;
+  };
+  const metersBox = (mbr) => {
+    if (!mbr) return null;
+    const [x1, y1, x2, y2] = mbr;
+    const cos = Math.cos((((y1 + y2) / 2) * Math.PI) / 180);
+    return { w: (x2 - x1) * METERS_PER_DEGREE * cos, h: (y2 - y1) * METERS_PER_DEGREE };
+  };
   const z = PLANE_W / view.w;
   const levels = Array.from({ length: height }, (_, i) => i);
   const nodes = [...tree.nodes].sort((a, b) => a.level - b.level);
@@ -446,8 +490,9 @@ export default function RTreeViz({ query, staticView, onOpenMap }) {
                     width={w}
                     height={h}
                     rx={(node.leaf ? 2 : 4) / z}
-                    className={`rtv-mbr ${node.leaf ? 'is-leaf' : 'is-inner'} ${state} ${hover === node.id ? 'is-hover' : ''}`}
+                    className={`rtv-mbr ${node.leaf ? 'is-leaf' : 'is-inner'} ${state} ${hover === node.id ? 'is-hover' : ''} ${selected === node.id ? 'is-selected' : ''}`}
                     style={{ '--mbr-color': colorOf(node) }}
+                    onClick={() => toggleSelect(node.id)}
                     onMouseEnter={() => setHover(node.id)}
                     onMouseLeave={() => setHover(null)}
                   >
@@ -462,9 +507,13 @@ export default function RTreeViz({ query, staticView, onOpenMap }) {
                   key={`p-${i}`}
                   cx={proj.x(lon)}
                   cy={proj.y(lat)}
-                  r={(matchSet.has(`${lat},${lon}`) ? 2.6 : 1.5) / Math.sqrt(z)}
-                  className={`rtv-point ${matchSet.has(`${lat},${lon}`) ? 'is-match' : ''} ${frame?.pruned?.has(leaf) ? 'is-pruned' : ''}`}
-                />
+                  r={(matchSet.has(`${lat},${lon}`) ? 2.6 : selLeafIds.has(leaf) ? 2.4 : 1.5) / Math.sqrt(z)}
+                  className={`rtv-point ${matchSet.has(`${lat},${lon}`) ? 'is-match' : ''} ${frame?.pruned?.has(leaf) ? 'is-pruned' : ''} ${selNode ? (selLeafIds.has(leaf) ? 'is-selected' : 'is-dim') : ''}`}
+                  style={selLeafIds.has(leaf) ? { '--mbr-color': colorOf(byNode[leaf]) } : undefined}
+                  onClick={() => toggleSelect(leaf)}
+                >
+                  <title>{`(${lat.toFixed(5)}, ${lon.toFixed(5)}) · hoja P${leaf}`}</title>
+                </circle>
               ))}
 
               {/* vecinos k-NN */}
@@ -494,7 +543,7 @@ export default function RTreeViz({ query, staticView, onOpenMap }) {
           <section className="rtv-card">
             <p className="viz-eyebrow mb-2">Árbol · páginas</p>
             {tree.nodes.filter((node) => node.leaf).length > COMPACT_LEAVES ? (
-              <CompactTree tree={tree} frame={frame} hover={hover} setHover={setHover} colorOf={colorOf} />
+              <CompactTree tree={tree} frame={frame} hover={hover} setHover={setHover} colorOf={colorOf} selected={selected} onSelect={toggleSelect} />
             ) : (
               <svg viewBox={`0 0 ${diagram.width} ${diagram.height}`} className="rtv-tree" style={{ maxHeight: 260 }}>
                 {tree.nodes.flatMap((node) => (node.children || []).map((child) => {
@@ -520,8 +569,9 @@ export default function RTreeViz({ query, staticView, onOpenMap }) {
                     <g
                       key={`n-${node.id}`}
                       transform={`translate(${p.x}, ${p.y})`}
-                      className={`rtv-node ${nodeState(node.id, frame)} ${hover === node.id ? 'is-hover' : ''}`}
-                      style={{ '--mbr-color': colorOf(node) }}
+                      className={`rtv-node ${nodeState(node.id, frame)} ${hover === node.id ? 'is-hover' : ''} ${selected === node.id ? 'is-selected' : ''}`}
+                      style={{ '--mbr-color': colorOf(node), cursor: 'pointer' }}
+                      onClick={() => toggleSelect(node.id)}
                       onMouseEnter={() => setHover(node.id)}
                       onMouseLeave={() => setHover(null)}
                     >
@@ -532,6 +582,53 @@ export default function RTreeViz({ query, staticView, onOpenMap }) {
                   );
                 })}
               </svg>
+            )}
+
+            {selNode ? (() => {
+              const parent = parentOf(selNode.id);
+              const size = metersBox(selNode.mbr);
+              const paso = q ? stepOf(selNode.id) : null;
+              const fmt = (m) => (m < 1000 ? `${Math.round(m)} m` : `${(m / 1000).toFixed(2)} km`);
+              return (
+                <div className="rtv-detail" style={{ '--mbr-color': colorOf(selNode) }}>
+                  <div className="rtv-detail-head">
+                    <strong>P{selNode.id}</strong>
+                    <span>{selNode.leaf ? 'hoja' : selNode.level === 0 ? 'raíz' : `nodo interno · nivel ${selNode.level}`}</span>
+                    {parent && <button type="button" onClick={() => toggleSelect(parent.id)}>padre P{parent.id}</button>}
+                    <button type="button" className="rtv-detail-close" onClick={() => setSelected(null)} title="Quitar selección">×</button>
+                  </div>
+                  <dl>
+                    <div><dt>{selNode.leaf ? 'Puntos' : 'Hijos'}</dt><dd>{selNode.count}</dd></div>
+                    {!selNode.leaf && <div><dt>Puntos en el subárbol</dt><dd>{selPoints.length}</dd></div>}
+                    {selNode.mbr && (
+                      <>
+                        <div><dt>MBR lon</dt><dd>{selNode.mbr[0].toFixed(5)} … {selNode.mbr[2].toFixed(5)}</dd></div>
+                        <div><dt>MBR lat</dt><dd>{selNode.mbr[1].toFixed(5)} … {selNode.mbr[3].toFixed(5)}</dd></div>
+                        <div><dt>Tamaño aprox.</dt><dd>{fmt(size.w)} × {fmt(size.h)}</dd></div>
+                      </>
+                    )}
+                    {q && <div><dt>En esta consulta</dt><dd>{paso ? `${paso.kind} en el paso ${paso.step}` : 'no se leyó'}</dd></div>}
+                  </dl>
+                  <div className="rtv-detail-actions">
+                    {selNode.mbr && (
+                      <button type="button" onClick={() => setZoomNode((value) => !value)}>
+                        {zoomNode ? 'Ver todo' : 'Acercar al MBR'}
+                      </button>
+                    )}
+                    {paso && <button type="button" onClick={() => go(paso.step - 1)}>Ir al paso {paso.step}</button>}
+                  </div>
+                  {selNode.leaf && (
+                    <div className="rtv-detail-points">
+                      {(selNode.points || []).slice(0, 12).map(([lat, lon], i) => (
+                        <span key={i} className={matchSet.has(`${lat},${lon}`) ? 'is-match' : ''}>({lat.toFixed(4)}, {lon.toFixed(4)})</span>
+                      ))}
+                      {(selNode.points || []).length > 12 && <span className="rtv-detail-more">+{selNode.points.length - 12} más</span>}
+                    </div>
+                  )}
+                </div>
+              );
+            })() : (
+              <p className="rtv-hint">Haz clic en una página, en su MBR o en un punto para ver sus puntos y su información.</p>
             )}
 
             {query?.stats && (
