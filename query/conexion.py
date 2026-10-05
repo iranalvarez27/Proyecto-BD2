@@ -677,13 +677,8 @@ class Conexion:
                 rids = [rid for rid, _p in rtree.polygon_search(patron["poligono"], stats, trace)]
                 detalle = (f"interseccion con poligono en indice rtree sobre '{patron['columna']}' "
                            f"({len(patron['poligono'])} vertices")
-            # leer en orden fisico: menos saltos de pagina y mismo orden que un escaneo
-            rids.sort(key=lambda r: (r.page_id, r.slot_id))
             filas = []
-            for rid in rids:
-                record = info.storage.read(rid, info.schema)
-                if record is None:
-                    continue
+            for _rid, record in self._leer_bitmap(info, RidBitmap.from_rids(rids)):
                 fila = dict(zip(nombres_col, record.values))
                 if self.cumple_where(where, fila):
                     filas.append(fila)
@@ -1053,13 +1048,8 @@ class Conexion:
         if tipo_indice == "clustered":
             record = indice.search(valor)
             return [dict(zip(nombres_col, record.values))] if record is not None else []
-        rids = indice.search(valor)
-        filas = []
-        for rid in rids:
-            record = info.storage.read(rid, info.schema)
-            if record is not None:
-                filas.append(dict(zip(nombres_col, record.values)))
-        return filas
+        rids = RidBitmap.from_rids(indice.search(valor))
+        return [dict(zip(nombres_col, r.values)) for _rid, r in self._leer_bitmap(info, rids)]
 
     def _ejecutar_primer_join(self, tabla1: str, tabla2: str, join: JoinClause, tmp_dir: str) -> list:
         info1 = self.catalog.get_table(tabla1)
