@@ -35,7 +35,7 @@ flowchart TD
 | Archivos | `storage/` | Heap File con reutilización de espacio libre y Sequential File con MAIN, AUX, eliminación lazy y reorganización. |
 | Índices | `index/` | B+ Tree agrupado y no agrupado, hash extendible y R-Tree, todos paginados en disco. |
 | Almacenamiento | `engine/` | Buffer pool de páginas de 4 KB, `Segment` (archivo de páginas con free list y metapágina) y `FileManager` (lectura y escritura en disco). |
-| Común | `common/` | Tipos de datos, slotted page, formato de registros y funciones geométricas. |
+| Común | `common/` | Tipos de datos, slotted page, formato de registros, bitmap de RIDs y funciones geométricas. |
 
 ### Flujo de una consulta
 
@@ -61,6 +61,7 @@ Proyecto-BD2/
 │   ├── page.py                  # Slotted page de 4096 bytes
 │   ├── record.py                # Serialización binaria de registros
 │   ├── geo.py                   # MBR, Haversine, euclidiana, cotas punto-MBR y punto en polígono
+│   ├── bitmap.py                # Bitmap de RIDs para combinar índices y leer cada página una vez
 │   └── datos_lima.py            # Generador de puntos de interés en Lima
 ├── engine/                      # Gestión de almacenamiento y memoria externa
 │   ├── file_manager.py          # Lectura y escritura de páginas en disco
@@ -409,7 +410,7 @@ SELECT * FROM tiendas WHERE dentro_de(ubicacion,
 | `WHERE dentro_de(col, POLYGON(...))` | `IndexScan (R-Tree)`, intersección con polígono |
 | `ORDER BY distancia(col, POINT) LIMIT k` | `IndexScan (R-Tree)`, k-NN best-first |
 
-El resto del `WHERE` unido con `AND` se aplica como filtro sobre los candidatos. Si la columna no tiene R-Tree, o el patrón está dentro de un `OR` o un `NOT`, la consulta se resuelve con escaneo secuencial y devuelve el mismo resultado. `EXPLAIN` muestra el plan elegido, los nodos visitados y los candidatos.
+El resto del `WHERE` unido con `AND` se aplica como filtro sobre los candidatos. Dentro de un `OR`, el R-Tree se combina con los índices de las otras ramas mediante el bitmap de RIDs. Si la columna no tiene R-Tree, si el patrón está dentro de un `NOT` o si alguna rama del `OR` no tiene índice, la consulta se resuelve con escaneo secuencial y devuelve el mismo resultado. `EXPLAIN` muestra el plan elegido, los nodos visitados y los candidatos.
 
 Las tablas e índices creados por SQL ahora persisten entre reinicios en `data/catalog.json`.
 
