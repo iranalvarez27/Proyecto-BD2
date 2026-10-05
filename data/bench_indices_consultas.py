@@ -108,6 +108,11 @@ def medir(n, seed):
     dt, _ = cronometrar(lambda: [hash_car.insert(f[2], rid) for f, rid in zip(data, rids)])
     res["construccion"]["hash_carrera"] = {"ms": 1000 * dt, "kb": kb(f"{d}/hcar.idx")}
 
+    # B+ no agrupado sobre carrera, para comparar el hash con duplicados contra lo mismo
+    bplus_car = BPlusTree(pool, f"{d}/bpcar.idx", DataType.VARCHAR, unique=False)
+    bplus_car.bulk_load(sorted(((f[2], rid) for f, rid in zip(data, rids)),
+                               key=lambda p: (p[0], p[1].page_id, p[1].slot_id)))
+
     res["tabla_kb"] = {"heap": kb(f"{d}/heap.bin"), "sequential": kb(f"{d}/main.bin", f"{d}/aux.bin")}
 
     # igualdad por id (una fila) y por carrera (muchas filas, solo hash)
@@ -118,11 +123,19 @@ def medir(n, seed):
         c = leer_rids(heap, hash_id.search(k))
         assert a.values == b[0].values == c[0].values, f"igualdad {k}"
     carreras = [rng.choice(sorted({f[2] for f in data})) for _ in range(N_IGUALDAD)]
+    for c in carreras[:3]:
+        a = ids_de(leer_rids(heap, hash_car.search(c)))
+        b = ids_de(leer_rids(heap, bplus_car.search(c)))
+        e = ids_de(r for r in heap.scan(SCHEMA) if r.values[2] == c)
+        assert a == b == e, f"igualdad carrera {c}"
     res["igualdad_ms"] = {
         "bplus_agrupado": promedio_ms(lambda k: clustered.search(k), claves),
         "bplus_no_agrupado": promedio_ms(lambda k: leer_rids(heap, bplus.search(k)), claves),
         "hash_id": promedio_ms(lambda k: leer_rids(heap, hash_id.search(k)), claves),
         "hash_carrera": promedio_ms(lambda c: leer_rids(heap, hash_car.search(c)), carreras),
+        "bplus_carrera": promedio_ms(lambda c: leer_rids(heap, bplus_car.search(c)), carreras),
+        "heap_scan_carrera": promedio_ms(
+            lambda c: [r for r in heap.scan(SCHEMA) if r.values[2] == c], carreras),
         "filas_por_carrera": n / len({f[2] for f in data}),
     }
 
