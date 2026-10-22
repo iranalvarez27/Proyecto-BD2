@@ -39,7 +39,7 @@ class Lexer:
                 tokens.append(self.leer_numero())
                 continue
 
-            if c == "'":
+            if c == "'" or c == '"':
                 tokens.append(self.leer_string())
                 continue
 
@@ -71,9 +71,10 @@ class Lexer:
 
     def leer_string(self) -> Token:
         inicio = self._pos
+        comilla = self.actual()
         self.avanzar()
         contenido = []
-        while self.actual() != "'":
+        while self.actual() != comilla:
             if self.actual() == "":
                 raise LexerError(f"string sin cerrar en posicion {inicio}")
             contenido.append(self.actual())

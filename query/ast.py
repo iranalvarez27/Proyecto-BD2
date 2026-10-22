@@ -48,6 +48,12 @@ class SpatialCondition:
     valor: object = None
 
 @dataclass
+class MatchCondition:
+    columna: str
+    consulta: str
+    metodo: str  # "TF_IDF" | "BM25"
+
+@dataclass
 class BinaryCondition:
     izquierda: object
     operador: TokenType
@@ -84,7 +90,7 @@ class SelectNode:
     group_by: str = None
     joins: list = field(default_factory=list)
     limit: int = None
-    # funciones espaciales en la lista del SELECT, p. ej. distancia(...) AS d
+    # funciones en la lista del SELECT, p. ej. distancia(...) AS d o SCORE() AS relevancia
     extras: list = field(default_factory=list)
 
 
@@ -158,5 +164,5 @@ class DropTableNode:
 class CreateIndexNode:
     tabla: str
     columna: str
-    tipo_indice: str = "bplus"  # "bplus" | "hash" | "rtree"
+    tipo_indice: str = "bplus"  # "bplus" | "hash" | "rtree" | "inverted"
     nombre: str = None

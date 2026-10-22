@@ -1,6 +1,6 @@
 from query.tokens import Token, TokenType
 from query.ast import (
-    SelectNode, InsertNode, DeleteNode, UpdateNode, Condition, BinaryCondition, NotCondition,
+    SelectNode, InsertNode, DeleteNode, UpdateNode, Condition, BinaryCondition, NotCondition, MatchCondition,
     OrderBy, JoinClause, AggregateCall, ColumnRef, SubquerySelect,
     BeginNode, CommitNode, RollbackNode, ExplainNode, ColumnDef, CreateTableNode, DropTableNode,
     PointLiteral, PolygonLiteral, FuncCall, SpatialCondition, CreateIndexNode, SetVarNode,
@@ -10,7 +10,8 @@ class ParserError(Exception):
     pass
 
 OPERADORES_COMP = [TokenType.EQ, TokenType.NEQ, TokenType.LT, TokenType.LTE, TokenType.GT, TokenType.GTE]
-TIPOS_INDICE_CREATE_INDEX = {"btree": "bplus", "bplus": "bplus", "hash": "hash", "rtree": "rtree"}
+METODOS_MATCH = {"TF_IDF", "BM25"}
+TIPOS_INDICE_CREATE_INDEX = {"btree": "bplus", "bplus": "bplus", "hash": "hash", "rtree": "rtree", "inverted": "inverted"}
 FUNCIONES_AGREGADAS = {"count", "sum", "avg"}
 LAT_MIN, LAT_MAX = -90.0, 90.0
 LON_MIN, LON_MAX = -180.0, 180.0
@@ -158,7 +159,7 @@ class Parser:
         return DropTableNode(tabla)
 
     def parse_create_index(self):
-        # CREATE INDEX [nombre] ON tabla (columna) [USING BTREE | HASH | RTREE]
+        # CREATE INDEX [nombre] ON tabla (columna) [USING BTREE | HASH | RTREE | INVERTED]
         self.esperar(TokenType.CREATE)
         self.esperar(TokenType.INDEX)
         nombre = None
@@ -176,7 +177,7 @@ class Parser:
             tok = self.esperar(TokenType.IDENT)
             valor = tok.value.lower()
             if valor not in TIPOS_INDICE_CREATE_INDEX:
-                raise ParserError(f"pos {tok.pos}: USING debe ser BTREE, HASH o RTREE, salio '{tok.value}'")
+                raise ParserError(f"pos {tok.pos}: USING debe ser BTREE, HASH, RTREE o INVERTED, salio '{tok.value}'")
             tipo_indice = TIPOS_INDICE_CREATE_INDEX[valor]
         return CreateIndexNode(tabla, columna, tipo_indice, nombre)
 
@@ -477,6 +478,9 @@ class Parser:
             self.esperar(TokenType.RPAREN)
             return expr
 
+        if self.coincide(TokenType.MATCH):
+            return self.parse_match()
+        
         if self.coincide(TokenType.IDENT) and self.siguiente().type == TokenType.LPAREN:
             funcion = self.parse_func_call()
             if self.actual().type in OPERADORES_COMP:
@@ -528,6 +532,23 @@ class Parser:
         op = self.avanzar().type
         valor = self.parse_valor()
         return Condition(col, op, valor)
+
+    def parse_match(self):
+        self.esperar(TokenType.MATCH)
+        self.esperar(TokenType.LPAREN)
+        columna = self.parse_columna_ref()
+        self.esperar(TokenType.COMMA)
+        consulta = self.esperar(TokenType.STRING).value
+        self.esperar(TokenType.RPAREN)
+        if not self.coincide(TokenType.USING):
+            t = self.actual()
+            raise ParserError(f"pos {t.pos}: MATCH necesita USING TF_IDF o USING BM25")
+        self.avanzar()
+        tok = self.esperar(TokenType.IDENT)
+        metodo = tok.value.upper()
+        if metodo not in METODOS_MATCH:
+            raise ParserError(f"pos {tok.pos}: USING debe ser TF_IDF o BM25, salio '{tok.value}'")
+        return MatchCondition(columna, consulta, metodo)
 
     def parse_valor(self):
         if self.coincide(TokenType.MINUS) or self.coincide(TokenType.NUMBER):

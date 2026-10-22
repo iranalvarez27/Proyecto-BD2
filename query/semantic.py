@@ -2,10 +2,10 @@ from query.ast import (
     SelectNode, InsertNode, DeleteNode, UpdateNode, Condition, NotCondition, BinaryCondition, OrderBy,
     BeginNode, CommitNode, RollbackNode, ExplainNode, CreateTableNode, DropTableNode,
     PointLiteral, PolygonLiteral, FuncCall, SpatialCondition, CreateIndexNode,
-    AggregateCall, ColumnRef, SubquerySelect, SetVarNode,
+    AggregateCall, ColumnRef, SubquerySelect, SetVarNode, MatchCondition,
 )
 from query.tokens import TokenType
-from query.catalog import Catalog, INDEX_RTREE
+from query.catalog import Catalog, INDEX_RTREE, INDEX_INVERTED
 from common.types import Schema, DataType
 
 
@@ -18,6 +18,8 @@ FUNCIONES_DISTANCIA = {"distancia", "distancia_geo", "distancia_haversine", "dis
 FUNCIONES_POLIGONO = {"dentro_de"}
 FUNCIONES_ESPACIALES = FUNCIONES_DISTANCIA | FUNCIONES_POLIGONO
 FUNCIONES_AGREGADAS = {"count", "sum", "avg"}
+METODOS_TEXTO = {"TF_IDF", "BM25"}
+TIPOS_TEXTO = (DataType.CHAR, DataType.VARCHAR)
 TIPOS_NUMERICOS = {DataType.SMALLINT, DataType.INT, DataType.BIGINT, DataType.FLOAT, DataType.DOUBLE}
 
 def resolver_tipo_columna(tipo_texto: str, tamano: int | None) -> tuple[DataType, int]:
@@ -162,6 +164,8 @@ class SemanticAnalyzer:
             elif not self.tipo_compatible(campo.type, condicion.valor):
                 raise SemanticError(f"tipo incompatible en WHERE: la columna '{condicion.columna}' "
                     f"es {campo.type.value} pero se comparo con '{condicion.valor}' ({type(condicion.valor).__name__})")
+        elif isinstance(condicion, MatchCondition):
+            raise SemanticError("MATCH junto con JOIN todavia no esta soportado")
         else:
             raise SemanticError("condicion WHERE erronea")
 
@@ -249,6 +253,64 @@ class SemanticAnalyzer:
                 raise SemanticError(f"la comparacion de {condicion.funcion.nombre}(...) necesita un valor numerico, "
                     f"se dio '{condicion.valor}' ({type(condicion.valor).__name__})")
 
+    def matches_en(self, condicion) -> list:
+        if isinstance(condicion, MatchCondition):
+            return [condicion]
+        if isinstance(condicion, BinaryCondition):
+            return self.matches_en(condicion.izquierda) + self.matches_en(condicion.derecha)
+        if isinstance(condicion, NotCondition):
+            return self.matches_en(condicion.interior)
+        return []
+
+    def matches_en_and(self, condicion) -> list:
+        if isinstance(condicion, MatchCondition):
+            return [condicion]
+        if isinstance(condicion, BinaryCondition) and condicion.operador == TokenType.AND:
+            return self.matches_en_and(condicion.izquierda) + self.matches_en_and(condicion.derecha)
+        return []
+
+    def validar_posicion_match(self, condicion) -> None:
+        todos = self.matches_en(condicion)
+        if not todos:
+            return
+        if len(todos) != len(self.matches_en_and(condicion)):
+            raise SemanticError("MATCH solo se puede combinar con otras condiciones mediante AND (no dentro de OR ni de NOT)")
+        if len(todos) > 1:
+            raise SemanticError("solo se admite un MATCH por consulta")
+
+    def validar_match(self, schema: Schema, condicion: MatchCondition) -> None:
+        self.validar_columna_existe(schema, condicion.columna)
+        col = schema.columns[schema.column_index(condicion.columna)]
+        if col.type not in TIPOS_TEXTO:
+            raise SemanticError(f"MATCH solo aplica a columnas de texto (CHAR/VARCHAR): "
+                f"'{col.name}' es {col.type.value}")
+        if not condicion.consulta.strip():
+            raise SemanticError("la consulta de MATCH no puede estar vacia")
+        if condicion.metodo not in METODOS_TEXTO:
+            raise SemanticError(f"metodo de MATCH desconocido '{condicion.metodo}' "
+                f"(disponibles: {', '.join(sorted(METODOS_TEXTO))})")
+        tabla = schema.table_name
+        if not self._catalog.tiene_indice(tabla, col.name):
+            raise SemanticError(f"la columna '{col.name}' de '{tabla}' no tiene indice invertido: "
+                f"crealo con CREATE INDEX ON {tabla} ({col.name}) USING INVERTED")
+        _, tipo = self._catalog.get_indice(tabla, col.name)
+        if tipo != INDEX_INVERTED:
+            raise SemanticError(f"MATCH necesita un indice invertido en '{col.name}', pero tiene un indice {tipo}")
+
+    def validar_score(self, nodo: SelectNode, funcion: FuncCall, schema: Schema) -> None:
+        if funcion.argumentos:
+            raise SemanticError("SCORE() no recibe argumentos")
+        if nodo.where is None or not self.matches_en(nodo.where):
+            raise SemanticError("SCORE() solo se puede usar en una consulta con MATCH en el WHERE")
+        if funcion.alias is not None and funcion.alias in self.nombres_columnas(schema):
+            raise SemanticError(f"el alias '{funcion.alias}' de SCORE() ya es una columna de '{schema.table_name}'")
+
+    def alias_score(self, nodo: SelectNode):
+        for funcion in nodo.extras:
+            if funcion.nombre == "score":
+                return funcion.alias or "score"
+        return None
+
     def validar_where(self, schema: Schema, condicion) -> None:
         if isinstance(condicion, BinaryCondition):
             self.validar_where(schema, condicion.izquierda)
@@ -257,6 +319,8 @@ class SemanticAnalyzer:
             self.validar_where(schema, condicion.interior)
         elif isinstance(condicion, SpatialCondition):
             self.validar_spatial_condition(schema, condicion)
+        elif isinstance(condicion, MatchCondition):
+            self.validar_match(schema, condicion)
         elif isinstance(condicion, Condition):
             self.validar_columna_existe(schema, condicion.columna)
             idx = schema.column_index(condicion.columna)
@@ -320,8 +384,15 @@ class SemanticAnalyzer:
             self.validar_join(nodo, schema)
             return
 
+        scores = 0
         for funcion in nodo.extras:
-            self.validar_func_espacial(schema, funcion)
+            if funcion.nombre == "score":
+                scores += 1
+                if scores > 1:
+                    raise SemanticError("SCORE() solo puede aparecer una vez en el SELECT")
+                self.validar_score(nodo, funcion, schema)
+            else:
+                self.validar_func_espacial(schema, funcion)
 
         columnas_planas = [c for c in nodo.columnas if isinstance(c, str)] if nodo.columnas != ["*"] else []
         agregados = [c for c in nodo.columnas if isinstance(c, AggregateCall)] if nodo.columnas != ["*"] else []
@@ -344,11 +415,14 @@ class SemanticAnalyzer:
                 raise SemanticError("no se pueden combinar columnas sueltas con funciones agregadas sin GROUP BY")
 
         if nodo.where is not None:
+            self.validar_posicion_match(nodo.where)
             self.validar_where(schema, nodo.where)
 
         if nodo.order_by is not None:
             if nodo.order_by.funcion is not None:
                 self.validar_func_espacial(schema, nodo.order_by.funcion)
+            elif nodo.order_by.columna == self.alias_score(nodo):
+                pass
             else:
                 self.validar_columna_existe(schema, nodo.order_by.columna)
 
@@ -373,6 +447,8 @@ class SemanticAnalyzer:
 
     def validar_delete(self, nodo: DeleteNode) -> None:
         schema = self.get_schema(nodo.tabla)
+        if nodo.where is not None and self.matches_en(nodo.where):
+            raise SemanticError("MATCH solo se puede usar en un SELECT")
         if nodo.where is not None:
             self.validar_where(schema, nodo.where)
 
@@ -395,6 +471,8 @@ class SemanticAnalyzer:
                 raise SemanticError(f"UPDATE '{nodo.tabla}': la columna '{columna}' es {col.type.value} "
                     f"pero se dio '{valor}' ({type(valor).__name__})")
 
+        if nodo.where is not None and self.matches_en(nodo.where):
+            raise SemanticError("MATCH solo se puede usar en un SELECT")
         if nodo.where is not None:
             self.validar_where(schema, nodo.where)
 
@@ -434,5 +512,9 @@ class SemanticAnalyzer:
             if col.type != DataType.POINT:
                 raise SemanticError(f"CREATE INDEX ... USING RTREE solo aplica a columnas POINT "
                     f"('{nodo.columna}' es {col.type.value})")
+        elif nodo.tipo_indice == INDEX_INVERTED:
+            if col.type not in TIPOS_TEXTO:
+                raise SemanticError(f"CREATE INDEX ... USING INVERTED solo aplica a columnas de texto "
+                    f"(CHAR/VARCHAR) ('{nodo.columna}' es {col.type.value})")
         elif col.type == DataType.POINT:
             raise SemanticError(f"la columna '{nodo.columna}' es POINT: usa USING RTREE (no BTREE/HASH)")

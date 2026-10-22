@@ -8,6 +8,7 @@ INDEX_BPLUS = "bplus"
 INDEX_HASH = "hash"
 INDEX_CLUSTERED = "clustered"
 INDEX_RTREE = "rtree"
+INDEX_INVERTED = "inverted"
 
 @dataclass
 class TableInfo:
@@ -36,7 +37,7 @@ class Catalog:
     def register_index(self,tabla: str,columna: str,indice: object,tipo_indice: str,) -> None:
         info = self.get_table(tabla)
         info.schema.column_index(columna)
-        if tipo_indice not in (INDEX_BPLUS, INDEX_HASH, INDEX_CLUSTERED, INDEX_RTREE):
+        if tipo_indice not in (INDEX_BPLUS, INDEX_HASH, INDEX_CLUSTERED, INDEX_RTREE, INDEX_INVERTED):
             raise ValueError(f"tipo de indice invalido: '{tipo_indice}'")
         info.indices[columna] = (indice, tipo_indice)
 
