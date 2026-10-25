@@ -1,5 +1,9 @@
 import heapq
 import math
+import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
 class BM25:
@@ -16,7 +20,7 @@ class BM25:
         n = self._indice.total_docs()
         return math.log((n-df+ 0.5)/(df+0.5)+1)
 
-    def rankear(self, terminos: list, k: int) -> list:
+    def rankear(self, terminos: list[str], k: int) -> list[tuple[int, float]]:
         if k <= 0 or not terminos:
             return []
         avgdl = self._indice.longitud_promedio()
