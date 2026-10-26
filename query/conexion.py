@@ -7,7 +7,7 @@ from query.lexer import Lexer, LexerError
 from query.parser import Parser, ParserError
 from query.semantic import SemanticAnalyzer, SemanticError, resolver_tipo_columna
 from query import catalog_store
-from query.catalog import (Catalog, TableInfo, STORAGE_HEAP, STORAGE_SEQUENTIAL, INDEX_BPLUS, INDEX_HASH, INDEX_CLUSTERED, INDEX_RTREE,)
+from query.catalog import (Catalog, TableInfo, STORAGE_HEAP, STORAGE_SEQUENTIAL, INDEX_BPLUS, INDEX_HASH, INDEX_CLUSTERED, INDEX_RTREE, INDEX_INVERTED,)
 from query.ast import (SelectNode, InsertNode, DeleteNode, UpdateNode, Condition, NotCondition, BinaryCondition,BeginNode, CommitNode,RollbackNode, ExplainNode, CreateTableNode, DropTableNode,
                         PointLiteral, PolygonLiteral, FuncCall, SpatialCondition, CreateIndexNode, AggregateCall, ColumnRef, SubquerySelect, JoinClause,
                         SetVarNode,)
@@ -22,6 +22,7 @@ from index.clustered_bplus_tree import ClusteredBPlusTree
 from index.extendible_hash import ExtendibleHash
 from index.hash_utils import UnhashableKeyType
 from index.rtree import RTree
+from index.inverted_index import IndiceInvertido
 from index.key_codec import INT64_MAX, INT64_MIN, KeyTooLong, KeyTypeMismatch, UnorderableKey
 from storage.heap_file import HeapFile
 from storage.sequential_file import SequentialFile
@@ -1598,6 +1599,9 @@ class Conexion:
         if nodo.tipo_indice == INDEX_RTREE:
             idx_path = os.path.join(self.data_dir, f"{nodo.tabla}_{nodo.columna}_rtree.idx")
             indice = RTree(self.pool, idx_path)
+        elif nodo.tipo_indice == INDEX_INVERTED:
+            base = os.path.join(self.data_dir, f"{nodo.tabla}_{nodo.columna}_inverted")
+            indice = IndiceInvertido(self.pool, base)
         elif nodo.tipo_indice == INDEX_HASH:
             idx_path = os.path.join(self.data_dir, f"{nodo.tabla}_{nodo.columna}_hash.idx")
             indice = ExtendibleHash(self.pool, idx_path)
@@ -1616,7 +1620,10 @@ class Conexion:
         self.catalog.register_index(nodo.tabla, nodo.columna, indice, nodo.tipo_indice)
         self._persistir_tabla(nodo.tabla)
 
+        detalle = f"{len(pares)} entradas cargadas"
+        if nodo.tipo_indice == INDEX_INVERTED and indice.estadisticas:
+            e = indice.estadisticas
+            detalle += f"; SPIMI: {e['bloques']} bloque(s) fusionados, {e['terminos']} terminos, {e['postings']} postings"
         self.plan.append(
-            f"CREATE INDEX {nodo.tipo_indice} sobre '{nodo.tabla}.{nodo.columna}' "
-            f"({len(pares)} entradas cargadas)")
+            f"CREATE INDEX {nodo.tipo_indice} sobre '{nodo.tabla}.{nodo.columna}' ({detalle})")
         return {"operacion": "CREATE INDEX", "tabla": nodo.tabla, "columna": nodo.columna, "filas_afectadas": 0}

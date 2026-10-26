@@ -6,8 +6,10 @@ from index.bplus_tree import BPlusTree
 from index.clustered_bplus_tree import ClusteredBPlusTree
 from index.extendible_hash import ExtendibleHash
 from index.rtree import RTree
+from index.inverted_index import IndiceInvertido, base_desde_archivo
+from text.preprocesamiento import IDIOMA_POR_DEFECTO
 from query.catalog import (Catalog, TableInfo, STORAGE_HEAP, STORAGE_SEQUENTIAL,
-                           INDEX_BPLUS, INDEX_HASH, INDEX_CLUSTERED, INDEX_RTREE)
+                           INDEX_BPLUS, INDEX_HASH, INDEX_CLUSTERED, INDEX_RTREE, INDEX_INVERTED)
 from storage.heap_file import HeapFile
 from storage.sequential_file import SequentialFile
 
@@ -41,12 +43,16 @@ def escribir(data_dir: str, contenido: dict) -> None:
 def entrada_de_tabla(info: TableInfo) -> dict:
     indices = []
     for columna, (indice, tipo) in info.indices.items():
-        indices.append({
+        entrada = {
             "columna": columna,
             "tipo": tipo,
             "archivo": os.path.basename(indice.file_paths()[0]),
             "unique": bool(getattr(indice, "_unique", False)),
-        })
+        }
+        if tipo == INDEX_INVERTED:
+            entrada["idioma"] = indice.idioma
+            entrada["stemming"] = indice.stemming
+        indices.append(entrada)
     return {
         "storage": info.tipo_storage,
         "key_column": info.key_column,
@@ -111,6 +117,9 @@ def cargar(catalog: Catalog, pool, data_dir: str) -> list:
                 indice = ExtendibleHash(pool, ruta)
             elif tipo == INDEX_RTREE:
                 indice = RTree(pool, ruta)
+            elif tipo == INDEX_INVERTED:
+                indice = IndiceInvertido(pool, base_desde_archivo(ruta), idioma=ind.get("idioma", IDIOMA_POR_DEFECTO),
+                                         stemming=ind.get("stemming", True))
             else:
                 indice = BPlusTree(pool, ruta, col.type, unique=ind.get("unique", False))
             _reconstruir_si_vacio(indice, tipo, info, columna)

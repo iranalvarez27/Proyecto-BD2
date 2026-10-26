@@ -25,6 +25,7 @@ from query.catalog import (
     INDEX_HASH,
     INDEX_CLUSTERED,
     INDEX_RTREE,
+    INDEX_INVERTED,
 )
 from query import catalog_store
 from query.conexion import Conexion
@@ -230,7 +231,8 @@ class EngineAdapter:
                 idx_list.append({
                     "name": f"idx_{table_name}_{col_name}" + ("_clustered" if is_clustered else ""),
                     "type": ("BTREE" if idx_type in (INDEX_BPLUS, INDEX_CLUSTERED)
-                             else "RTREE" if idx_type == INDEX_RTREE else "HASH"),
+                             else "RTREE" if idx_type == INDEX_RTREE
+                             else "INVERTED" if idx_type == INDEX_INVERTED else "HASH"),
                     "column": col_name,
                     "clustered": is_clustered,
                 })
