@@ -3,6 +3,7 @@ __pycache__/
 *.docx
 
 *.txt
+!text/stopwords/*.txt
 *.dat
 *.db
 *.bin
@@ -14,6 +15,8 @@ data/*
 !data/plot_spatial.py
 !data/benchmark_charts.py
 !data/bench_indices_consultas.py
+!data/preparar_amazon.py
+!data/test_preparar_amazon.py
 node_modules/
 .DS_Store
 storage/DOCUMENTACION.md
