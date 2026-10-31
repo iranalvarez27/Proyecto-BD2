@@ -1,0 +1,14 @@
+semilla: 42
+tamanos: [1000, 10000, 100000]
+k: 10
+
+vector:
+  consultas: 100
+  recall_objetivo: 0.9
+  hnsw: {M: 16, efConstruction: 200}
+  ivf: {nlist: sqrt}
+  barrido:
+    efSearch: [10, 16, 32, 64, 128, 256]
+    nprobe: [1, 2, 4, 8, 16, 32, 64, 128, 256]
+  # valores elegidos con vector_params.py
+  busqueda: {}
