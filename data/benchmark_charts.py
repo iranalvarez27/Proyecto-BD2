@@ -476,6 +476,7 @@ def generar_todas_las_graficas(resultados: dict, out_dir: str = None) -> dict:
 
 
 def main():
+    from data.bench_relational import run_all, save_results, generar_graficas_relacionales, CHARTS_DIR
     parser = argparse.ArgumentParser(description="Benchmark y graficas de la Parte 1 (Seccion 2.1.6)")
     parser.add_argument("--sizes", nargs="+", default=["1k", "10k", "100k"],
                         help="Tamanos de dataset a evaluar (ej. 1k 10k 100k)")
@@ -499,18 +500,19 @@ def main():
     sizes.sort()
 
     t0 = time.perf_counter()
-    resultados = run(sizes, args.queries)
+    resultados = run_all(sizes, args.queries)
     t_total = time.perf_counter() - t0
 
     json_path = os.path.join(DATA_DIR, "relational_benchmark_results.json")
-    save_results(resultados, json_path)
+    csv_path = os.path.join(DATA_DIR, "relational_benchmark_results.csv")
+    save_results(resultados, json_path, csv_path)
 
     print(f"\n{'=' * 55}")
     print(f"  BENCHMARK FINALIZADO EN {t_total:.2f} SEGUNDOS")
     print(f"{'=' * 55}")
 
     if args.plot:
-        generar_todas_las_graficas(resultados)
+        generar_graficas_relacionales(resultados, CHARTS_DIR)
 
 
 if __name__ == "__main__":

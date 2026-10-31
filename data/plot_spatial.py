@@ -98,9 +98,9 @@ def grafica_construccion_indices(data: dict, out_dir: str) -> str:
     }
     colors = {"R-Tree Propio": COLOR_RTREE, "PostgreSQL GiST": COLOR_POSTGIS}
     fig, ax = plt.subplots(figsize=(6.4, 4.2))
-    _grouped_bars(ax, categorias, series, colors, "Tiempo de construccion (ms, log)", log=True)
-    ax.set_title("Construccion del indice: R-Tree vs GiST")
-    ax.set_xlabel("Tamano del dataset")
+    _grouped_bars(ax, categorias, series, colors, "Tiempo de construcción (ms)", log=False)
+    ax.set_title("Construcción del índice: R-Tree vs GiST")
+    ax.set_xlabel("Tamaño del dataset")
     ax.legend(loc="upper left")
     fig.tight_layout()
     path = os.path.join(out_dir, "01_spatial_construccion_indices.png")
@@ -118,9 +118,9 @@ def grafica_espacio_disco(data: dict, out_dir: str) -> str:
     }
     colors = {"R-Tree Propio": COLOR_RTREE, "PostgreSQL GiST": COLOR_POSTGIS}
     fig, ax = plt.subplots(figsize=(6.4, 4.2))
-    _grouped_bars(ax, categorias, series, colors, "Espacio en disco (KB, log)", log=True)
-    ax.set_title("Espacio adicional del indice: R-Tree vs GiST")
-    ax.set_xlabel("Tamano del dataset")
+    _grouped_bars(ax, categorias, series, colors, "Espacio en disco (KB)", log=False)
+    ax.set_title("Espacio adicional del índice: R-Tree vs GiST")
+    ax.set_xlabel("Tamaño del dataset")
     ax.legend(loc="upper left")
     fig.tight_layout()
     path = os.path.join(out_dir, "02_spatial_espacio_disco.png")
@@ -145,9 +145,9 @@ def _faceted_latency(data: dict, out_dir: str, campo: str, claves: list,
                 valores.append(valor)
             series[nombre] = valores
         colors = {nombre: color for _k, nombre, color in TECNICAS}
-        _grouped_bars(ax, etiquetas_x, series, colors, "ms / consulta (log)", log=True)
+        _grouped_bars(ax, etiquetas_x, series, colors, "ms / consulta", log=False)
         ax.set_title(_etiqueta(n, data))
-    axes[0].set_ylabel("ms / consulta (log)")
+    axes[0].set_ylabel("ms / consulta")
     handles, labels = axes[0].get_legend_handles_labels()
     fig.legend(handles, labels, loc="upper center", ncol=len(TECNICAS), bbox_to_anchor=(0.5, 1.04))
     fig.suptitle(titulo, y=1.12, color=INK_PRIMARY)
@@ -162,7 +162,7 @@ def grafica_radio(data: dict, out_dir: str) -> str:
     radios = data[next(iter(data))].get("metadata_radios") or [1000, 5000, 10000]
     etiquetas = [f"{int(r) // 1000} km" for r in radios]
     return _faceted_latency(data, out_dir, "radius_ms", radios, etiquetas,
-                            "Latencia por radio de busqueda (1, 5, 10 km)",
+                            "Latencia por radio de búsqueda (1, 5, 10 km)",
                             "03_spatial_radio_1k_5k_10k.png")
 
 
@@ -176,20 +176,20 @@ def grafica_knn(data: dict, out_dir: str) -> str:
 
 def grafica_escalamiento(data: dict, out_dir: str) -> str:
     sizes = _tamanos_ordenados(data)
-    ns = [data[n]["n"] for n in sizes]
+    categorias = [_etiqueta(n, data) for n in sizes]
+    x = range(len(sizes))
     fig, ax = plt.subplots(figsize=(6.4, 4.4))
     for tecnica_key, nombre, color in TECNICAS:
         valores = []
         for n in sizes:
             bloque = data[n].get(tecnica_key, {}).get("radius_ms", {})
             valores.append(bloque.get("5000", bloque.get(5000, 0)))
-        ax.plot(ns, valores, marker="o", markersize=5, linewidth=2, color=color, label=nombre)
-    ax.set_xscale("log")
-    ax.set_yscale("log")
-    ax.set_xlabel("Tamano del dataset (N, log)")
-    ax.set_ylabel("ms / consulta a radio 5 km (log)")
-    ax.set_title("Escalabilidad: tiempo de consulta vs. tamano del dataset")
-    ax.xaxis.set_major_formatter(mticker.FuncFormatter(lambda v, _p: f"{int(v):,}"))
+        ax.plot(list(x), valores, marker="o", markersize=6, linewidth=2, color=color, label=nombre)
+    ax.set_xticks(list(x))
+    ax.set_xticklabels(categorias)
+    ax.set_xlabel("Tamaño del dataset")
+    ax.set_ylabel("ms / consulta a radio 5 km")
+    ax.set_title("Escalabilidad: tiempo de consulta vs. tamaño del dataset")
     _style_axes(ax)
     ax.legend(loc="upper left")
     fig.tight_layout()

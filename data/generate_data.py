@@ -454,7 +454,26 @@ def main():
     parser.add_argument("--spatial", type=str,
                         help="Genera solo la tabla espacial 'tiendas' con N puntos en Lima (1k, 10k, 100k)")
 
+    parser.add_argument("--bench-relational", action="store_true",
+                        help="Ejecutar benchmark relacional completo (1k, 10k, 100k) y guardar json/csv/plots")
+    parser.add_argument("--queries", type=int, default=30,
+                        help="Número de consultas por prueba para promediar en el benchmark (default: 30)")
+
     args = parser.parse_args()
+
+    if args.bench_relational:
+        from data.bench_relational import run_all, save_results, generar_graficas_relacionales, CHARTS_DIR
+        t_start = time.perf_counter()
+        resultados = run_all(sizes=[1_000, 10_000, 100_000], n_queries=args.queries)
+        t_total = time.perf_counter() - t_start
+        json_path = os.path.join(DATA_DIR, "relational_benchmark_results.json")
+        csv_path = os.path.join(DATA_DIR, "relational_benchmark_results.csv")
+        save_results(resultados, json_path, csv_path)
+        generar_graficas_relacionales(resultados, CHARTS_DIR)
+        print(f"\n=======================================================")
+        print(f"  BENCHMARK RELACIONAL FINALIZADO EN {t_total:.2f} SEGUNDOS")
+        print(f"=======================================================")
+        return
 
     if args.stats:
         print_stats()
@@ -502,10 +521,11 @@ def main():
         print("  [3] 100 000 registros (100K)  - Benchmark completo (~25 s)")
         print("  [4] Reset a datos iniciales   (8 estudiantes, 6 cursos)")
         print("  [5] Ver estadísticas actuales de data/")
+        print("  [6] Ejecutar Benchmark Relacional completo (1K, 10K, 100K + Gráficas)")
         print("  [q] Salir")
         print("=" * 65)
 
-        opc = input("Opción [1-5]: ").strip().lower()
+        opc = input("Opción [1-6]: ").strip().lower()
         if opc == "1":
             n = 1000
         elif opc == "2":
@@ -517,6 +537,19 @@ def main():
             return
         elif opc == "5":
             print_stats()
+            return
+        elif opc == "6":
+            from data.bench_relational import run_all, save_results, generar_graficas_relacionales, CHARTS_DIR
+            t_start = time.perf_counter()
+            resultados = run_all(sizes=[1_000, 10_000, 100_000], n_queries=30)
+            t_total = time.perf_counter() - t_start
+            json_path = os.path.join(DATA_DIR, "relational_benchmark_results.json")
+            csv_path = os.path.join(DATA_DIR, "relational_benchmark_results.csv")
+            save_results(resultados, json_path, csv_path)
+            generar_graficas_relacionales(resultados, CHARTS_DIR)
+            print(f"\n=======================================================")
+            print(f"  BENCHMARK RELACIONAL FINALIZADO EN {t_total:.2f} SEGUNDOS")
+            print(f"=======================================================")
             return
         elif opc in ("q", "quit", "exit"):
             return
