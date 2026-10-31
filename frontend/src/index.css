@@ -202,7 +202,7 @@
 .workspace-tab.is-active { color: var(--tab-color); background: white; box-shadow: 0 3px 12px rgba(15,23,42,.09); }
 .dark .workspace-tab.is-active { background: #172235; box-shadow: 0 4px 14px rgba(0,0,0,.22); }
 .workspace-tab.is-active::after { content: ''; position: absolute; left: 12px; right: 12px; bottom: -7px; height: 2px; border-radius: 2px; background: var(--tab-color); }
-.workspace-tab.tone-blue { --tab-color: #0284c7; }.workspace-tab.tone-violet { --tab-color: #7c3aed; }.workspace-tab.tone-amber { --tab-color: #d97706; }.workspace-tab.tone-emerald { --tab-color: #059669; }
+.workspace-tab.tone-blue { --tab-color: #0284c7; }.workspace-tab.tone-violet { --tab-color: #7c3aed; }.workspace-tab.tone-amber { --tab-color: #d97706; }.workspace-tab.tone-emerald { --tab-color: #059669; }.workspace-tab.tone-indigo { --tab-color: #4f46e5; }.workspace-tab.tone-pink { --tab-color: #db2777; }
 
 /* --------------------------------------------------------------------------
    Inspector físico

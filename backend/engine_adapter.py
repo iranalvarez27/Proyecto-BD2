@@ -228,11 +228,17 @@ class EngineAdapter:
             idx_list = []
             for col_name, (idx_obj, idx_type) in info.indices.items():
                 is_clustered = (idx_type == INDEX_CLUSTERED)
+                idx_name_type = (
+                    "BTREE" if idx_type in (INDEX_BPLUS, INDEX_CLUSTERED)
+                    else "RTREE" if idx_type == INDEX_RTREE
+                    else "INVERTED" if idx_type == INDEX_INVERTED
+                    else "HNSW" if idx_type == "hnsw"
+                    else "IVF" if idx_type == "ivf"
+                    else "HASH"
+                )
                 idx_list.append({
                     "name": f"idx_{table_name}_{col_name}" + ("_clustered" if is_clustered else ""),
-                    "type": ("BTREE" if idx_type in (INDEX_BPLUS, INDEX_CLUSTERED)
-                             else "RTREE" if idx_type == INDEX_RTREE
-                             else "INVERTED" if idx_type == INDEX_INVERTED else "HASH"),
+                    "type": idx_name_type,
                     "column": col_name,
                     "clustered": is_clustered,
                 })
@@ -348,6 +354,8 @@ class EngineAdapter:
                 "error": "Consulta SQL vacía.",
                 "plan": None,
                 "spatial": None,
+                "text": None,
+                "vector": None,
                 "visualize": None,
                 "transaction": {"active": False, "xact_id": None},
             }
@@ -379,6 +387,8 @@ class EngineAdapter:
                 "error": f"Error [{res.tipo_error.upper()}]: {res.error}",
                 "plan": None,
                 "spatial": None,
+                "text": None,
+                "vector": None,
                 "visualize": None,
                 "transaction": transaction_info,
             }
@@ -421,6 +431,8 @@ class EngineAdapter:
                 "plan": plan_tree,
                 # consulta espacial detectada (radio / knn / poligono) y el punto de cada fila
                 "spatial": res.espacial,
+                "text": getattr(res, "texto", None),
+                "vector": getattr(res, "vectorial", None),
                 "visualize": visualize,
                 "transaction": transaction_info,
             }

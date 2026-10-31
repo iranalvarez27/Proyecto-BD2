@@ -197,20 +197,30 @@ export default function FilePanel({
                           <span>Índices Activos</span>
                         </div>
                         <div className="space-y-1 pl-1">
-                          {table.indexes.map(idx => (
-                            <div key={idx.name} className="flex items-center justify-between text-[11px] text-slate-600 dark:text-slate-300 bg-white dark:bg-slate-900/80 p-1.5 rounded border border-slate-200 dark:border-slate-800">
-                              <span className="font-medium text-emerald-600 dark:text-emerald-300 truncate max-w-[120px]" title={idx.name}>
-                                {idx.name}
-                              </span>
-                              <div className="flex items-center gap-1 font-mono text-[10px]">
-                                <span className="text-slate-500 dark:text-slate-400">{idx.column}</span>
-                                <span className="text-emerald-600 dark:text-emerald-400 font-semibold">[{idx.type}]</span>
-                                {idx.clustered && (
-                                  <span className="text-[9px] bg-emerald-100 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300 px-1 rounded">Clustered</span>
-                                )}
+                          {table.indexes.map(idx => {
+                            const badgeColor =
+                              idx.type === 'INVERTED' ? 'text-indigo-600 dark:text-indigo-400 bg-indigo-50 dark:bg-indigo-950/60 border-indigo-200 dark:border-indigo-800' :
+                              (idx.type === 'HNSW' || idx.type === 'IVF') ? 'text-pink-600 dark:text-pink-400 bg-pink-50 dark:bg-pink-950/60 border-pink-200 dark:border-pink-800' :
+                              idx.type === 'RTREE' ? 'text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/60 border-emerald-200 dark:border-emerald-800' :
+                              'text-sky-600 dark:text-sky-400 bg-sky-50 dark:bg-sky-950/60 border-sky-200 dark:border-sky-800';
+
+                            return (
+                              <div key={idx.name} className="flex items-center justify-between text-[11px] text-slate-600 dark:text-slate-300 bg-white dark:bg-slate-900/80 p-1.5 rounded border border-slate-200 dark:border-slate-800">
+                                <span className="font-medium text-slate-700 dark:text-slate-200 truncate max-w-[120px]" title={idx.name}>
+                                  {idx.name}
+                                </span>
+                                <div className="flex items-center gap-1 font-mono text-[10px]">
+                                  <span className="text-slate-500 dark:text-slate-400">{idx.column}</span>
+                                  <span className={`px-1 py-0.2 rounded border font-semibold ${badgeColor}`}>
+                                    {idx.type}
+                                  </span>
+                                  {idx.clustered && (
+                                    <span className="text-[9px] bg-emerald-100 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300 px-1 rounded">Clustered</span>
+                                  )}
+                                </div>
                               </div>
-                            </div>
-                          ))}
+                            );
+                          })}
                         </div>
                       </div>
                     )}

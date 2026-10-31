@@ -149,25 +149,50 @@ export default function ResultsPanel({ result, loading }) {
                       <td className="py-2 px-3 text-center text-slate-400 dark:text-slate-600 text-[10px] select-none">
                         {rowIdx + 1}
                       </td>
-                      {row.map((val, cellIdx) => (
-                        <td
-                          key={cellIdx}
-                          className={`py-2 px-3 border-l border-slate-200 dark:border-slate-800/40 truncate max-w-[240px] ${
-                            typeof val === 'number' ? 'text-sky-700 dark:text-sky-300 text-right' : 'text-slate-700 dark:text-slate-200'
-                          }`}
-                        >
-                          {val === null || val === undefined ? (
-                            <span className="text-slate-400 dark:text-slate-600 italic">NULL</span>
-                          ) : typeof val === 'boolean' ? (
-                            val ? 'TRUE' : 'FALSE'
-                          ) : Array.isArray(val) ? (
-                            // columna POINT: (latitud, longitud)
-                            `(${val.join(', ')})`
-                          ) : (
-                            String(val)
-                          )}
-                        </td>
-                      ))}
+                      {row.map((val, cellIdx) => {
+                        const colName = (result.columns[cellIdx] || '').toLowerCase();
+                        const isScoreCol = colName.includes('score') || colName.includes('relevancia') || colName.includes('similitud');
+                        const isImageUrl = typeof val === 'string' && (
+                          val.startsWith('http') && (val.includes('.jpg') || val.includes('.png') || val.includes('.jpeg') || val.includes('unsplash') || val.includes('image'))
+                        );
+
+                        return (
+                          <td
+                            key={cellIdx}
+                            className={`py-2 px-3 border-l border-slate-200 dark:border-slate-800/40 truncate max-w-[280px] ${
+                              typeof val === 'number' ? 'text-sky-700 dark:text-sky-300 text-right' : 'text-slate-700 dark:text-slate-200'
+                            }`}
+                          >
+                            {val === null || val === undefined ? (
+                              <span className="text-slate-400 dark:text-slate-600 italic">NULL</span>
+                            ) : typeof val === 'boolean' ? (
+                              val ? 'TRUE' : 'FALSE'
+                            ) : Array.isArray(val) ? (
+                              // columna POINT: (latitud, longitud)
+                              `(${val.join(', ')})`
+                            ) : isScoreCol && typeof val === 'number' ? (
+                              <div className="flex items-center justify-end gap-1.5">
+                                <span className="font-bold text-indigo-600 dark:text-indigo-400 font-mono">
+                                  {val.toFixed(3)}
+                                </span>
+                                <div className="w-12 h-1.5 bg-slate-200 dark:bg-slate-700 rounded-full overflow-hidden">
+                                  <div
+                                    className="h-full bg-indigo-500 rounded-full"
+                                    style={{ width: `${Math.min(100, val <= 1 ? val * 100 : val * 5)}%` }}
+                                  />
+                                </div>
+                              </div>
+                            ) : isImageUrl ? (
+                              <div className="flex items-center gap-1.5">
+                                <img src={val} alt="thumb" className="w-6 h-6 rounded object-cover border border-slate-300 dark:border-slate-700 shrink-0" />
+                                <span className="truncate text-[10px] text-slate-400">{val}</span>
+                              </div>
+                            ) : (
+                              String(val)
+                            )}
+                          </td>
+                        );
+                      })}
                     </tr>
                   ))}
                 </tbody>

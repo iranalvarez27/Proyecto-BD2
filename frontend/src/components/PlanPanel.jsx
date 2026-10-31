@@ -6,10 +6,12 @@ import {
   HardDrive,
   Key,
   Share2,
+  FileText,
+  Sparkles,
   Info
 } from 'lucide-react';
 
-function PlanNode({ node, depth = 0, isLast = true }) {
+function PlanNode({ node, depth = 0, _isLast = true }) {
   if (!node) return null;
 
   // Determine icon & color based on node type
@@ -19,7 +21,15 @@ function PlanNode({ node, depth = 0, isLast = true }) {
 
   const type = node.node_type || '';
 
-  if (type.includes('Scan')) {
+  if (type.includes('Inverted') || type.includes('SPIMI') || type.includes('MATCH') || type.includes('BM25') || type.includes('TF-IDF')) {
+    Icon = FileText;
+    borderColor = 'border-indigo-400 dark:border-indigo-500/50';
+    badgeBg = 'bg-indigo-50 dark:bg-indigo-950/80 text-indigo-700 dark:text-indigo-300 border-indigo-200 dark:border-indigo-800/60';
+  } else if (type.includes('HNSW') || type.includes('IVF') || type.includes('Vector') || type.includes('SIMILAR') || type.includes('Multimedia')) {
+    Icon = Sparkles;
+    borderColor = 'border-pink-400 dark:border-pink-500/50';
+    badgeBg = 'bg-pink-50 dark:bg-pink-950/80 text-pink-700 dark:text-pink-300 border-pink-200 dark:border-pink-800/60';
+  } else if (type.includes('Scan')) {
     Icon = HardDrive;
     borderColor = 'border-sky-400 dark:border-sky-500/50';
     badgeBg = 'bg-sky-50 dark:bg-sky-950/80 text-sky-700 dark:text-sky-300 border-sky-200 dark:border-sky-800/60';

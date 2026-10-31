@@ -1,8 +1,10 @@
+import base64
 import os
 import sys
 import uuid
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from typing import Optional
 
@@ -33,6 +35,11 @@ class QueryRequest(BaseModel):
 
 class ReorganizeRequest(BaseModel):
     table_name: str
+
+class MediaUploadRequest(BaseModel):
+    filename: str
+    content_base64: str
+    content_type: Optional[str] = None
 
 
 @app.get("/api/health")
@@ -77,6 +84,42 @@ def reorganize_table(req: ReorganizeRequest):
         return engine.reorganize_table(req.table_name)
     except ValueError as ex:
         raise HTTPException(status_code=400, detail=str(ex))
+
+
+@app.post("/api/media/upload")
+def upload_media(req: MediaUploadRequest):
+    try:
+        data_dir = os.path.join(PROJECT_ROOT, "data", "uploads")
+        os.makedirs(data_dir, exist_ok=True)
+        safe_name = os.path.basename(req.filename)
+        raw_b64 = req.content_base64
+        if "," in raw_b64:
+            raw_b64 = raw_b64.split(",", 1)[1]
+        decoded = base64.b64decode(raw_b64)
+        file_path = os.path.join(data_dir, safe_name)
+        with open(file_path, "wb") as f:
+            f.write(decoded)
+        return {
+            "status": "success",
+            "filename": safe_name,
+            "path": f"uploads/{safe_name}",
+            "url": f"/api/media/uploads/{safe_name}",
+            "size": len(decoded),
+        }
+    except Exception as ex:
+        raise HTTPException(status_code=400, detail=f"Error al guardar archivo: {ex}")
+
+
+@app.get("/api/media/{subpath:path}")
+def get_media(subpath: str):
+    base_dir = os.path.join(PROJECT_ROOT, "data")
+    full_path = os.path.abspath(os.path.join(base_dir, subpath))
+    # Seguridad: evitar path traversal fuera de data/
+    if not full_path.startswith(os.path.abspath(base_dir)):
+        raise HTTPException(status_code=403, detail="Acceso denegado")
+    if not os.path.exists(full_path) or not os.path.isfile(full_path):
+        raise HTTPException(status_code=404, detail="Archivo multimedia no encontrado")
+    return FileResponse(full_path)
 
 
 @app.post("/api/seed")

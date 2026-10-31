@@ -9,6 +9,8 @@ import {
   Moon,
   Map as MapIcon,
   Sparkles,
+  FileText,
+  Layers,
   Activity,
   Box
 } from 'lucide-react';
@@ -19,6 +21,8 @@ import ResultsPanel from './components/ResultsPanel';
 import PlanPanel from './components/PlanPanel';
 import MapPanel from './components/MapPanel';
 import VisualizePanel from './components/VisualizePanel';
+import TextSearchPanel from './components/TextSearchPanel';
+import VectorLabPanel from './components/VectorLabPanel';
 import CsvImportModal from './components/CsvImportModal';
 
 function obtenerOCrearSessionId() {
@@ -52,13 +56,17 @@ export default function App() {
   ]);
   const [queryResult, setQueryResult] = useState(null);
   const [executionPlan, setExecutionPlan] = useState(null);
-  const [activeBottomTab, setActiveBottomTab] = useState('results'); // 'results' | 'plan' | 'map' | 'viz'
+  const [activeBottomTab, setActiveBottomTab] = useState('results'); // 'results' | 'plan' | 'map' | 'viz' | 'text' | 'vector'
   const [visualize, setVisualize] = useState(null);
   // el mapa se monta la primera vez que se abre y luego queda vivo (conserva zoom y capas)
   const [mapMounted, setMapMounted] = useState(false);
+  const [textMounted, setTextMounted] = useState(false);
+  const [vectorMounted, setVectorMounted] = useState(false);
 
   useEffect(() => {
     if (activeBottomTab === 'map') setMapMounted(true);
+    if (activeBottomTab === 'text') setTextMounted(true);
+    if (activeBottomTab === 'vector') setVectorMounted(true);
   }, [activeBottomTab]);
 
   const [loadingTables, setLoadingTables] = useState(false);
@@ -200,11 +208,17 @@ export default function App() {
       if (data && data.visualize) {
         setVisualize(data.visualize);
       }
-      // una búsqueda espacial (radio, k-NN o polígono) abre el mapa con sus resultados
+      // Auto-selección inteligente de pestaña según el tipo de consulta
+      const qUpper = q.trim().toUpperCase();
       const esBusquedaEspacial = data && data.status === 'success' && data.spatial && data.spatial.tipo !== 'puntos';
+      const esBusquedaTexto = (data && data.text) || qUpper.includes('MATCH(') || qUpper.includes('USING BM25') || qUpper.includes('USING TF_IDF');
+      const esBusquedaVectorial = (data && data.vector) || qUpper.includes('SIMILAR_TO(') || qUpper.includes('USING HNSW') || qUpper.includes('USING IVF');
       const hayAnimacion = data && data.visualize && (data.visualize.animations?.length || data.visualize.sequential);
+
       if (!keepTab) {
-        if (esBusquedaEspacial) setActiveBottomTab('map');
+        if (esBusquedaVectorial) setActiveBottomTab('vector');
+        else if (esBusquedaTexto) setActiveBottomTab('text');
+        else if (esBusquedaEspacial) setActiveBottomTab('map');
         else if (hayAnimacion) setActiveBottomTab('viz');
         else setActiveBottomTab('results');
       }
@@ -215,7 +229,6 @@ export default function App() {
       });
 
       const terminoTransaccion = activaAntes && data && data.transaction && !data.transaction.active;
-      const qUpper = q.trim().toUpperCase();
       if (qUpper.includes('INSERT') || qUpper.includes('DELETE') || qUpper.includes('UPDATE') || qUpper.includes('CREATE TABLE') || qUpper.includes('CREATE INDEX') || qUpper.includes('DROP TABLE') || terminoTransaccion) {
         fetchTables();
       }
@@ -270,6 +283,11 @@ export default function App() {
   };
 
   const handleRunFromMap = (sql) => {
+    setQuery(sql);
+    handleExecuteQuery(sql, { keepTab: true });
+  };
+
+  const handleRunFromTextPanel = (sql) => {
     setQuery(sql);
     handleExecuteQuery(sql, { keepTab: true });
   };
@@ -449,6 +467,32 @@ export default function App() {
                   </span>
                 )}
               </button>
+
+              <button
+                onClick={() => setActiveBottomTab('text')}
+                className={`workspace-tab tone-indigo ${activeBottomTab === 'text' ? 'is-active' : ''}`}
+              >
+                <FileText className="w-3.5 h-3.5" />
+                <span>Búsqueda textual</span>
+                {queryResult?.text?.resultados && (
+                  <span className="ml-1 text-[10px] bg-indigo-100 dark:bg-indigo-900/80 text-indigo-700 dark:text-indigo-300 px-1.5 py-0.2 rounded-full font-mono font-bold">
+                    {queryResult.text.resultados.length}
+                  </span>
+                )}
+              </button>
+
+              <button
+                onClick={() => setActiveBottomTab('vector')}
+                className={`workspace-tab tone-pink ${activeBottomTab === 'vector' ? 'is-active' : ''}`}
+              >
+                <Sparkles className="w-3.5 h-3.5" />
+                <span>Laboratorio vectorial</span>
+                {queryResult?.vector?.resultados && (
+                  <span className="ml-1 text-[10px] bg-pink-100 dark:bg-pink-900/80 text-pink-700 dark:text-pink-300 px-1.5 py-0.2 rounded-full font-mono font-bold">
+                    {queryResult.vector.resultados.length}
+                  </span>
+                )}
+              </button>
             </div>
 
             {/* Tab Content */}
@@ -483,6 +527,24 @@ export default function App() {
                     visible={activeBottomTab === 'map'}
                     theme={theme}
                     onRunQuery={handleRunFromMap}
+                  />
+                </div>
+              )}
+              {textMounted && (
+                <div className={activeBottomTab === 'text' ? 'h-full' : 'hidden'}>
+                  <TextSearchPanel
+                    tables={tables}
+                    onRunSQL={handleRunFromTextPanel}
+                    sessionId={sessionId}
+                  />
+                </div>
+              )}
+              {vectorMounted && (
+                <div className={activeBottomTab === 'vector' ? 'h-full' : 'hidden'}>
+                  <VectorLabPanel
+                    tables={tables}
+                    onRunSQL={handleRunFromTextPanel}
+                    sessionId={sessionId}
                   />
                 </div>
               )}

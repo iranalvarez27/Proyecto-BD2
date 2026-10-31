@@ -57,6 +57,13 @@ const SQL_TEMPLATES = [
       'ROLLBACK;',
     ].join('\n'),
   },
+  { label: 'Texto: MATCH(...) USING BM25 con SCORE()', sql: "SELECT *, SCORE() as relevancia FROM articulos WHERE MATCH(texto, 'machine learning') USING BM25 ORDER BY relevancia DESC LIMIT 10;" },
+  { label: 'Texto: MATCH(...) USING TF_IDF (Coseno)', sql: "SELECT *, SCORE() as relevancia FROM articulos WHERE MATCH(texto, 'base de datos vectorial') USING TF_IDF ORDER BY relevancia DESC LIMIT 10;" },
+  { label: 'Texto: CREATE INDEX ... USING INVERTED (SPIMI)', sql: 'CREATE INDEX idx_articulos_texto ON articulos (texto) USING INVERTED;' },
+  { label: 'Multimedia: SIMILAR_TO foto USING HNSW (Coseno)', sql: "SELECT *, SIMILARITY_SCORE() as score FROM imagenes WHERE SIMILAR_TO('foto_consulta.jpg', k=10) USING HNSW WITH METRIC=cosine ORDER BY score DESC;" },
+  { label: 'Multimedia: SIMILAR_TO audio USING IVF (Euclidiana)', sql: "SELECT nombre, artista, SIMILARITY_SCORE() as score FROM canciones WHERE SIMILAR_TO('audio_query.mp3', k=5) USING IVF WITH METRIC=euclidean ORDER BY score DESC;" },
+  { label: 'Multimedia: CREATE INDEX ... USING HNSW', sql: 'CREATE INDEX idx_img_hnsw ON imagenes (vector_visual) USING HNSW;' },
+  { label: 'Multimedia: CREATE INDEX ... USING IVF', sql: 'CREATE INDEX idx_canciones_ivf ON canciones (vector_acustico) USING IVF;' },
 ];
 
 
