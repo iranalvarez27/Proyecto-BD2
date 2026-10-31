@@ -8,8 +8,8 @@ from query.parser import Parser, ParserError
 from query.semantic import SemanticAnalyzer, SemanticError, resolver_tipo_columna
 from query import catalog_store
 from query.catalog import (Catalog, TableInfo, STORAGE_HEAP, STORAGE_SEQUENTIAL, INDEX_BPLUS, INDEX_HASH, INDEX_CLUSTERED, INDEX_RTREE, INDEX_INVERTED,)
-from query.ast import (SelectNode, InsertNode, DeleteNode, UpdateNode, Condition, NotCondition, BinaryCondition,BeginNode, CommitNode,RollbackNode, ExplainNode, CreateTableNode, DropTableNode,
-                        PointLiteral, PolygonLiteral, FuncCall, SpatialCondition, CreateIndexNode, AggregateCall, ColumnRef, SubquerySelect, JoinClause,
+from query.ast import (SelectNode, InsertNode, DeleteNode, UpdateNode, Condition, NotCondition, BinaryCondition, BeginNode, CommitNode, RollbackNode, ExplainNode, CreateTableNode, DropTableNode,
+                        PointLiteral, PolygonLiteral, FuncCall, SpatialCondition, MatchCondition, CreateIndexNode, AggregateCall, ColumnRef, SubquerySelect, JoinClause,
                         SetVarNode,)
 from query.tokens import TokenType
 from common.bitmap import RidBitmap
@@ -17,15 +17,18 @@ from common.geo import EUCLIDEAN, HAVERSINE, get_metric, point_in_polygon
 from common.record import Record
 from common.types import Column, DataType, Schema
 from engine.external import external_group_by, external_hash_join, external_sort
+from index.bm25 import BM25
 from index.bplus_tree import BPlusTree, DuplicateKey
 from index.clustered_bplus_tree import ClusteredBPlusTree
 from index.extendible_hash import ExtendibleHash
 from index.hash_utils import UnhashableKeyType
 from index.rtree import RTree
 from index.inverted_index import IndiceInvertido
+from index.tfidf import idf as _idf_tfidf
 from index.key_codec import INT64_MAX, INT64_MIN, KeyTooLong, KeyTypeMismatch, UnorderableKey
 from storage.heap_file import HeapFile
 from storage.sequential_file import SequentialFile
+from text.preprocesamiento import normalizar as _normalizar_texto, raiz as _raiz_texto, stopwords as _stopwords_texto, tokenizar as _tokenizar_texto
 from transaction.manager import TransactionManager, TransactionError
 from transaction.locks import DeadlockError, LockTimeoutError
 
@@ -69,6 +72,8 @@ class QueryResult:
         self.espacial = None
         # R-Tree usado por la consulta, para sacar su snapshot fuera del tiempo medido
         self.rtree = None
+        # descripcion de la consulta de texto completo (para TextSearchPanel) o None
+        self.texto = None
 
     @property
     def ok(self):
@@ -141,6 +146,7 @@ class Conexion:
 
         self._local.espacial = None
         self._local.rtree = None
+        self._local.texto = None
         self._sustituir_variables(nodo, session_id)
 
         try:
@@ -188,6 +194,7 @@ class Conexion:
                     resultado = QueryResult(filas=filas, plan=self.plan)
                     resultado.espacial = self._local.espacial
                     resultado.rtree = getattr(self._local, "rtree", None)
+                    resultado.texto = getattr(self._local, "texto", None)
                 elif isinstance(nodo, InsertNode):
                     resumen = self.ejecutar_insert(nodo)
                     resultado = QueryResult(resumen=resumen, plan=self.plan)
@@ -393,6 +400,7 @@ class Conexion:
         if filas_salida is not None:
             resultado.espacial = self._local.espacial
             resultado.rtree = getattr(self._local, "rtree", None)
+            resultado.texto = getattr(self._local, "texto", None)
         txn_activa = self.txn_manager.is_active(session_id)
         txn = self.txn_manager.get_active(session_id)
         resultado.transaccion_activa = txn_activa
@@ -480,6 +488,8 @@ class Conexion:
             if cond.operador == TokenType.GTE:
                 return resultado >= cond.valor
             raise ExecutionError(f"operador desconocido: {cond.operador}")
+        if isinstance(cond, MatchCondition):
+            return fila.get("__score__", 0.0) > 0
         if not isinstance(cond, Condition):
             raise ExecutionError("condicion WHERE erronea")
 
@@ -716,6 +726,135 @@ class Conexion:
         self._marcar_rtree(rtree, trace, stats)
         return filas, True
 
+    # ------------------------------------------------------------------
+    # consultas de texto completo con IndiceInvertido (MATCH ... USING)
+    # ------------------------------------------------------------------
+
+    def _plan_texto(self, nodo: SelectNode, info: TableInfo, where, nombres_col: list):
+        match_cond = next((c for c in self._conjuntos_and(where) if isinstance(c, MatchCondition)), None)
+        if match_cond is None:
+            return None
+        if not self.catalog.tiene_indice(info.nombre, match_cond.columna):
+            return None
+        indice, tipo = self.catalog.get_indice(info.nombre, match_cond.columna)
+        if tipo != INDEX_INVERTED:
+            return None
+
+        if indice.desactualizado:
+            idx_col = info.schema.column_index(match_cond.columna)
+            pares = [(record.values[idx_col], rid) for rid, record in info.storage.scan_con_rid(info.schema)]
+            indice.bulk_load(pares)
+            self.plan.append(
+                f"reconstruccion SPIMI de indice invertido sobre '{info.nombre}.{match_cond.columna}' "
+                f"({len(pares)} documentos)"
+            )
+
+        t0 = time.perf_counter()
+        norm_str = _normalizar_texto(match_cond.consulta)
+        tokens_list = _tokenizar_texto(norm_str)
+        vacias = _stopwords_texto(indice.idioma)
+        sin_stop = [t for t in tokens_list if t not in vacias]
+        terminos = [_raiz_texto(t, indice.idioma) for t in sin_stop] if indice.stemming else list(sin_stop)
+
+        alias_score = self.semantic.alias_score(nodo)
+        hay_agregados = any(isinstance(c, AggregateCall) for c in nodo.columnas) if nodo.columnas != ["*"] else False
+        sin_otros_filtros = len(self._conjuntos_and(where)) == 1
+        orden_score_desc = (
+            nodo.order_by is None
+            or (nodo.order_by.funcion is None and nodo.order_by.columna == alias_score and nodo.order_by.descendente)
+        )
+        orden_score_asc = (
+            nodo.order_by is not None
+            and nodo.order_by.funcion is None
+            and nodo.order_by.columna == alias_score
+            and not nodo.order_by.descendente
+        )
+
+        k_rank = (
+            nodo.limit
+            if (sin_otros_filtros and not hay_agregados and nodo.group_by is None and orden_score_desc and nodo.limit is not None)
+            else None
+        )
+        hallados = indice.rankear(terminos, metodo=match_cond.metodo, k=k_rank)
+
+        filas = []
+        for rid, score in hallados:
+            record = info.storage.read(rid, info.schema)
+            if record is None:
+                continue
+            fila = dict(zip(nombres_col, record.values))
+            fila["__score__"] = float(score)
+            if self.cumple_where(where, fila):
+                filas.append(fila)
+
+        if orden_score_desc:
+            orden_ya_resuelto = True
+        elif orden_score_asc:
+            filas.reverse()
+            orden_ya_resuelto = True
+        else:
+            orden_ya_resuelto = False
+
+        filtro = " + filtro WHERE" if not sin_otros_filtros else ""
+        self.plan.append(
+            f"busqueda de texto completo ({match_cond.metodo}) en indice invertido sobre '{info.nombre}.{match_cond.columna}' "
+            f"(terminos={terminos}, {len(filas)} fila(s)){filtro}"
+        )
+
+        dur_ms = round((time.perf_counter() - t0) * 1000, 3)
+        n_docs = indice.total_docs()
+        bm25_ref = BM25(indice) if match_cond.metodo == "BM25" else None
+        terminos_info = []
+        postings_eval = 0
+        for term in dict.fromkeys(terminos):
+            df_t = indice.df(term)
+            postings_eval += df_t
+            if df_t > 0:
+                idf_t = bm25_ref.idf(df_t) if bm25_ref is not None else _idf_tfidf(n_docs, df_t)
+            else:
+                idf_t = 0.0
+            formas = [
+                tok for tok in dict.fromkeys(sin_stop)
+                if (_raiz_texto(tok, indice.idioma) if indice.stemming else tok) == term
+            ]
+            terminos_info.append({
+                "termino": term,
+                "df": df_t,
+                "idf": round(idf_t, 4),
+                "en_diccionario": df_t > 0,
+                "formas": formas or [term],
+            })
+        est = indice.estadisticas or {}
+        self._local.texto = {
+            "tabla": info.nombre,
+            "columna": match_cond.columna,
+            "consulta": match_cond.consulta,
+            "metodo": match_cond.metodo,
+            "k": nodo.limit or len(filas),
+            "key_column": info.key_column,
+            "preprocesamiento": {
+                "normalizado": norm_str,
+                "tokens": tokens_list,
+                "sin_stopwords": sin_stop,
+                "terminos": terminos,
+            },
+            "terminos": terminos_info,
+            "indice": {
+                "documentos": n_docs,
+                "terminos": len(indice.lector) if indice.lector is not None else 0,
+                "postings": indice.lector.num_postings if indice.lector is not None else 0,
+                "avgdl": round(indice.longitud_promedio(), 2),
+                "bloques_spimi": est.get("bloques", 1),
+            },
+            "metricas": {
+                "tiempo_ms": dur_ms,
+                "paginas_leidas": sum(self.pool.page_count(r) for r in indice.file_paths()) if self.pool is not None else 0,
+                "postings_evaluados": postings_eval,
+            },
+            "resultados": [],
+        }
+        return filas, orden_ya_resuelto
+
     def ejecutar_select(self, nodo: SelectNode) -> list:
         orden_ya_resuelto = False
 
@@ -737,6 +876,11 @@ class Conexion:
         plan_espacial = self._plan_espacial(nodo, info, where, nombres_col)
         if plan_espacial is not None:
             filas, orden_ya_resuelto = plan_espacial
+            return self._finalizar_select(nodo, filas, info.schema, orden_ya_resuelto)
+
+        plan_texto = self._plan_texto(nodo, info, where, nombres_col)
+        if plan_texto is not None:
+            filas, orden_ya_resuelto = plan_texto
             return self._finalizar_select(nodo, filas, info.schema, orden_ya_resuelto)
 
         if where is None:
@@ -996,7 +1140,11 @@ class Conexion:
             espacial = getattr(self._local, "espacial", None)
             capturar = (espacial is not None and espacial.get("tabla") == schema.table_name
                         and not agregados and nodo.group_by is None)
+            texto = getattr(self._local, "texto", None)
+            capturar_texto = (texto is not None and texto.get("tabla") == schema.table_name
+                              and not agregados and nodo.group_by is None)
             puntos = []
+            resultados_texto = []
             extras = self._etiquetar_extras(nodo.extras)
             todas = hay_estrella or agregados or nodo.group_by is not None
 
@@ -1005,19 +1153,37 @@ class Conexion:
                 if nodo.limit is not None and len(salida) >= nodo.limit:
                     break
                 if todas:
-                    nueva = dict(fila) if extras else fila
+                    if "__score__" in fila:
+                        nueva = {k: v for k, v in fila.items() if k != "__score__"}
+                    else:
+                        nueva = dict(fila) if extras else fila
                 else:
                     nueva = {col: fila[col] for col in nodo.columnas}
                 for etiqueta, funcion in extras:
-                    nueva[etiqueta] = self._evaluar_funcion_espacial(funcion, fila)
+                    if funcion.nombre == "score":
+                        nueva[etiqueta] = fila.get("__score__", 0.0)
+                    else:
+                        nueva[etiqueta] = self._evaluar_funcion_espacial(funcion, fila)
                 if capturar:
                     puntos.append(list(fila[espacial["columna"]]))
+                if capturar_texto:
+                    pk_col = texto.get("key_column")
+                    col_txt = texto.get("columna")
+                    doc_id_val = fila.get(pk_col, len(resultados_texto) + 1)
+                    resultados_texto.append({
+                        "id": doc_id_val,
+                        "titulo": f"Registro #{doc_id_val}",
+                        "score": round(float(fila.get("__score__", 0.0)), 4),
+                        "contenido": str(fila.get(col_txt, "")),
+                    })
                 salida.append(nueva)
 
             if nodo.limit is not None:
                 self.plan.append(f"LIMIT {nodo.limit}")
             if capturar:
                 espacial["puntos"] = puntos
+            if capturar_texto:
+                texto["resultados"] = resultados_texto
             return salida
 
     def _etiquetar_extras(self, extras: list) -> list:
@@ -1236,13 +1402,18 @@ class Conexion:
 
     def ordenar(self, filas, schema: Schema, order_by, tmp_dir: str):
         stats = {}
+        filas = list(filas)
+        schema_sort = schema
+        nombres_schema = [c.name for c in schema.columns]
+        if filas and "__score__" in filas[0] and "__score__" not in nombres_schema:
+            schema_sort = Schema(schema.table_name, list(schema.columns) + [Column("__score__", DataType.DOUBLE, 8)])
         if order_by.funcion is not None:
             clave = lambda f: self._evaluar_funcion_espacial(order_by.funcion, f)
             etiqueta = f"{order_by.funcion.nombre}(...)"
         else:
-            clave = lambda f: f[order_by.columna]
+            clave = lambda f: f[order_by.columna] if order_by.columna in f else f.get("__score__", 0.0)
             etiqueta = order_by.columna
-        filas = external_sort(filas, clave, schema, self.buffer_pages,
+        filas = external_sort(filas, clave, schema_sort, self.buffer_pages,
                               tmp_dir, reverse=order_by.descendente, stats=stats)
         direccion = "DESC" if order_by.descendente else "ASC"
         self.plan.append(f"ORDER BY {etiqueta} {direccion} (external sort, B={self.buffer_pages}: "

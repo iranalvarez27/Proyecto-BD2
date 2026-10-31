@@ -128,3 +128,64 @@ def test_inverted_solo_en_columnas_de_texto(motor_con_indice):
     _data_dir, conexion, *_ = motor_con_indice
     resultado = conexion.execute("CREATE INDEX ON docs (id) USING INVERTED")
     assert not resultado.ok
+
+
+def test_match_bm25_y_score(motor_con_indice):
+    _data_dir, conexion, *_ = motor_con_indice
+    res = _ejecutar(
+        conexion,
+        "SELECT id, contenido, SCORE() AS relevancia FROM docs "
+        "WHERE MATCH(contenido, 'casa grande') USING BM25 ORDER BY relevancia DESC",
+    )
+    assert len(res.filas) == 4
+    # Documentos 1 ("La casa es grande") y 3 ("La casa es bonita y grande") contienen ambos terminos
+    # Doc 1 es mas corto que Doc 3, por lo que BM25 le asigna mayor relevancia
+    assert [f["id"] for f in res.filas[:2]] == [1, 3]
+    assert res.filas[0]["relevancia"] > res.filas[1]["relevancia"] > res.filas[2]["relevancia"] > 0
+    assert all("__score__" not in f for f in res.filas)
+    assert res.texto is not None
+    assert res.texto["metodo"] == "BM25"
+    assert len(res.texto["resultados"]) == 4
+
+
+def test_match_tfidf_con_select_estrella_y_limit(motor_con_indice):
+    _data_dir, conexion, *_ = motor_con_indice
+    res = _ejecutar(
+        conexion,
+        "SELECT *, SCORE() FROM docs WHERE MATCH(contenido, 'casa grande') USING TF_IDF LIMIT 2",
+    )
+    assert len(res.filas) == 2
+    assert [f["id"] for f in res.filas] == [1, 3]
+    assert "score" in res.filas[0]
+    assert res.filas[0]["score"] > res.filas[1]["score"] > 0
+    assert all("__score__" not in f for f in res.filas)
+
+
+def test_match_combinado_con_and_y_order_by_columna(motor_con_indice):
+    _data_dir, conexion, *_ = motor_con_indice
+    res = _ejecutar(
+        conexion,
+        "SELECT id, SCORE() AS s FROM docs "
+        "WHERE MATCH(contenido, 'casa grande') USING BM25 AND id > 1 "
+        "ORDER BY id ASC",
+    )
+    assert [f["id"] for f in res.filas] == [2, 3, 4]
+    # Doc 3 tiene ambos terminos ('cas' y 'grand'), por lo que su score es el mayor
+    scores_por_id = {f["id"]: f["s"] for f in res.filas}
+    assert scores_por_id[3] > scores_por_id[2] > 0
+
+
+def test_match_reconstruye_indice_desactualizado_tras_insert(motor_con_indice):
+    _data_dir, conexion, catalog, _pool = motor_con_indice
+    _ejecutar(conexion, "INSERT INTO docs VALUES (5, 'Un perro ladra fuerte')")
+    indice, _ = catalog.get_indice("docs", "contenido")
+    assert indice.desactualizado
+
+    res = _ejecutar(
+        conexion,
+        "SELECT id, contenido, SCORE() AS rel FROM docs WHERE MATCH(contenido, 'perro ladra') USING BM25",
+    )
+    assert not indice.desactualizado
+    assert [f["id"] for f in res.filas] == [5]
+    assert res.filas[0]["rel"] > 0
+

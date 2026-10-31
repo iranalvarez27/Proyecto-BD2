@@ -617,6 +617,14 @@ class EngineAdapter:
                     "rows_estimated": actual_rows if actual_rows is not None else 5,
                     "children": [],
                 })
+            elif "indice invertido" in step_lower:
+                nodes.append({
+                    "node_type": "IndexScan (Inverted Index)",
+                    "method": step,
+                    "cost": 1.10,
+                    "rows_estimated": actual_rows if actual_rows is not None else 5,
+                    "children": [],
+                })
             # antes que los indices: "external hash" contiene "hash"
             elif "order by" in step_lower:
                 nodes.append({
