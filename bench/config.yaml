@@ -4,7 +4,7 @@ k: 10
 
 vector:
   consultas: 100
-  recall_objetivo: 0.9
+  recall_objetivo: 0.95
   hnsw: {M: 16, efConstruction: 200}
   ivf: {nlist: sqrt}
   barrido:
