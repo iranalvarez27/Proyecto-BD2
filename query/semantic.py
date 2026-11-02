@@ -2,7 +2,7 @@ from query.ast import (
     SelectNode, InsertNode, DeleteNode, UpdateNode, Condition, NotCondition, BinaryCondition, OrderBy,
     BeginNode, CommitNode, RollbackNode, ExplainNode, CreateTableNode, DropTableNode,
     PointLiteral, PolygonLiteral, FuncCall, SpatialCondition, CreateIndexNode,
-    AggregateCall, ColumnRef, SubquerySelect, SetVarNode, MatchCondition,
+    AggregateCall, ColumnRef, SubquerySelect, SetVarNode, MatchCondition, SimilarCondition,
 )
 from query.tokens import TokenType
 from query.catalog import Catalog, INDEX_RTREE, INDEX_INVERTED
@@ -19,6 +19,8 @@ FUNCIONES_POLIGONO = {"dentro_de"}
 FUNCIONES_ESPACIALES = FUNCIONES_DISTANCIA | FUNCIONES_POLIGONO
 FUNCIONES_AGREGADAS = {"count", "sum", "avg"}
 METODOS_TEXTO = {"TF_IDF", "BM25"}
+METODOS_SIMILAR = {"HNSW", "IVF"}
+METRICAS_SIMILAR = {"cosine", "euclidean", "dot"}
 TIPOS_TEXTO = (DataType.CHAR, DataType.VARCHAR)
 TIPOS_NUMERICOS = {DataType.SMALLINT, DataType.INT, DataType.BIGINT, DataType.FLOAT, DataType.DOUBLE}
 
@@ -166,6 +168,8 @@ class SemanticAnalyzer:
                     f"es {campo.type.value} pero se comparo con '{condicion.valor}' ({type(condicion.valor).__name__})")
         elif isinstance(condicion, MatchCondition):
             raise SemanticError("MATCH junto con JOIN todavia no esta soportado")
+        elif isinstance(condicion, SimilarCondition):
+            raise SemanticError("SIMILAR_TO junto con JOIN todavia no esta soportado")
         else:
             raise SemanticError("condicion WHERE erronea")
 
@@ -305,6 +309,59 @@ class SemanticAnalyzer:
         if funcion.alias is not None and funcion.alias in self.nombres_columnas(schema):
             raise SemanticError(f"el alias '{funcion.alias}' de SCORE() ya es una columna de '{schema.table_name}'")
 
+    def similares_en(self, condicion) -> list:
+        if isinstance(condicion, SimilarCondition):
+            return [condicion]
+        if isinstance(condicion, BinaryCondition):
+            return self.similares_en(condicion.izquierda) + self.similares_en(condicion.derecha)
+        if isinstance(condicion, NotCondition):
+            return self.similares_en(condicion.interior)
+        return []
+
+    def similares_en_and(self, condicion) -> list:
+        if isinstance(condicion, SimilarCondition):
+            return [condicion]
+        if isinstance(condicion, BinaryCondition) and condicion.operador == TokenType.AND:
+            return self.similares_en_and(condicion.izquierda) + self.similares_en_and(condicion.derecha)
+        return []
+
+    def validar_posicion_similar(self, condicion) -> None:
+        todos = self.similares_en(condicion)
+        if not todos:
+            return
+        if len(todos) != len(self.similares_en_and(condicion)):
+            raise SemanticError("SIMILAR_TO solo se puede combinar con otras condiciones mediante AND (no dentro de OR ni de NOT)")
+        if len(todos) > 1:
+            raise SemanticError("solo se admite un SIMILAR_TO por consulta")
+        if self.matches_en(condicion):
+            raise SemanticError("SIMILAR_TO y MATCH no se pueden combinar en la misma consulta")
+
+    def validar_similar(self, condicion: SimilarCondition) -> None:
+        if not condicion.archivo.strip():
+            raise SemanticError("SIMILAR_TO necesita el nombre de un archivo")
+        if condicion.k <= 0:
+            raise SemanticError(f"k de SIMILAR_TO debe ser un entero positivo, se dio {condicion.k}")
+        if condicion.metodo not in METODOS_SIMILAR:
+            raise SemanticError(f"metodo de SIMILAR_TO desconocido '{condicion.metodo}' "
+                f"(disponibles: {', '.join(sorted(METODOS_SIMILAR))})")
+        if condicion.metrica is not None and condicion.metrica not in METRICAS_SIMILAR:
+            raise SemanticError(f"metrica de SIMILAR_TO desconocida '{condicion.metrica}' "
+                f"(disponibles: {', '.join(sorted(METRICAS_SIMILAR))})")
+
+    def validar_similarity_score(self, nodo: SelectNode, funcion: FuncCall, schema: Schema) -> None:
+        if funcion.argumentos:
+            raise SemanticError("SIMILARITY_SCORE() no recibe argumentos")
+        if nodo.where is None or not self.similares_en(nodo.where):
+            raise SemanticError("SIMILARITY_SCORE() solo se puede usar en una consulta con SIMILAR_TO en el WHERE")
+        if funcion.alias is not None and funcion.alias in self.nombres_columnas(schema):
+            raise SemanticError(f"el alias '{funcion.alias}' de SIMILARITY_SCORE() ya es una columna de '{schema.table_name}'")
+
+    def alias_similarity_score(self, nodo: SelectNode):
+        for funcion in nodo.extras:
+            if funcion.nombre == "similarity_score":
+                return funcion.alias or "similarity_score"
+        return None
+
     def alias_score(self, nodo: SelectNode):
         for funcion in nodo.extras:
             if funcion.nombre == "score":
@@ -321,6 +378,8 @@ class SemanticAnalyzer:
             self.validar_spatial_condition(schema, condicion)
         elif isinstance(condicion, MatchCondition):
             self.validar_match(schema, condicion)
+        elif isinstance(condicion, SimilarCondition):
+            self.validar_similar(condicion)
         elif isinstance(condicion, Condition):
             self.validar_columna_existe(schema, condicion.columna)
             idx = schema.column_index(condicion.columna)
@@ -385,12 +444,18 @@ class SemanticAnalyzer:
             return
 
         scores = 0
+        similarity_scores = 0
         for funcion in nodo.extras:
             if funcion.nombre == "score":
                 scores += 1
                 if scores > 1:
                     raise SemanticError("SCORE() solo puede aparecer una vez en el SELECT")
                 self.validar_score(nodo, funcion, schema)
+            elif funcion.nombre == "similarity_score":
+                similarity_scores += 1
+                if similarity_scores > 1:
+                    raise SemanticError("SIMILARITY_SCORE() solo puede aparecer una vez en el SELECT")
+                self.validar_similarity_score(nodo, funcion, schema)
             else:
                 self.validar_func_espacial(schema, funcion)
 
@@ -416,12 +481,13 @@ class SemanticAnalyzer:
 
         if nodo.where is not None:
             self.validar_posicion_match(nodo.where)
+            self.validar_posicion_similar(nodo.where)
             self.validar_where(schema, nodo.where)
 
         if nodo.order_by is not None:
             if nodo.order_by.funcion is not None:
                 self.validar_func_espacial(schema, nodo.order_by.funcion)
-            elif nodo.order_by.columna == self.alias_score(nodo):
+            elif nodo.order_by.columna in (self.alias_score(nodo), self.alias_similarity_score(nodo)):
                 pass
             else:
                 self.validar_columna_existe(schema, nodo.order_by.columna)
@@ -449,6 +515,8 @@ class SemanticAnalyzer:
         schema = self.get_schema(nodo.tabla)
         if nodo.where is not None and self.matches_en(nodo.where):
             raise SemanticError("MATCH solo se puede usar en un SELECT")
+        if nodo.where is not None and self.similares_en(nodo.where):
+            raise SemanticError("SIMILAR_TO solo se puede usar en un SELECT")
         if nodo.where is not None:
             self.validar_where(schema, nodo.where)
 
@@ -473,6 +541,8 @@ class SemanticAnalyzer:
 
         if nodo.where is not None and self.matches_en(nodo.where):
             raise SemanticError("MATCH solo se puede usar en un SELECT")
+        if nodo.where is not None and self.similares_en(nodo.where):
+            raise SemanticError("SIMILAR_TO solo se puede usar en un SELECT")
         if nodo.where is not None:
             self.validar_where(schema, nodo.where)
 
