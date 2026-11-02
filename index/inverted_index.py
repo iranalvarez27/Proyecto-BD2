@@ -123,7 +123,6 @@ class IndiceInvertido(Index):
             self.documentos.marcar_desactualizado()
 
     def _load(self) -> None:
-        self._tfidf.reiniciar()
         ruta_docs = self.base + EXT_DOCUMENTOS
         if self.pool.page_count(ruta_docs) == 0 or self.pool.page_count(self.base + EXT_DICCIONARIO) == 0:
             self.lector = None

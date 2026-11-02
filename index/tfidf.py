@@ -16,7 +16,11 @@ def idf(n_docs: int, df: int) -> float:
 def tf_log(tf: int) -> float:
     if tf <= 0:
         return 0.0
-    return 1 + math.log10(tf)
+    return math.log10(1 + tf)
+
+
+def peso_tfidf(tf: int, df: int, n: int) -> float:
+    return tf_log(tf) * idf(n, df)
 
 
 def tf_relativo(conteos: dict) -> dict:
@@ -26,7 +30,7 @@ def tf_relativo(conteos: dict) -> dict:
     return {t: c / total for t, c in conteos.items()}
 
 
-def vector_tfidf(conteos: dict, idfs: dict, tipo_tf: str = "relativo") -> dict:
+def vector_tfidf(conteos: dict, idfs: dict, tipo_tf: str = "log") -> dict:
     if tipo_tf == "relativo":
         tfs = tf_relativo(conteos)
     elif tipo_tf == "log":
@@ -51,20 +55,6 @@ class TFIDF:
 
     def __init__(self, indice):
         self._indice = indice
-        self._normas = None
-
-    def reiniciar(self) -> None:
-        self._normas = None
-
-    def normas(self) -> dict[int, float]:
-        if self._normas is None:
-            cuadrados = {}
-            for termino in self._indice.terminos():
-                for doc_id, tf in self._indice.postings(termino):
-                    w = tf_log(tf)
-                    cuadrados[doc_id] = cuadrados.get(doc_id, 0.0) + w * w
-            self._normas = {d: math.sqrt(c) for d, c in cuadrados.items()}
-        return self._normas
 
     def rankear(self, terminos: list[str], k: int) -> list[tuple[int, float]]:
         n = self._indice.total_docs()
@@ -76,7 +66,9 @@ class TFIDF:
             df = self._indice.df(termino)
             if df == 0:
                 continue
-            pesos_q[termino] = tf_log(veces) * idf(n, df)
+            w = peso_tfidf(veces, df, n)
+            if w > 0:
+                pesos_q[termino] = w
 
         norma_q = math.sqrt(sum(w * w for w in pesos_q.values()))
         if norma_q == 0:
@@ -84,16 +76,14 @@ class TFIDF:
 
         productos = {}
         for termino, wq in pesos_q.items():
-            if wq == 0:
-                continue
+            df = self._indice.df(termino)
             for doc_id, tf in self._indice.postings(termino):
-                productos[doc_id] = productos.get(doc_id, 0.0) + (wq / norma_q) * tf_log(tf)
+                productos[doc_id] = productos.get(doc_id, 0.0) + wq * peso_tfidf(tf, df, n)
 
-        normas = self.normas()
         scores = {}
         for doc_id, producto in productos.items():
-            norma_d = normas.get(doc_id, 0.0)
+            norma_d = self._indice.norma_doc(doc_id)
             if norma_d > 0:
-                scores[doc_id] = producto / norma_d
+                scores[doc_id] = producto / (norma_q * norma_d)
 
         return heapq.nlargest(k, scores.items(), key=lambda par: par[1])
