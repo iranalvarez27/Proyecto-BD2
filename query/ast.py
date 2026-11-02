@@ -172,5 +172,6 @@ class DropTableNode:
 class CreateIndexNode:
     tabla: str
     columna: str
-    tipo_indice: str = "bplus"  # "bplus" | "hash" | "rtree" | "inverted"
+    tipo_indice: str = "bplus"  # "bplus" | "hash" | "rtree" | "inverted" | "vector"
     nombre: str = None
+    metodo: str = None

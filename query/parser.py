@@ -11,7 +11,8 @@ class ParserError(Exception):
 
 OPERADORES_COMP = [TokenType.EQ, TokenType.NEQ, TokenType.LT, TokenType.LTE, TokenType.GT, TokenType.GTE]
 METODOS_MATCH = {"TF_IDF", "BM25"}
-METODOS_SIMILAR = {"HNSW", "IVF"}
+METODOS_SIMILAR = {"HNSW", "IVF", "EXACT"}
+METODOS_INDICE_VECTORIAL = {"exact": "EXACTO", "hnsw": "HNSW", "ivf": "IVF"}
 METRICAS_SIMILAR = {"cosine": "cosine", "euclidean": "euclidean", "dot": "dot", "dot_product": "dot"}
 TIPOS_INDICE_CREATE_INDEX = {"btree": "bplus", "bplus": "bplus", "hash": "hash", "rtree": "rtree", "inverted": "inverted"}
 FUNCIONES_AGREGADAS = {"count", "sum", "avg"}
@@ -161,7 +162,7 @@ class Parser:
         return DropTableNode(tabla)
 
     def parse_create_index(self):
-        # CREATE INDEX [nombre] ON tabla (columna) [USING BTREE | HASH | RTREE | INVERTED]
+        # CREATE INDEX [nombre] ON tabla (columna) [USING BTREE | HASH | RTREE | INVERTED | EXACT | HNSW | IVF]
         self.esperar(TokenType.CREATE)
         self.esperar(TokenType.INDEX)
         nombre = None
@@ -174,14 +175,20 @@ class Parser:
         self.esperar(TokenType.RPAREN)
 
         tipo_indice = "bplus"
+        metodo = None
         if self.coincide(TokenType.USING):
             self.avanzar()
             tok = self.esperar(TokenType.IDENT)
             valor = tok.value.lower()
-            if valor not in TIPOS_INDICE_CREATE_INDEX:
-                raise ParserError(f"pos {tok.pos}: USING debe ser BTREE, HASH, RTREE o INVERTED, salio '{tok.value}'")
-            tipo_indice = TIPOS_INDICE_CREATE_INDEX[valor]
-        return CreateIndexNode(tabla, columna, tipo_indice, nombre)
+            if valor in METODOS_INDICE_VECTORIAL:
+                tipo_indice = "vector"
+                metodo = METODOS_INDICE_VECTORIAL[valor]
+            elif valor in TIPOS_INDICE_CREATE_INDEX:
+                tipo_indice = TIPOS_INDICE_CREATE_INDEX[valor]
+            else:
+                raise ParserError(f"pos {tok.pos}: USING debe ser BTREE, HASH, RTREE, INVERTED, EXACT, HNSW o IVF, "
+                                  f"salio '{tok.value}'")
+        return CreateIndexNode(tabla, columna, tipo_indice, nombre, metodo)
 
     def parse_column_def(self):
         nombre = self.esperar(TokenType.IDENT).value
@@ -570,12 +577,14 @@ class Parser:
         self.esperar(TokenType.RPAREN)
 
         if not self.coincide(TokenType.USING):
-            raise ParserError(f"pos {self.actual().pos}: SIMILAR_TO necesita USING HNSW o USING IVF")
+            raise ParserError(f"pos {self.actual().pos}: SIMILAR_TO necesita USING HNSW, IVF o EXACT")
         self.avanzar()
         tok_m = self.esperar(TokenType.IDENT)
         metodo = tok_m.value.upper()
         if metodo not in METODOS_SIMILAR:
-            raise ParserError(f"pos {tok_m.pos}: USING debe ser HNSW o IVF, salio '{tok_m.value}'")
+            raise ParserError(f"pos {tok_m.pos}: USING debe ser HNSW, IVF o EXACT, salio '{tok_m.value}'")
+        if metodo == "EXACT":
+            metodo = "EXACTO"
 
         metrica = None
         if self.coincide(TokenType.WITH):

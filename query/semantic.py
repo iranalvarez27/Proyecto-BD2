@@ -5,7 +5,7 @@ from query.ast import (
     AggregateCall, ColumnRef, SubquerySelect, SetVarNode, MatchCondition, SimilarCondition,
 )
 from query.tokens import TokenType
-from query.catalog import Catalog, INDEX_RTREE, INDEX_INVERTED
+from query.catalog import Catalog, INDEX_RTREE, INDEX_INVERTED, INDEX_VECTOR
 from common.types import Schema, DataType
 
 
@@ -19,7 +19,7 @@ FUNCIONES_POLIGONO = {"dentro_de"}
 FUNCIONES_ESPACIALES = FUNCIONES_DISTANCIA | FUNCIONES_POLIGONO
 FUNCIONES_AGREGADAS = {"count", "sum", "avg"}
 METODOS_TEXTO = {"TF_IDF", "BM25"}
-METODOS_SIMILAR = {"HNSW", "IVF"}
+METODOS_SIMILAR = {"HNSW", "IVF", "EXACTO"}
 METRICAS_SIMILAR = {"cosine", "euclidean", "dot"}
 TIPOS_TEXTO = (DataType.CHAR, DataType.VARCHAR)
 TIPOS_NUMERICOS = {DataType.SMALLINT, DataType.INT, DataType.BIGINT, DataType.FLOAT, DataType.DOUBLE}
@@ -336,7 +336,7 @@ class SemanticAnalyzer:
         if self.matches_en(condicion):
             raise SemanticError("SIMILAR_TO y MATCH no se pueden combinar en la misma consulta")
 
-    def validar_similar(self, condicion: SimilarCondition) -> None:
+    def validar_similar(self, schema: Schema, condicion: SimilarCondition) -> None:
         if not condicion.archivo.strip():
             raise SemanticError("SIMILAR_TO necesita el nombre de un archivo")
         if condicion.k <= 0:
@@ -347,6 +347,8 @@ class SemanticAnalyzer:
         if condicion.metrica is not None and condicion.metrica not in METRICAS_SIMILAR:
             raise SemanticError(f"metrica de SIMILAR_TO desconocida '{condicion.metrica}' "
                 f"(disponibles: {', '.join(sorted(METRICAS_SIMILAR))})")
+        if not self._catalog.indices_vectoriales(schema.table_name):
+            raise SemanticError(f"la tabla '{schema.table_name}' no tiene un indice vectorial para SIMILAR_TO")
 
     def validar_similarity_score(self, nodo: SelectNode, funcion: FuncCall, schema: Schema) -> None:
         if funcion.argumentos:
@@ -379,7 +381,7 @@ class SemanticAnalyzer:
         elif isinstance(condicion, MatchCondition):
             self.validar_match(schema, condicion)
         elif isinstance(condicion, SimilarCondition):
-            self.validar_similar(condicion)
+            self.validar_similar(schema, condicion)
         elif isinstance(condicion, Condition):
             self.validar_columna_existe(schema, condicion.columna)
             idx = schema.column_index(condicion.columna)
@@ -586,5 +588,9 @@ class SemanticAnalyzer:
             if col.type not in TIPOS_TEXTO:
                 raise SemanticError(f"CREATE INDEX ... USING INVERTED solo aplica a columnas de texto "
                     f"(CHAR/VARCHAR) ('{nodo.columna}' es {col.type.value})")
+        elif nodo.tipo_indice == INDEX_VECTOR:
+            if col.type not in TIPOS_TEXTO:
+                raise SemanticError(f"CREATE INDEX ... USING {nodo.metodo} necesita una columna de texto "
+                    f"(CHAR/VARCHAR) con la ruta del archivo ('{nodo.columna}' es {col.type.value})")
         elif col.type == DataType.POINT:
             raise SemanticError(f"la columna '{nodo.columna}' es POINT: usa USING RTREE (no BTREE/HASH)")

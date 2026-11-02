@@ -9,7 +9,7 @@ from index.rtree import RTree
 from index.inverted_index import IndiceInvertido, base_desde_archivo
 from text.preprocesamiento import IDIOMA_POR_DEFECTO
 from query.catalog import (Catalog, TableInfo, STORAGE_HEAP, STORAGE_SEQUENTIAL,
-                           INDEX_BPLUS, INDEX_HASH, INDEX_CLUSTERED, INDEX_RTREE, INDEX_INVERTED)
+                           INDEX_BPLUS, INDEX_HASH, INDEX_CLUSTERED, INDEX_RTREE, INDEX_INVERTED, INDEX_VECTOR)
 from storage.heap_file import HeapFile
 from storage.sequential_file import SequentialFile
 
@@ -43,6 +43,8 @@ def escribir(data_dir: str, contenido: dict) -> None:
 def entrada_de_tabla(info: TableInfo) -> dict:
     indices = []
     for columna, (indice, tipo) in info.indices.items():
+        if tipo == INDEX_VECTOR:
+            continue
         entrada = {
             "columna": columna,
             "tipo": tipo,
