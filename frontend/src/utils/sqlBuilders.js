@@ -49,11 +49,8 @@ export function buildSimilarSQL({
   const safeFile = escapeSqlString(targetFile || 'consulta.jpg');
   const proj = includeScore ? `${projection}, SIMILARITY_SCORE() as ${scoreAlias}` : projection;
   let sql = `SELECT ${proj} FROM ${table || 'multimedia'} WHERE SIMILAR_TO('${safeFile}', k=${Number(k)})`;
-  if (index && index !== 'SEQ') {
-    sql += ` USING ${index} WITH METRIC=${metric}`;
-  } else {
-    sql += ` WITH METRIC=${metric}`;
-  }
+  const metodo = !index || index === 'SEQ' ? 'EXACT' : index;
+  sql += ` USING ${metodo} WITH METRIC=${metric}`;
   if (includeScore) {
     sql += ` ORDER BY ${scoreAlias} DESC`;
   }

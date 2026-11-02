@@ -36,6 +36,9 @@ class QueryRequest(BaseModel):
 class ReorganizeRequest(BaseModel):
     table_name: str
 
+EXTENSIONES_MEDIA = {".jpg", ".jpeg", ".png", ".bmp", ".webp", ".mp3", ".wav", ".ogg", ".flac", ".m4a"}
+TAMANO_MAX_MEDIA = 50 * 1024 * 1024
+
 class MediaUploadRequest(BaseModel):
     filename: str
     content_base64: str
@@ -92,10 +95,15 @@ def upload_media(req: MediaUploadRequest):
         data_dir = os.path.join(PROJECT_ROOT, "data", "uploads")
         os.makedirs(data_dir, exist_ok=True)
         safe_name = os.path.basename(req.filename)
+        extension = os.path.splitext(safe_name)[1].lower()
+        if extension not in EXTENSIONES_MEDIA:
+            raise ValueError(f"tipo de archivo no permitido '{extension}' (permitidos: {', '.join(sorted(EXTENSIONES_MEDIA))})")
         raw_b64 = req.content_base64
         if "," in raw_b64:
             raw_b64 = raw_b64.split(",", 1)[1]
         decoded = base64.b64decode(raw_b64)
+        if len(decoded) > TAMANO_MAX_MEDIA:
+            raise ValueError(f"el archivo pesa mas de {TAMANO_MAX_MEDIA // (1024 * 1024)} MB")
         file_path = os.path.join(data_dir, safe_name)
         with open(file_path, "wb") as f:
             f.write(decoded)
@@ -115,7 +123,7 @@ def get_media(subpath: str):
     base_dir = os.path.join(PROJECT_ROOT, "data")
     full_path = os.path.abspath(os.path.join(base_dir, subpath))
     # Seguridad: evitar path traversal fuera de data/
-    if not full_path.startswith(os.path.abspath(base_dir)):
+    if not full_path.startswith(os.path.abspath(base_dir) + os.sep):
         raise HTTPException(status_code=403, detail="Acceso denegado")
     if not os.path.exists(full_path) or not os.path.isfile(full_path):
         raise HTTPException(status_code=404, detail="Archivo multimedia no encontrado")
