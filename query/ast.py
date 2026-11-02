@@ -54,6 +54,14 @@ class MatchCondition:
     metodo: str  # "TF_IDF" | "BM25"
 
 @dataclass
+class SimilarCondition:
+    archivo: str
+    k: int
+    metodo: str  # "HNSW" | "IVF"
+    metrica: str = None  # "cosine" | "euclidean" | "dot"; None si no hay WITH METRIC
+    columna: str = None
+
+@dataclass
 class BinaryCondition:
     izquierda: object
     operador: TokenType

@@ -76,6 +76,9 @@ class TokenType(Enum):
     
     MATCH = 60
 
+    SIMILAR_TO = 61
+    WITH = 62
+
 KEYWORDS = {"select": TokenType.SELECT, "from": TokenType.FROM, "where": TokenType.WHERE,
             "insert": TokenType.INSERT, "into": TokenType.INTO, "values": TokenType.VALUES,
             "delete": TokenType.DELETE, "order": TokenType.ORDER, "by": TokenType.BY,
@@ -91,7 +94,8 @@ KEYWORDS = {"select": TokenType.SELECT, "from": TokenType.FROM, "where": TokenTy
             "drop": TokenType.DROP, "between": TokenType.BETWEEN, "point": TokenType.POINT,
             "polygon": TokenType.POLYGON, "limit": TokenType.LIMIT, "index": TokenType.INDEX,
             "update": TokenType.UPDATE, "set": TokenType.SET, "like": TokenType.LIKE,
-            "in": TokenType.IN, "not": TokenType.NOT, "as": TokenType.AS, "match": TokenType.MATCH}
+            "in": TokenType.IN, "not": TokenType.NOT, "as": TokenType.AS, "match": TokenType.MATCH,
+            "similar_to": TokenType.SIMILAR_TO, "with": TokenType.WITH}
 
 @dataclass
 class Token:
