@@ -1,6 +1,6 @@
 from query.tokens import Token, TokenType
 from query.ast import (
-    SelectNode, InsertNode, DeleteNode, UpdateNode, Condition, BinaryCondition, NotCondition, MatchCondition,
+    SelectNode, InsertNode, DeleteNode, UpdateNode, Condition, BinaryCondition, NotCondition, MatchCondition, SimilarCondition,
     OrderBy, JoinClause, AggregateCall, ColumnRef, SubquerySelect,
     BeginNode, CommitNode, RollbackNode, ExplainNode, ColumnDef, CreateTableNode, DropTableNode,
     PointLiteral, PolygonLiteral, FuncCall, SpatialCondition, CreateIndexNode, SetVarNode,
@@ -11,6 +11,8 @@ class ParserError(Exception):
 
 OPERADORES_COMP = [TokenType.EQ, TokenType.NEQ, TokenType.LT, TokenType.LTE, TokenType.GT, TokenType.GTE]
 METODOS_MATCH = {"TF_IDF", "BM25"}
+METODOS_SIMILAR = {"HNSW", "IVF"}
+METRICAS_SIMILAR = {"cosine": "cosine", "euclidean": "euclidean", "dot": "dot", "dot_product": "dot"}
 TIPOS_INDICE_CREATE_INDEX = {"btree": "bplus", "bplus": "bplus", "hash": "hash", "rtree": "rtree", "inverted": "inverted"}
 FUNCIONES_AGREGADAS = {"count", "sum", "avg"}
 LAT_MIN, LAT_MAX = -90.0, 90.0
@@ -480,6 +482,9 @@ class Parser:
 
         if self.coincide(TokenType.MATCH):
             return self.parse_match()
+
+        if self.coincide(TokenType.SIMILAR_TO):
+            return self.parse_similar()
         
         if self.coincide(TokenType.IDENT) and self.siguiente().type == TokenType.LPAREN:
             funcion = self.parse_func_call()
@@ -549,6 +554,41 @@ class Parser:
         if metodo not in METODOS_MATCH:
             raise ParserError(f"pos {tok.pos}: USING debe ser TF_IDF o BM25, salio '{tok.value}'")
         return MatchCondition(columna, consulta, metodo)
+
+    def parse_similar(self):
+        self.esperar(TokenType.SIMILAR_TO)
+        self.esperar(TokenType.LPAREN)
+        archivo = self.esperar(TokenType.STRING).value
+        self.esperar(TokenType.COMMA)
+        tok_k = self.esperar(TokenType.IDENT)
+        if tok_k.value.lower() != "k":
+            raise ParserError(f"pos {tok_k.pos}: SIMILAR_TO espera 'k=<entero>', salio '{tok_k.value}'")
+        self.esperar(TokenType.EQ)
+        tok_n = self.esperar(TokenType.NUMBER)
+        if not tok_n.value.isdigit() or int(tok_n.value) < 1:
+            raise ParserError(f"pos {tok_n.pos}: k debe ser un entero positivo, salio '{tok_n.value}'")
+        self.esperar(TokenType.RPAREN)
+
+        if not self.coincide(TokenType.USING):
+            raise ParserError(f"pos {self.actual().pos}: SIMILAR_TO necesita USING HNSW o USING IVF")
+        self.avanzar()
+        tok_m = self.esperar(TokenType.IDENT)
+        metodo = tok_m.value.upper()
+        if metodo not in METODOS_SIMILAR:
+            raise ParserError(f"pos {tok_m.pos}: USING debe ser HNSW o IVF, salio '{tok_m.value}'")
+
+        metrica = None
+        if self.coincide(TokenType.WITH):
+            self.avanzar()
+            tok_clave = self.esperar(TokenType.IDENT)
+            if tok_clave.value.lower() != "metric":
+                raise ParserError(f"pos {tok_clave.pos}: despues de WITH se espera METRIC=..., salio '{tok_clave.value}'")
+            self.esperar(TokenType.EQ)
+            tok_v = self.esperar(TokenType.IDENT)
+            metrica = METRICAS_SIMILAR.get(tok_v.value.lower())
+            if metrica is None:
+                raise ParserError(f"pos {tok_v.pos}: METRIC debe ser cosine, euclidean o dot, salio '{tok_v.value}'")
+        return SimilarCondition(archivo, int(tok_n.value), metodo, metrica)
 
     def parse_valor(self):
         if self.coincide(TokenType.MINUS) or self.coincide(TokenType.NUMBER):
