@@ -19,5 +19,14 @@ class IndiceVectorial:
     def bulk_load(self, pairs) -> None:
         raise NotImplementedError
 
+    def configurar(self, extractor, resolver) -> None:
+        raise NotImplementedError
+
+    def guardar(self, ruta: str | None = None) -> None:
+        raise NotImplementedError
+
+    def sincronizar(self, pares) -> dict:
+        raise NotImplementedError
+
     def file_paths(self) -> list[str]:
         return []

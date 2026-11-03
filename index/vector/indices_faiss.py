@@ -7,14 +7,17 @@ class IndiceVectorialFaiss(IndiceExacto):
     clase_faiss = None
     parametros_por_defecto: dict = {}
 
-    def __init__(self, rids, vectores, extractor=None, resolver=None, **parametros):
+    def __init__(self, rids, vectores, extractor=None, resolver=None, rutas=None, **parametros):
         self._parametros = {**self.parametros_por_defecto, **parametros}
         self._faiss = {}
-        super().__init__(rids, vectores, extractor, resolver)
+        super().__init__(rids, vectores, extractor, resolver, rutas)
 
-    def _cargar(self, rids, vectores) -> None:
-        super()._cargar(rids, vectores)
+    def _cargar(self, rids, vectores, rutas=None) -> None:
+        super()._cargar(rids, vectores, rutas)
         self._faiss = {}
+
+    def _parametros_guardables(self) -> dict:
+        return dict(self._parametros)
 
     def _indice_para(self, metrica: str):
         indice = self._faiss.get(metrica)
@@ -30,9 +33,11 @@ class IndiceVectorialFaiss(IndiceExacto):
         return self._indice_para(metrica).search(vector, k)
 
     def insert(self, key, rid) -> None:
+        antes = len(self)
         super().insert(key, rid)
-        for indice in self._faiss.values():
-            indice.agregar(self._vectores[-1:], [rid])
+        if len(self) > antes:
+            for indice in self._faiss.values():
+                indice.agregar(self._vectores[-1:], [rid])
 
     def delete(self, key, rid) -> bool:
         borrado = super().delete(key, rid)

@@ -868,17 +868,37 @@ class Conexion:
 
     # busqueda por similitud con un indice vectorial (SIMILAR_TO ... USING)
 
-    def _elegir_indice_vectorial(self, tabla: str, metodo: str):
-        disponibles = self.catalog.indices_vectoriales(tabla)
+    def _configurar_vectorial(self, info: TableInfo, columna: str, indice) -> None:
+        indice.configurar(self.extractor, self._resolver_archivo_multimedia)
+        if indice.sincronizado:
+            return
+        idx = info.schema.column_index(columna)
+        pares = [(record.values[idx], rid) for rid, record in info.storage.scan_con_rid(info.schema)]
+        try:
+            cambios = indice.sincronizar(pares)
+        except ExecutionError:
+            raise
+        except Exception as e:
+            raise ExecutionError(f"no se pudo sincronizar el indice {indice.metodo} de '{info.nombre}.{columna}' "
+                                 f"con la tabla: {e}")
+        if cambios["agregados"] or cambios["quitados"]:
+            indice.guardar()
+        self.plan.append(f"indice {indice.metodo} de '{info.nombre}.{columna}' sincronizado con la tabla "
+                         f"(+{cambios['agregados']} / -{cambios['quitados']} vectores)")
+
+    def _elegir_indice_vectorial(self, info: TableInfo, metodo: str):
+        disponibles = self.catalog.indices_vectoriales(info.nombre)
         for columna, indice in disponibles:
             if indice.metodo == metodo:
+                self._configurar_vectorial(info, columna, indice)
                 return columna, indice, False
         # sin indice del metodo pedido se recorre todo con el k-NN exacto
         for columna, indice in disponibles:
             if indice.metodo == "EXACTO":
+                self._configurar_vectorial(info, columna, indice)
                 return columna, indice, True
         existentes = ", ".join(sorted({i.metodo for _c, i in disponibles}))
-        raise ExecutionError(f"'{tabla}' no tiene un indice {metodo} (indices vectoriales: {existentes})")
+        raise ExecutionError(f"'{info.nombre}' no tiene un indice {metodo} (indices vectoriales: {existentes})")
 
     def _resolver_archivo_multimedia(self, archivo: str) -> str:
         candidatos = [archivo]
@@ -894,7 +914,7 @@ class Conexion:
         similar = next((c for c in condiciones if isinstance(c, SimilarCondition)), None)
         if similar is None:
             return None
-        columna, indice, es_respaldo = self._elegir_indice_vectorial(info.nombre, similar.metodo)
+        columna, indice, es_respaldo = self._elegir_indice_vectorial(info, similar.metodo)
         metrica = similar.metrica or "cosine"
         ruta = self._resolver_archivo_multimedia(similar.archivo)
 
@@ -1610,7 +1630,11 @@ class Conexion:
             pares = [(record.values[idx], rid) for rid, record in filas]
             if tipo_indice == "bplus":
                 pares.sort(key=lambda p: (p[0], p[1].page_id, p[1].slot_id))
+            if tipo_indice == INDEX_VECTOR:
+                indice.configurar(self.extractor, self._resolver_archivo_multimedia)
             indice.bulk_load(pares)
+            if tipo_indice == INDEX_VECTOR and indice.archivo is not None:
+                indice.guardar()
 
     def _reorganizar_si_hace_falta(self, tabla: str, info: TableInfo) -> None:
         if not self.necesita_reorganizar(tabla):
@@ -1633,6 +1657,8 @@ class Conexion:
                 continue
             idx = info.schema.column_index(columna)
             valor = record.values[idx]
+            if tipo_indice == INDEX_VECTOR:
+                self._configurar_vectorial(info, columna, indice)
             indice.insert(valor, rid)
 
     def ejecutar_delete(self, nodo: DeleteNode, dry_run: bool = False) -> dict:
@@ -1713,6 +1739,8 @@ class Conexion:
                 continue
             idx = info.schema.column_index(columna)
             valor = record.values[idx]
+            if tipo_indice == INDEX_VECTOR:
+                self._configurar_vectorial(info, columna, indice)
             indice.delete(valor, rid)
 
     def _aplicar_asignaciones(self, record: Record, schema: Schema, asignaciones: list) -> Record:
@@ -1873,7 +1901,7 @@ class Conexion:
             raise ExecutionError("no hay un extractor de caracteristicas configurado (ExtractFeatures) para construir el indice")
 
         idx = info.schema.column_index(nodo.columna)
-        rids, vectores = [], []
+        rids, vectores, rutas = [], [], []
         t0 = time.perf_counter()
         for rid, record in info.storage.scan_con_rid(info.schema):
             ruta = self._resolver_archivo_multimedia(record.values[idx])
@@ -1882,7 +1910,9 @@ class Conexion:
             except Exception as e:
                 raise ExecutionError(f"no se pudo extraer caracteristicas de '{record.values[idx]}': {e}")
             rids.append(rid)
-        indice = constructor(rids, vectores, self.extractor, self._resolver_archivo_multimedia)
+            rutas.append(record.values[idx])
+        indice = constructor(rids, vectores, self.extractor, self._resolver_archivo_multimedia, rutas)
+        indice.guardar(os.path.join(self.data_dir, f"{nodo.tabla}_{nodo.columna}_{nodo.metodo.lower()}_vector.npz"))
         dur_ms = round((time.perf_counter() - t0) * 1000, 3)
 
         self.catalog.register_index(nodo.tabla, nodo.columna, indice, INDEX_VECTOR)
