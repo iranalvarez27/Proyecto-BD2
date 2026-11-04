@@ -1,12 +1,3 @@
-"""Muestreo, entrenamiento del codebook y asignacion de descriptores.
-
-El codebook es el vocabulario del modelo Bag of Words: ``K`` centroides en el
-espacio del descriptor (128-d para SIFT, 19-d para MFCC). Se entrena una sola
-vez con ``n_entrenamiento`` objetos explicitos (decision D7) y se reutiliza en
-las colecciones de 1k/10k/100k. La huella SHA-1 del codebook permite invalidar
-todo lo derivado cuando el vocabulario cambia.
-"""
-
 import hashlib
 import json
 import math
