@@ -26,6 +26,7 @@ from query.catalog import (
     INDEX_CLUSTERED,
     INDEX_RTREE,
     INDEX_INVERTED,
+    INDEX_VECTOR,
 )
 from query import catalog_store
 from query.conexion import Conexion
@@ -58,6 +59,9 @@ def _mutating_table(sql: str) -> Tuple[Optional[str], Optional[str]]:
         return None, None
     verb = match.group(1).split()[0].upper()
     return verb, match.group(2)
+
+
+EXTENSIONES_AUDIO = (".mp3", ".wav", ".ogg", ".flac", ".m4a")
 
 
 class EngineAdapter:
@@ -211,6 +215,18 @@ class EngineAdapter:
                 rec = Record(list(vals))
                 seq.insert(rec)
 
+    @staticmethod
+    def _formatear_vectorial(vectorial):
+        if vectorial is None:
+            return None
+        audio = vectorial["archivo_consulta"].lower().endswith(EXTENSIONES_AUDIO)
+        vectorial["modalidad"] = "audio" if audio else "imagen"
+        for item in vectorial["resultados"]:
+            ruta = str(item["ruta"]).replace("\\", "/").lstrip("/")
+            item["audio_url" if audio else "media_url"] = f"/api/media/{ruta}"
+            item["detalles"] = ruta
+        return vectorial
+
     def get_tables_metadata(self) -> List[Dict[str, Any]]:
         result = []
         for table_name in self.catalog.listar_tablas():
@@ -232,8 +248,7 @@ class EngineAdapter:
                     "BTREE" if idx_type in (INDEX_BPLUS, INDEX_CLUSTERED)
                     else "RTREE" if idx_type == INDEX_RTREE
                     else "INVERTED" if idx_type == INDEX_INVERTED
-                    else "HNSW" if idx_type == "hnsw"
-                    else "IVF" if idx_type == "ivf"
+                    else idx_obj.metodo if idx_type == INDEX_VECTOR
                     else "HASH"
                 )
                 idx_list.append({
@@ -432,7 +447,7 @@ class EngineAdapter:
                 # consulta espacial detectada (radio / knn / poligono) y el punto de cada fila
                 "spatial": res.espacial,
                 "text": getattr(res, "texto", None),
-                "vector": getattr(res, "vectorial", None),
+                "vector": self._formatear_vectorial(getattr(res, "vectorial", None)),
                 "visualize": visualize,
                 "transaction": transaction_info,
             }

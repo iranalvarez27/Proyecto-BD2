@@ -6,3 +6,4 @@ numpy>=2.0
 opencv-python>=4.8
 librosa>=0.10
 soundfile>=0.12
+faiss-cpu>=1.8

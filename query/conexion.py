@@ -7,9 +7,9 @@ from query.lexer import Lexer, LexerError
 from query.parser import Parser, ParserError
 from query.semantic import SemanticAnalyzer, SemanticError, resolver_tipo_columna
 from query import catalog_store
-from query.catalog import (Catalog, TableInfo, STORAGE_HEAP, STORAGE_SEQUENTIAL, INDEX_BPLUS, INDEX_HASH, INDEX_CLUSTERED, INDEX_RTREE, INDEX_INVERTED,)
+from query.catalog import (Catalog, TableInfo, STORAGE_HEAP, STORAGE_SEQUENTIAL, INDEX_BPLUS, INDEX_HASH, INDEX_CLUSTERED, INDEX_RTREE, INDEX_INVERTED, INDEX_VECTOR,)
 from query.ast import (SelectNode, InsertNode, DeleteNode, UpdateNode, Condition, NotCondition, BinaryCondition, BeginNode, CommitNode, RollbackNode, ExplainNode, CreateTableNode, DropTableNode,
-                        PointLiteral, PolygonLiteral, FuncCall, SpatialCondition, MatchCondition, CreateIndexNode, AggregateCall, ColumnRef, SubquerySelect, JoinClause,
+                        PointLiteral, PolygonLiteral, FuncCall, SpatialCondition, MatchCondition, SimilarCondition, CreateIndexNode, AggregateCall, ColumnRef, SubquerySelect, JoinClause,
                         SetVarNode,)
 from query.tokens import TokenType
 from common.bitmap import RidBitmap
@@ -18,6 +18,8 @@ from common.record import Record
 from common.types import Column, DataType, Schema
 from engine.external import external_group_by, external_hash_join, external_sort
 from index.bm25 import BM25
+from index.vector.metricas import puntaje as _puntaje_vectorial
+from index.vector.registro import CONSTRUCTORES as _CONSTRUCTORES_VECTORIALES
 from index.bplus_tree import BPlusTree, DuplicateKey
 from index.clustered_bplus_tree import ClusteredBPlusTree
 from index.extendible_hash import ExtendibleHash
@@ -74,6 +76,8 @@ class QueryResult:
         self.rtree = None
         # descripcion de la consulta de texto completo (para TextSearchPanel) o None
         self.texto = None
+        # descripcion de la busqueda por similitud (para VectorLabPanel) o None
+        self.vectorial = None
 
     @property
     def ok(self):
@@ -84,8 +88,10 @@ class QueryResult:
 class Conexion:
     def __init__(self, catalog: Catalog, txn_manager: TransactionManager | None = None,
                  buffer_pages: int = BUFFER_PAGES, tmp_dir: str | None = None,
-                 pool=None, data_dir: str | None = None):
+                 pool=None, data_dir: str | None = None, extractor=None):
         self.catalog = catalog
+        # ExtractFeatures(ruta) -> vector; lo usan CREATE INDEX ... USING EXACT|HNSW|IVF y los INSERT sobre esas tablas
+        self.extractor = extractor
         self.semantic = SemanticAnalyzer(catalog)
         self.buffer_pages = buffer_pages
         self.tmp_dir = tmp_dir
@@ -147,6 +153,7 @@ class Conexion:
         self._local.espacial = None
         self._local.rtree = None
         self._local.texto = None
+        self._local.vectorial = None
         self._sustituir_variables(nodo, session_id)
 
         try:
@@ -195,6 +202,7 @@ class Conexion:
                     resultado.espacial = self._local.espacial
                     resultado.rtree = getattr(self._local, "rtree", None)
                     resultado.texto = getattr(self._local, "texto", None)
+                    resultado.vectorial = getattr(self._local, "vectorial", None)
                 elif isinstance(nodo, InsertNode):
                     resumen = self.ejecutar_insert(nodo)
                     resultado = QueryResult(resumen=resumen, plan=self.plan)
@@ -401,6 +409,7 @@ class Conexion:
             resultado.espacial = self._local.espacial
             resultado.rtree = getattr(self._local, "rtree", None)
             resultado.texto = getattr(self._local, "texto", None)
+            resultado.vectorial = getattr(self._local, "vectorial", None)
         txn_activa = self.txn_manager.is_active(session_id)
         txn = self.txn_manager.get_active(session_id)
         resultado.transaccion_activa = txn_activa
@@ -490,6 +499,8 @@ class Conexion:
             raise ExecutionError(f"operador desconocido: {cond.operador}")
         if isinstance(cond, MatchCondition):
             return fila.get("__score__", 0.0) > 0
+        if isinstance(cond, SimilarCondition):
+            return True
         if not isinstance(cond, Condition):
             raise ExecutionError("condicion WHERE erronea")
 
@@ -855,6 +866,122 @@ class Conexion:
         }
         return filas, orden_ya_resuelto
 
+    # busqueda por similitud con un indice vectorial (SIMILAR_TO ... USING)
+
+    def _configurar_vectorial(self, info: TableInfo, columna: str, indice) -> None:
+        indice.configurar(self.extractor, self._resolver_archivo_multimedia)
+        if indice.sincronizado:
+            return
+        idx = info.schema.column_index(columna)
+        pares = [(record.values[idx], rid) for rid, record in info.storage.scan_con_rid(info.schema)]
+        try:
+            cambios = indice.sincronizar(pares)
+        except ExecutionError:
+            raise
+        except Exception as e:
+            raise ExecutionError(f"no se pudo sincronizar el indice {indice.metodo} de '{info.nombre}.{columna}' "
+                                 f"con la tabla: {e}")
+        if cambios["agregados"] or cambios["quitados"]:
+            indice.guardar()
+        self.plan.append(f"indice {indice.metodo} de '{info.nombre}.{columna}' sincronizado con la tabla "
+                         f"(+{cambios['agregados']} / -{cambios['quitados']} vectores)")
+
+    def _elegir_indice_vectorial(self, info: TableInfo, metodo: str):
+        disponibles = self.catalog.indices_vectoriales(info.nombre)
+        for columna, indice in disponibles:
+            if indice.metodo == metodo:
+                self._configurar_vectorial(info, columna, indice)
+                return columna, indice, False
+        # sin indice del metodo pedido se recorre todo con el k-NN exacto
+        for columna, indice in disponibles:
+            if indice.metodo == "EXACTO":
+                self._configurar_vectorial(info, columna, indice)
+                return columna, indice, True
+        existentes = ", ".join(sorted({i.metodo for _c, i in disponibles}))
+        raise ExecutionError(f"'{info.nombre}' no tiene un indice {metodo} (indices vectoriales: {existentes})")
+
+    def _resolver_archivo_multimedia(self, archivo: str) -> str:
+        candidatos = [archivo]
+        if self.data_dir is not None:
+            candidatos += [os.path.join(self.data_dir, archivo), os.path.join(self.data_dir, "uploads", archivo)]
+        for ruta in candidatos:
+            if os.path.isfile(ruta):
+                return ruta
+        raise ExecutionError(f"no se encontro el archivo '{archivo}' de SIMILAR_TO")
+
+    def _plan_vectorial(self, nodo: SelectNode, info: TableInfo, where, nombres_col: list):
+        condiciones = self._conjuntos_and(where)
+        similar = next((c for c in condiciones if isinstance(c, SimilarCondition)), None)
+        if similar is None:
+            return None
+        columna, indice, es_respaldo = self._elegir_indice_vectorial(info, similar.metodo)
+        metrica = similar.metrica or "cosine"
+        ruta = self._resolver_archivo_multimedia(similar.archivo)
+
+        t0 = time.perf_counter()
+        try:
+            vector = indice.extraer(ruta)
+        except Exception as e:
+            raise ExecutionError(f"no se pudo extraer caracteristicas de '{similar.archivo}': {e}")
+        t_extraer = time.perf_counter() - t0
+
+        # con otros filtros en el WHERE se piden todos los vecinos y se recorta a k despues de filtrar
+        con_filtros = len(condiciones) > 1
+        t1 = time.perf_counter()
+        hallados = indice.buscar(vector, len(indice) if con_filtros else similar.k, metrica)
+        t_buscar = time.perf_counter() - t1
+
+        filas = []
+        for rid, distancia in hallados:
+            record = info.storage.read(rid, info.schema)
+            if record is None:
+                continue
+            fila = dict(zip(nombres_col, record.values))
+            fila["__score__"] = float(_puntaje_vectorial(distancia, metrica))
+            fila["__distancia__"] = float(distancia)
+            if self.cumple_where(where, fila):
+                filas.append(fila)
+                if len(filas) >= similar.k:
+                    break
+
+        alias = self.semantic.alias_similarity_score(nodo)
+        orden = nodo.order_by
+        orden_por_puntaje = orden is not None and orden.funcion is None and orden.columna == alias
+        if orden_por_puntaje and not orden.descendente:
+            filas.reverse()
+        orden_ya_resuelto = orden is None or orden_por_puntaje
+
+        usado = "k-NN exacto" if es_respaldo else similar.metodo
+        aviso = f" (no hay indice {similar.metodo}: se uso el k-NN exacto)" if es_respaldo else ""
+        filtro = " + filtro WHERE" if con_filtros else ""
+        self.plan.append(f"busqueda por similitud ({usado}) sobre '{info.nombre}.{columna}' (k {similar.k}; metrica {metrica}; archivo '{similar.archivo}'; {len(filas)} fila(s)){aviso}{filtro}")
+        vistas = filas if nodo.limit is None or not orden_ya_resuelto else filas[:nodo.limit]
+        self._local.vectorial = {
+            "tabla": info.nombre,
+            "columna": columna,
+            "archivo_consulta": similar.archivo,
+            "k": similar.k,
+            "indice": similar.metodo,
+            "indice_usado": indice.metodo,
+            "metrica": metrica,
+            "key_column": info.key_column,
+            "extraccion": {
+                "dimension_vector": int(len(vector)),
+                "tiempo_extraccion_ms": round(t_extraer * 1000, 3),
+            },
+            "metricas": {
+                "tiempo_busqueda_ms": round(t_buscar * 1000, 3),
+                "distancias_calculadas": len(hallados),
+                "vectores_indexados": len(indice),
+            },
+            "resultados": [
+                {"id": f.get(info.key_column), "titulo": f"Registro #{f.get(info.key_column)}",
+                 "ruta": f.get(columna), "score": round(f["__score__"], 4), "distancia": round(f["__distancia__"], 4)}
+                for f in vistas
+            ],
+        }
+        return filas, orden_ya_resuelto
+
     def ejecutar_select(self, nodo: SelectNode) -> list:
         orden_ya_resuelto = False
 
@@ -881,6 +1008,11 @@ class Conexion:
         plan_texto = self._plan_texto(nodo, info, where, nombres_col)
         if plan_texto is not None:
             filas, orden_ya_resuelto = plan_texto
+            return self._finalizar_select(nodo, filas, info.schema, orden_ya_resuelto)
+
+        plan_vectorial = self._plan_vectorial(nodo, info, where, nombres_col)
+        if plan_vectorial is not None:
+            filas, orden_ya_resuelto = plan_vectorial
             return self._finalizar_select(nodo, filas, info.schema, orden_ya_resuelto)
 
         if where is None:
@@ -1160,7 +1292,7 @@ class Conexion:
                 else:
                     nueva = {col: fila[col] for col in nodo.columnas}
                 for etiqueta, funcion in extras:
-                    if funcion.nombre == "score":
+                    if funcion.nombre in ("score", "similarity_score"):
                         nueva[etiqueta] = fila.get("__score__", 0.0)
                     else:
                         nueva[etiqueta] = self._evaluar_funcion_espacial(funcion, fila)
@@ -1498,7 +1630,11 @@ class Conexion:
             pares = [(record.values[idx], rid) for rid, record in filas]
             if tipo_indice == "bplus":
                 pares.sort(key=lambda p: (p[0], p[1].page_id, p[1].slot_id))
+            if tipo_indice == INDEX_VECTOR:
+                indice.configurar(self.extractor, self._resolver_archivo_multimedia)
             indice.bulk_load(pares)
+            if tipo_indice == INDEX_VECTOR and indice.archivo is not None:
+                indice.guardar()
 
     def _reorganizar_si_hace_falta(self, tabla: str, info: TableInfo) -> None:
         if not self.necesita_reorganizar(tabla):
@@ -1521,6 +1657,8 @@ class Conexion:
                 continue
             idx = info.schema.column_index(columna)
             valor = record.values[idx]
+            if tipo_indice == INDEX_VECTOR:
+                self._configurar_vectorial(info, columna, indice)
             indice.insert(valor, rid)
 
     def ejecutar_delete(self, nodo: DeleteNode, dry_run: bool = False) -> dict:
@@ -1601,6 +1739,8 @@ class Conexion:
                 continue
             idx = info.schema.column_index(columna)
             valor = record.values[idx]
+            if tipo_indice == INDEX_VECTOR:
+                self._configurar_vectorial(info, columna, indice)
             indice.delete(valor, rid)
 
     def _aplicar_asignaciones(self, record: Record, schema: Schema, asignaciones: list) -> Record:
@@ -1752,6 +1892,35 @@ class Conexion:
         self.plan.append(f"DROP TABLE '{nodo.tabla}' ({borrados} archivo(s) eliminado(s) de disco)")
         return {"operacion": "DROP TABLE", "tabla": nodo.tabla, "filas_afectadas": 0}
 
+    def _crear_indice_vectorial(self, nodo: CreateIndexNode, info: TableInfo) -> dict:
+        constructor = _CONSTRUCTORES_VECTORIALES.get(nodo.metodo)
+        if constructor is None:
+            raise ExecutionError(f"el indice vectorial {nodo.metodo} todavia no esta implementado "
+                f"(disponibles: {', '.join(sorted(_CONSTRUCTORES_VECTORIALES))})")
+        if self.extractor is None:
+            raise ExecutionError("no hay un extractor de caracteristicas configurado (ExtractFeatures) para construir el indice")
+
+        idx = info.schema.column_index(nodo.columna)
+        rids, vectores, rutas = [], [], []
+        t0 = time.perf_counter()
+        for rid, record in info.storage.scan_con_rid(info.schema):
+            ruta = self._resolver_archivo_multimedia(record.values[idx])
+            try:
+                vectores.append(self.extractor(ruta))
+            except Exception as e:
+                raise ExecutionError(f"no se pudo extraer caracteristicas de '{record.values[idx]}': {e}")
+            rids.append(rid)
+            rutas.append(record.values[idx])
+        indice = constructor(rids, vectores, self.extractor, self._resolver_archivo_multimedia, rutas)
+        indice.guardar(os.path.join(self.data_dir, f"{nodo.tabla}_{nodo.columna}_{nodo.metodo.lower()}_vector.npz"))
+        dur_ms = round((time.perf_counter() - t0) * 1000, 3)
+
+        self.catalog.register_index(nodo.tabla, nodo.columna, indice, INDEX_VECTOR)
+        self._persistir_tabla(nodo.tabla)
+        self.plan.append(f"CREATE INDEX {nodo.metodo} sobre '{nodo.tabla}.{nodo.columna}' "
+                         f"({len(rids)} vectores extraidos y cargados en {dur_ms} ms)")
+        return {"operacion": "CREATE INDEX", "tabla": nodo.tabla, "columna": nodo.columna, "filas_afectadas": 0}
+
     def ejecutar_create_index(self, nodo: CreateIndexNode, session_id: str) -> dict:
         if self.txn_manager.is_active(session_id):
             raise ExecutionError("CREATE INDEX no se puede ejecutar dentro de una transaccion (BEGIN...COMMIT); "
@@ -1766,6 +1935,9 @@ class Conexion:
 
         info = self.catalog.get_table(nodo.tabla)
         col = info.schema.columns[info.schema.column_index(nodo.columna)]
+
+        if nodo.tipo_indice == INDEX_VECTOR:
+            return self._crear_indice_vectorial(nodo, info)
 
         if nodo.tipo_indice == INDEX_RTREE:
             idx_path = os.path.join(self.data_dir, f"{nodo.tabla}_{nodo.columna}_rtree.idx")

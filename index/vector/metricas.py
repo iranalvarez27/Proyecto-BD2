@@ -62,3 +62,12 @@ def distancias(consultas, vectores, metrica: str) -> np.ndarray:
     if metrica == "cosine":
         return coseno(consultas, vectores)
     return producto_punto(consultas, vectores)
+
+
+def puntaje(distancia: float, metrica: str) -> float:
+    validar_metrica(metrica)
+    if metrica == "cosine":
+        return 1.0 - distancia
+    if metrica == "euclidean":
+        return 1.0 / (1.0 + distancia)
+    return -distancia

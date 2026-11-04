@@ -6,15 +6,10 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from engine.buffer_pool import BufferPool
 from index.inverted_store import EXT_DOCUMENTOS, ArchivoDocumentos, EscritorIndice, LectorIndice, eliminar
+from index.tfidf import peso_tfidf
 from text.preprocesamiento import contar_terminos
 
 MAX_POSTINGS_POR_BLOQUE = 200_000
-
-
-def peso_tfidf(tf: int, df: int, n: int) -> float:
-    if tf <= 0 or df <= 0:
-        return 0.0
-    return math.log10(1 + tf) * math.log10(n / df)
 
 
 def _base_bloque(base: str, numero: int) -> str:

@@ -54,6 +54,14 @@ class MatchCondition:
     metodo: str  # "TF_IDF" | "BM25"
 
 @dataclass
+class SimilarCondition:
+    archivo: str
+    k: int
+    metodo: str  # "HNSW" | "IVF"
+    metrica: str = None  # "cosine" | "euclidean" | "dot"; None si no hay WITH METRIC
+    columna: str = None
+
+@dataclass
 class BinaryCondition:
     izquierda: object
     operador: TokenType
@@ -164,5 +172,6 @@ class DropTableNode:
 class CreateIndexNode:
     tabla: str
     columna: str
-    tipo_indice: str = "bplus"  # "bplus" | "hash" | "rtree" | "inverted"
+    tipo_indice: str = "bplus"  # "bplus" | "hash" | "rtree" | "inverted" | "vector"
     nombre: str = None
+    metodo: str = None

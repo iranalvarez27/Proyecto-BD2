@@ -133,7 +133,7 @@ export async function executeTextSearch({ table, column, query, method = 'BM25',
  * Ejecutar búsqueda vectorial multimedia (Imágenes o Audio) en el motor real
  */
 export async function executeVectorSearch({ modalidad = 'imagen', table, targetFile, metric = 'cosine', index = 'HNSW', k = 6, sessionId }) {
-  const sql = `SELECT *, SIMILARITY_SCORE() as score FROM ${table} WHERE SIMILAR_TO('${targetFile}', k=${k}) USING ${index} WITH METRIC=${metric};`;
+  const sql = `SELECT *, SIMILARITY_SCORE() as score FROM ${table} WHERE SIMILAR_TO('${targetFile}', k=${k}) USING ${index === 'SEQ' ? 'EXACT' : index} WITH METRIC=${metric};`;
   const result = await executeQueryApi(sql, sessionId);
 
   if (result.status !== 'success') {

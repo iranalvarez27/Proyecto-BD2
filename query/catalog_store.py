@@ -8,8 +8,9 @@ from index.extendible_hash import ExtendibleHash
 from index.rtree import RTree
 from index.inverted_index import IndiceInvertido, base_desde_archivo
 from text.preprocesamiento import IDIOMA_POR_DEFECTO
+from index.vector.registro import CONSTRUCTORES as CONSTRUCTORES_VECTORIALES
 from query.catalog import (Catalog, TableInfo, STORAGE_HEAP, STORAGE_SEQUENTIAL,
-                           INDEX_BPLUS, INDEX_HASH, INDEX_CLUSTERED, INDEX_RTREE, INDEX_INVERTED)
+                           INDEX_BPLUS, INDEX_HASH, INDEX_CLUSTERED, INDEX_RTREE, INDEX_INVERTED, INDEX_VECTOR)
 from storage.heap_file import HeapFile
 from storage.sequential_file import SequentialFile
 
@@ -43,6 +44,11 @@ def escribir(data_dir: str, contenido: dict) -> None:
 def entrada_de_tabla(info: TableInfo) -> dict:
     indices = []
     for columna, (indice, tipo) in info.indices.items():
+        if tipo == INDEX_VECTOR:
+            if indice.archivo is not None:
+                indices.append({"columna": columna, "tipo": tipo, "metodo": indice.metodo,
+                                "archivo": os.path.basename(indice.archivo)})
+            continue
         entrada = {
             "columna": columna,
             "tipo": tipo,
@@ -111,6 +117,10 @@ def cargar(catalog: Catalog, pool, data_dir: str) -> list:
                 continue
             ruta = os.path.join(data_dir, ind["archivo"])
             col = info.schema.columns[info.schema.column_index(columna)]
+            if tipo == INDEX_VECTOR:
+                if os.path.exists(ruta):
+                    catalog.register_index(nombre, columna, CONSTRUCTORES_VECTORIALES[ind["metodo"]].cargar(ruta), tipo)
+                continue
             if tipo == INDEX_CLUSTERED:
                 indice = ClusteredBPlusTree(pool, info.storage, ruta)
             elif tipo == INDEX_HASH:
