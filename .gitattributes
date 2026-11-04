@@ -1,0 +1,3 @@
+# Normaliza los finales de linea a LF en el repositorio, sin importar el
+# sistema operativo con el que se edite (B8).
+* text=auto eol=lf

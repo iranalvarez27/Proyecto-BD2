@@ -1,0 +1,7 @@
+-r requirements.txt
+
+# Solo desarrollo: pruebas y validacion de K-Means contra scikit-learn.
+pytest>=8.0
+scikit-learn>=1.4
+matplotlib>=3.8
+pandas>=2.0

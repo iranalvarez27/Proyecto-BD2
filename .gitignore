@@ -4,11 +4,13 @@ __pycache__/
 
 *.txt
 !text/stopwords/*.txt
+!requirements-dev.txt
 *.dat
 *.db
 *.bin
 *.idx
 data/*
+data/multimedia/
 !data/generate_data.py
 !data/bench_spatial.py
 !data/bench_churn_indices.py
