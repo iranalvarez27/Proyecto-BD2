@@ -23,6 +23,7 @@ from index.vector.ivf import IVF
 CONFIG = os.path.join(BENCH, "config.yaml")
 SALIDA = os.path.join(BENCH, "results", "vector_params.csv")
 METRICAS = ("euclidean", "cosine")
+DATASET = {"imagen": "amazon_img", "audio": "fma"}
 CAMPOS = ["datos", "n", "dim", "metrica", "indice", "parametro", "valor",
           "recall", "tiempo_ms", "construccion_s", "nlist"]
 
@@ -33,15 +34,39 @@ def sinteticos(rng, n, dim, grupos, separacion):
     return (centros[rng.integers(0, grupos, n)] + rng.normal(size=(n, dim))).astype(np.float32)
 
 
+def vectores_multimedia(tipo, tamanos):
+    """{n: (coleccion de n, consultas)}; cada coleccion tiene su idf y las consultas usan el mismo."""
+    from multimedia import bovw, codebook, config as mcfg
+    with open(os.path.join(BENCH, "data", DATASET[tipo], "consultas.csv"), newline="") as f:
+        filas = list(csv.DictReader(f))
+    ext = bovw.Extractor(tipo, max(tamanos))
+    conteos = [codebook.histograma(ext.descriptores(f["ruta"], int(f["segmento"]) if tipo == "audio" else None),
+                                   ext.codebook) for f in filas]
+    datos = {}
+    for n in tamanos:
+        idf = np.load(mcfg.directorio_coleccion(tipo, n) / "idf.npy")
+        q = np.stack([bovw.tfidf_denso(c, idf) for c in conteos])
+        datos[n] = bovw.cargar_coleccion(tipo, n)[0].astype(np.float32), q.astype(np.float32)
+    return f"{tipo}_K{len(ext.codebook)}", datos
+
+
 def cargar_datos(args, cfg, rng):
-    """Devuelve (base, consultas, nombre); las consultas no estan en la base."""
+    """(nombre, {n: (base, consultas)}); las consultas no estan en la base."""
+    if args.tipo:
+        return vectores_multimedia(args.tipo, args.tamanos)
     nq = cfg["vector"]["consultas"]
     if args.vectores:
         todo = np.load(args.vectores).astype(np.float32)
         todo = todo[rng.permutation(len(todo))]
-        return todo[nq:], todo[:nq], os.path.basename(args.vectores)
-    todo = sinteticos(rng, max(args.tamanos) + nq, args.dim, args.grupos, args.separacion)
-    return todo[nq:], todo[:nq], f"sintetico_{args.grupos}g_sep{args.separacion}"
+        nombre = os.path.basename(args.vectores)
+    else:
+        todo = sinteticos(rng, max(args.tamanos) + nq, args.dim, args.grupos, args.separacion)
+        nombre = f"sintetico_{args.grupos}g_sep{args.separacion}"
+    base, q = todo[nq:], todo[:nq]
+    tamanos = [n for n in args.tamanos if n <= len(base)]
+    if len(tamanos) < len(args.tamanos):
+        print(f"se saltan los tamanos mayores a {len(base)}: {[n for n in args.tamanos if n > len(base)]}")
+    return nombre, {n: (base[:n], q) for n in tamanos}
 
 
 def medir(fn, q, args):
@@ -70,6 +95,7 @@ def main():
     cfg = yaml.safe_load(open(CONFIG))
     vcfg = cfg["vector"]
     ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("--tipo", choices=tuple(DATASET), help="colecciones de multimedia/ y consultas de bench/data")
     ap.add_argument("--vectores", help=".npy N x d con vectores reales; sin esto usa sinteticos agrupados")
     ap.add_argument("--tamanos", type=int, nargs="+", default=cfg["tamanos"])
     ap.add_argument("--metricas", nargs="+", default=list(METRICAS))
@@ -78,21 +104,21 @@ def main():
     ap.add_argument("--separacion", type=float, default=0.5)
     ap.add_argument("--calentamiento", type=int, default=50)
     ap.add_argument("--repeticiones", type=int, default=5)
-    ap.add_argument("--salida", default=SALIDA)
+    ap.add_argument("--salida")
     args = ap.parse_args()
+    if not args.salida:
+        args.salida = SALIDA.replace(".csv", f"_{args.tipo}.csv") if args.tipo else SALIDA
 
     k, objetivo = cfg["k"], vcfg["recall_objetivo"]
     rng = np.random.default_rng(cfg["semilla"])
-    base, q, datos = cargar_datos(args, cfg, rng)
-    tamanos = [n for n in args.tamanos if n <= len(base)]
-    if len(tamanos) < len(args.tamanos):
-        print(f"se saltan los tamanos mayores a {len(base)}: {[n for n in args.tamanos if n > len(base)]}")
+    datos, por_n = cargar_datos(args, cfg, rng)
+    tamanos = list(por_n)
     nlist_cfg = vcfg["ivf"]["nlist"]
-    print(f"datos {datos}: {len(base)} vectores de dim {base.shape[1]}, {len(q)} consultas, k {k}")
+    x, q = por_n[tamanos[-1]]
+    print(f"datos {datos}: hasta {len(x)} vectores de dim {x.shape[1]}, {len(q)} consultas, k {k}")
 
     filas, optimos = [], {}
-    for n in tamanos:
-        x = base[:n]
+    for n, (x, q) in por_n.items():
         for m in args.metricas:
             comunes = {"datos": datos, "n": n, "dim": x.shape[1], "metrica": m}
             exactos, t_exacto = medir(lambda c: knn_exacto_lote(c, x, k, m)[0][0], q, args)

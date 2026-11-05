@@ -10,5 +10,13 @@ vector:
   barrido:
     efSearch: [10, 16, 32, 64, 128, 256]
     nprobe: [1, 2, 4, 8, 16, 32, 64, 128, 256]
-  # valores elegidos con vector_params.py
-  busqueda: {}
+  # palabras del codebook, elegidas con elegir_k.py
+  k_codebook: {imagen: 512, audio: 256}
+  # valores elegidos con vector_params.py --tipo sobre colecciones con ese K
+  busqueda:
+    imagen:
+      euclidean: {efSearch: {1000: 32, 10000: 64, 100000: 256}, nprobe: {1000: 4, 10000: 8, 100000: 32}}
+      cosine: {efSearch: {1000: 16, 10000: 32, 100000: 128}, nprobe: {1000: 16, 10000: 16, 100000: 32}}
+    audio:
+      euclidean: {efSearch: {1000: 32, 10000: 64, 100000: 32}, nprobe: {1000: 4, 10000: 16, 100000: 32}}
+      cosine: {efSearch: {1000: 16, 10000: 32, 100000: 32}, nprobe: {1000: 16, 10000: 16, 100000: 4}}

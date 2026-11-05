@@ -1,4 +1,4 @@
-"""Recall@10 vs tiempo por indice, desde results/vector_params.csv."""
+"""Recall@10 vs tiempo por indice, desde un csv de vector_params.py."""
 import argparse
 import csv
 import math
@@ -127,8 +127,9 @@ def main():
     args = ap.parse_args()
     objetivo = yaml.safe_load(open(os.path.join(BENCH, "config.yaml")))["vector"]["recall_objetivo"]
     os.makedirs(args.salida, exist_ok=True)
+    nombre = os.path.splitext(os.path.basename(args.entrada))[0]
     for metrica, por_n in cargar(args.entrada).items():
-        ruta = os.path.join(args.salida, f"vector_params_{metrica}.png")
+        ruta = os.path.join(args.salida, f"{nombre}_{metrica}.png")
         graficar(metrica, por_n, objetivo, ruta)
         print(ruta)
 
