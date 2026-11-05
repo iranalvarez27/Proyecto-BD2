@@ -137,7 +137,10 @@ def extraer_tracks_csv(zip_meta: Path, dir_destino: Path) -> Path:
 
     print(f"[fma] Extrayendo tracks.csv desde {zip_meta} ...")
     with zipfile.ZipFile(zip_meta, "r") as zf:
-        miembro = next((m for m in zf.namelist() if m.endswith("tracks.csv")), None)
+        miembro = next(
+            (m for m in zf.namelist() if m.endswith("/tracks.csv") or m == "tracks.csv"),
+            None,
+        )
         if miembro is None:
             raise RuntimeError(f"No se encontró tracks.csv dentro de {zip_meta}")
         zf.extract(miembro, path=dir_destino)

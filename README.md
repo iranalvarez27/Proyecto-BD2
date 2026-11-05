@@ -583,6 +583,36 @@ WHERE SIMILAR_TO(ruta, 'bench/data/fma/fma_small/000/000002.mp3', 5);
 
 ---
 
+### 2.3.5 Ejecución de los Experimentos Comparativos y Gráficas (Partes 3 y 4)
+
+Todos los resultados experimentales (archivos CSV, tablas comparativas en Markdown y gráficas PNG) se guardan automáticamente en `bench/results/`:
+
+```bash
+# 1. Parte 3 (Texto): TF-IDF + Coseno vs BM25 vs GIN de PostgreSQL (1k, 10k, 100k)
+python3 -m bench.experiments.texto -n 1k 10k 100k --plot
+
+# 2. Parte 4 (Multimedia): EXACTO vs IVF vs HNSW y Euclidiana vs Coseno (k=10)
+python3 -m bench.experiments.vector_compare -n 1k 10k 100k --plot
+
+# Opcional (si aún no se han descargado o construido todas las colecciones reales de 10k/100k):
+python3 -m bench.experiments.vector_compare -n 1k 10k 100k --sintetico-faltantes --plot
+
+# 3. Parte 4 (Galería Cualitativa): Top-5 casos de éxito y error en imágenes y audio
+python3 -m bench.experiments.galeria -n 1k
+
+# 4. Regenerar únicamente todas las gráficas PNG desde los CSV existentes:
+python3 -m bench.plots --parte todo
+```
+
+> **Uso de `--sintetico-faltantes`:** Si aún no has descargado o procesado las colecciones completas de `10k` o `100k` en disco para imágenes o audio, puedes agregar la bandera `--sintetico-faltantes`. Esta opción extrapola automáticamente las escalas ausentes a partir de los vectores BoVW/BoAW reales ya construidos (conservando la dispersidad y clusters del codebook), permitiendo evaluar y generar las gráficas comparativas completas de las tres escalas sin tener que esperar la descarga e indexación de decenas de gigabytes.
+
+**Salidas generadas en `bench/results/`:**
+* **Parte 3 (Texto):** `texto_construccion.csv`, `texto_consultas.csv`, `texto_resumen.md`, `texto_construccion_disco.png`, `texto_latencia_longitud.png`, `texto_relevancia_pr10.png`.
+* **Parte 4 (Vector/Multimedia):** `vector_compare.csv`, `vector_resumen.md`, `vector_tiempo_vs_tamano.png`, `vector_construccion_memoria.png`, `vector_recall_comparativa.png`.
+* **Galería Multimedia:** `galeria.json`, `galeria_imagenes.png`, `galeria_audio.md`.
+
+---
+
 ## Inspector visual de estructuras
 
 La pestaña **Inspector físico** consume snapshots y trazas generados por el motor; no usa árboles o buckets inventados en el navegador.
