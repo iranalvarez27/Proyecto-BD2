@@ -1,6 +1,6 @@
 # Minigestor de Base de Datos Multimodal - BD2 (2026-2)
 
-Sistema gestor de base de datos multimodal desarrollado desde cero. Esta versión cubre la Parte 1 (datos relacionales con almacenamiento paginado, índices, SQL, transacciones y algoritmos externos) y la Parte 2 (datos espaciales con R-Tree).
+Sistema gestor de base de datos multimodal desarrollado desde cero. Esta versión cubre la Parte 1 (datos relacionales con almacenamiento paginado, índices, SQL, transacciones y algoritmos externos), la Parte 2 (datos espaciales con R-Tree) y la Parte 3 (recuperación de información textual con índice invertido SPIMI y búsqueda vectorial/multimedia con BoVW/BoAW sobre HNSW, IVF y búsqueda exacta).
 
 ---
 
@@ -94,6 +94,16 @@ Proyecto-BD2/
 │   ├── manager.py               # Transaction manager
 │   ├── serializability.py       # Grafo de precedencia
 │   └── simulation.py            # Simulación con hilos (race condition y deadlock)
+├── text/                        # Recuperación de información textual
+│   ├── preprocesamiento.py      # Normalización, stopwords y stemming (NLTK)
+│   └── ingesta.py               # Ingesta de CSV a tablas e indexación SPIMI
+├── multimedia/                  # Representación y procesamiento multimedia
+│   ├── extractores.py           # Extracción SIFT (imágenes) y MFCC (audio)
+│   ├── bovw.py                  # Codebooks K-Means, cuantización BoVW/BoAW y TF-IDF
+│   └── construir.py             # Pipeline de construcción de vocabularios y colecciones
+├── bench/                       # Benchmarks y preparación de datasets reales
+│   ├── datasets/                # Descarga e ingesta (esci.py, amazon_img.py, fma.py)
+│   └── data/                    # Almacenamiento local de descargas (excluido de git)
 ├── data/                        # Datos generados (.bin, .idx, catalog.json) y benchmarks
 │   ├── generate_data.py         # Datasets de 1K, 10K y 100K para las Partes 1 y 2
 │   ├── benchmark_charts.py      # Benchmark y gráficas de la Parte 1
@@ -183,6 +193,7 @@ Al final verifica que las claves primarias sigan siendo únicas, que los índice
 
 ```bash
 pip install matplotlib numpy psycopg2-binary
+pip install -r requirements-dev.txt # Incluye pyarrow, pyyaml, pytest, etc. para datasets y benchmarks
 ```
 
 `matplotlib` y `numpy` hacen falta para las gráficas, y `psycopg2-binary` solo para comparar con PostgreSQL en el benchmark espacial. Para esa comparación:
@@ -462,6 +473,113 @@ python3 data/plot_spatial.py
   * `03_spatial_radio_1k_5k_10k.png` (Latencia por radio: 1 km, 5 km, 10 km).
   * `04_spatial_knn_10_50_100.png` (Latencia k-NN: $k=10, 50, 100$).
   * `05_spatial_escalamiento.png` (Curva de escalabilidad asintótica log-log).
+
+---
+
+## Parte 3: Recuperación de Información y Búsqueda Multimedia
+
+Esta sección describe cómo descargar, preparar e ingestar automáticamente los datasets de los tres dominios multimodales utilizando las URLs oficiales públicas.
+
+### 2.3.1 Datasets Oficiales
+
+| Dominio | Dataset Oficial | Formato / Procesamiento | Tablas Generadas | Índice Principal |
+|---|---|---|---|---|
+| **Texto** | [ESCI (Amazon Shopping Queries)](https://github.com/amazon-science/esci-data) | Productos y queries en Parquet. Consultas clasificadas en 1 palabra, 3 palabras y 5+ palabras. | `documentos_1k`, `documentos_10k`, `documentos_100k` | Invertido con SPIMI (`TF_IDF` y `BM25`) |
+| **Imágenes** | [Amazon Reviews '23 (Electronics)](https://mcauleylab.ucsd.edu/public_datasets/data/amazon_2023/) | Metadatos y descarga paralela de fotos `.jpg`. Descriptores SIFT + K-Means (BoVW) + TF-IDF. | `imagenes_1k`, `imagenes_10k`, `imagenes_100k` | Vectorial (`HNSW`, `IVF`, `EXACTO`) |
+| **Audio** | [Free Music Archive (FMA)](https://github.com/mdeff/fma) | Pistas MP3 divididas en clips continuos de 2s (15 por canción). MFCC + K-Means (BoAW) + TF-IDF. | `audios_1k`, `audios_10k`, `audios_100k` | Vectorial (`HNSW`, `IVF`, `EXACTO`) |
+
+---
+
+### 2.3.2 Parámetros Comunes de los Scripts
+
+Cada script en `bench/datasets/` maneja su propia descarga reanudable (con cabecera HTTP `Range`) y preparación:
+
+* `-n`, `--tamanos`: Permite definir una o varias escalas de tabla a procesar (ejemplo: `-n 1k`, `-n 1k 10k`, `-n 1k,10k,100k` o con enteros `1000 10000`). Solo descarga y procesa los datos necesarios para el tamaño máximo solicitado.
+* `--ingestar`: **(Recomendado para el Frontend)** Además de descargar y procesar los archivos, crea automáticamente las tablas relacionales (`CREATE TABLE`) en el motor, inserta los registros con sus claves primarias, construye el índice (SPIMI para texto o vectorial para multimedia) y registra las tablas en `data/catalog.json`.
+* `--data-dir`: Directorio destino del motor SQL (por defecto `data/`).
+
+Opciones específicas por dominio:
+* **Imágenes (`amazon_img.py`):**
+  * `--indice {HNSW,IVF,EXACTO}`: Tipo de índice vectorial a asociar a la columna `ruta` (por defecto `HNSW`).
+  * `--workers`: Cantidad de hilos para descarga paralela de imágenes (por defecto `16`).
+  * `--solo-manifiesto`: Solo genera el listado de IDs/URLs sin descargar las fotos `.jpg`.
+* **Audio (`fma.py`):**
+  * `--variante {small,medium}`: Subconjunto de FMA a descargar (`small` por defecto con ~8k canciones de ~7.2 GB que producen 120,000 segmentos de 2s, o `medium` con ~25k canciones de ~22 GB).
+  * `--indice {HNSW,IVF,EXACTO}`: Tipo de índice vectorial (por defecto `HNSW`).
+  * `--solo-descargar`: Descarga los archivos `.zip` sin descomprimir ni cortar en 2 segundos.
+
+---
+
+### 2.3.3 Guía de Ejecución
+
+Asegúrate de tener instaladas las dependencias completas:
+```bash
+pip install -r requirements-dev.txt
+```
+
+#### Opción A: Prueba Rápida (1K y 10K) con Ingesta Inmediata
+Ideal para desarrollo o pruebas funcionales rápidas:
+
+```bash
+# 1. Texto (ESCI) -> crea documentos_1k y documentos_10k con índice SPIMI
+python3 -m bench.datasets.esci -n 1k 10k --ingestar
+
+# 2. Imágenes (Amazon) -> descarga ~10k fotos, extrae BoVW y crea imagenes_1k e imagenes_10k
+python3 -m bench.datasets.amazon_img -n 1k 10k --ingestar
+
+# 3. Audio (FMA) -> segmenta pistas en clips de 2s, extrae BoAW y crea audios_1k y audios_10k
+python3 -m bench.datasets.fma -n 1k 10k --ingestar
+```
+
+#### Opción B: Benchmark Completo (1K, 10K, 100K)
+Genera e ingesta todas las escalas requeridas para la evaluación experimental:
+
+```bash
+python3 -m bench.datasets.esci -n 1k 10k 100k --ingestar
+python3 -m bench.datasets.amazon_img -n 1k 10k 100k --ingestar
+python3 -m bench.datasets.fma -n 1k 10k 100k --ingestar
+```
+
+> **Nota:** Si el backend de FastAPI ya estaba en ejecución, reinícialo (`Ctrl + C` y `python3 -m uvicorn ...`) para recargar el archivo `data/catalog.json` con las nuevas tablas.
+
+---
+
+### 2.3.4 Consultas desde la Interfaz y Consola SQL
+
+Una vez ingestadas las tablas, están disponibles de inmediato tanto en el **Editor SQL** (`QueryPanel`) como en el **VectorLabPanel** del frontend:
+
+#### 1. Recuperación de Información de Texto (MATCH ... USING TF_IDF | BM25)
+```sql
+-- Búsqueda de productos relevantes con BM25
+SELECT id, contenido, SCORE()
+FROM documentos_1k
+WHERE MATCH(contenido, 'wireless noise cancelling headphones') USING BM25
+ORDER BY SCORE() DESC
+LIMIT 10;
+
+-- Búsqueda con TF-IDF tradicional
+SELECT id, contenido, SCORE()
+FROM documentos_10k
+WHERE MATCH(contenido, 'mechanical keyboard') USING TF_IDF
+ORDER BY SCORE() DESC
+LIMIT 5;
+```
+
+#### 2. Búsqueda Vectorial por Similitud Visual (SIMILAR_TO)
+```sql
+-- Top-5 imágenes visualmente más similares a una imagen de referencia
+SELECT id, titulo, categoria, ruta, DISTANCE()
+FROM imagenes_1k
+WHERE SIMILAR_TO(ruta, 'bench/data/amazon_img/imgs/00000001.jpg', 5);
+```
+
+#### 3. Búsqueda Vectorial por Similitud de Audio (SIMILAR_TO)
+```sql
+-- Top-5 clips de 2s más similares acústicamente a un audio de referencia
+SELECT id, track_id, seg_inicio, seg_fin, genero, artista, ruta, DISTANCE()
+FROM audios_1k
+WHERE SIMILAR_TO(ruta, 'bench/data/fma/fma_small/000/000002.mp3', 5);
+```
 
 ---
 

@@ -120,14 +120,19 @@ def upload_media(req: MediaUploadRequest):
 
 @app.get("/api/media/{subpath:path}")
 def get_media(subpath: str):
-    base_dir = os.path.join(PROJECT_ROOT, "data")
-    full_path = os.path.abspath(os.path.join(base_dir, subpath))
-    # Seguridad: evitar path traversal fuera de data/
-    if not full_path.startswith(os.path.abspath(base_dir) + os.sep):
-        raise HTTPException(status_code=403, detail="Acceso denegado")
-    if not os.path.exists(full_path) or not os.path.isfile(full_path):
-        raise HTTPException(status_code=404, detail="Archivo multimedia no encontrado")
-    return FileResponse(full_path)
+    raices_permitidas = [
+        os.path.abspath(os.path.join(PROJECT_ROOT, "data")),
+        os.path.abspath(os.path.join(PROJECT_ROOT, "bench", "data")),
+    ]
+    candidatos = [
+        os.path.abspath(os.path.join(PROJECT_ROOT, "data", subpath)),
+        os.path.abspath(os.path.join(PROJECT_ROOT, subpath)),
+    ]
+    for full_path in candidatos:
+        if any(full_path.startswith(raiz + os.sep) for raiz in raices_permitidas):
+            if os.path.exists(full_path) and os.path.isfile(full_path):
+                return FileResponse(full_path)
+    raise HTTPException(status_code=404, detail="Archivo multimedia no encontrado")
 
 
 @app.post("/api/seed")

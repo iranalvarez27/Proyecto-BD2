@@ -74,8 +74,13 @@ class EngineAdapter:
         # /tmp suele ser tmpfs (RAM): los runs externos van a disco de verdad
         tmp_dir = os.path.join(data_dir, "tmp")
         os.makedirs(tmp_dir, exist_ok=True)
+        try:
+            from multimedia import ExtractFeatures as _extractor_multimedia
+        except Exception:
+            _extractor_multimedia = None
         self.conexion = Conexion(self.catalog, self.txn_manager, tmp_dir=tmp_dir,
-                                  pool=self.pool, data_dir=self.data_dir)
+                                  pool=self.pool, data_dir=self.data_dir,
+                                  extractor=_extractor_multimedia)
         self.clustered_trees: Dict[str, ClusteredBPlusTree] = {}
         self.init_database()
 

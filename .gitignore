@@ -5,6 +5,7 @@ __pycache__/
 *.txt
 !text/stopwords/*.txt
 !requirements-dev.txt
+!bench/datasets/ids/*.txt
 *.dat
 *.db
 *.bin

@@ -47,7 +47,7 @@ SR = 22_050
 N_FFT = 2_048
 HOP = 512
 N_MFCC = 20          # se descarta c0 -> 19 dimensiones utiles
-SEG_S = 5.0
+SEG_S = 2.0
 
 EXTENSIONES_IMAGEN = (".jpg", ".jpeg", ".png", ".bmp", ".webp", ".tif", ".tiff", ".gif")
 EXTENSIONES_AUDIO = (".mp3", ".wav", ".flac", ".ogg", ".m4a", ".aiff", ".aif")

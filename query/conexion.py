@@ -901,7 +901,8 @@ class Conexion:
         raise ExecutionError(f"'{info.nombre}' no tiene un indice {metodo} (indices vectoriales: {existentes})")
 
     def _resolver_archivo_multimedia(self, archivo: str) -> str:
-        candidatos = [archivo]
+        raiz = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        candidatos = [archivo, os.path.join(raiz, archivo)]
         if self.data_dir is not None:
             candidatos += [os.path.join(self.data_dir, archivo), os.path.join(self.data_dir, "uploads", archivo)]
         for ruta in candidatos:
