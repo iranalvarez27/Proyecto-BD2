@@ -868,12 +868,33 @@ class Conexion:
 
     # busqueda por similitud con un indice vectorial (SIMILAR_TO ... USING)
 
+    @staticmethod
+    def _clave_vectorial(info: TableInfo, valores, idx: int):
+        valor = valores[idx]
+        try:
+            i_seg = info.schema.column_index("segmento")
+        except ValueError:
+            return valor
+        segmento = valores[i_seg]
+        return valor if segmento is None else (valor, int(segmento))
+
+    def _n_coleccion_vigente(self, clave):
+        if clave is None or self.extractor is None:
+            return None
+        ruta = clave[0] if isinstance(clave, tuple) else clave
+        try:
+            from multimedia import bovw, config as config_multimedia
+            return bovw.n_coleccion_vigente(config_multimedia.tipo_por_extension(ruta))
+        except Exception:
+            return None
+
     def _configurar_vectorial(self, info: TableInfo, columna: str, indice) -> None:
         indice.configurar(self.extractor, self._resolver_archivo_multimedia)
         if indice.sincronizado:
             return
         idx = info.schema.column_index(columna)
-        pares = [(record.values[idx], rid) for rid, record in info.storage.scan_con_rid(info.schema)]
+        pares = [(self._clave_vectorial(info, record.values, idx), rid)
+                 for rid, record in info.storage.scan_con_rid(info.schema)]
         try:
             cambios = indice.sincronizar(pares)
         except ExecutionError:
@@ -1628,7 +1649,10 @@ class Conexion:
         filas = list(info.storage.scan_con_rid(info.schema))
         for columna, indice, tipo_indice in secundarios:
             idx = info.schema.column_index(columna)
-            pares = [(record.values[idx], rid) for rid, record in filas]
+            if tipo_indice == INDEX_VECTOR:
+                pares = [(self._clave_vectorial(info, record.values, idx), rid) for rid, record in filas]
+            else:
+                pares = [(record.values[idx], rid) for rid, record in filas]
             if tipo_indice == "bplus":
                 pares.sort(key=lambda p: (p[0], p[1].page_id, p[1].slot_id))
             if tipo_indice == INDEX_VECTOR:
@@ -1660,6 +1684,7 @@ class Conexion:
             valor = record.values[idx]
             if tipo_indice == INDEX_VECTOR:
                 self._configurar_vectorial(info, columna, indice)
+                valor = self._clave_vectorial(info, record.values, idx)
             indice.insert(valor, rid)
 
     def ejecutar_delete(self, nodo: DeleteNode, dry_run: bool = False) -> dict:
@@ -1742,6 +1767,7 @@ class Conexion:
             valor = record.values[idx]
             if tipo_indice == INDEX_VECTOR:
                 self._configurar_vectorial(info, columna, indice)
+                valor = self._clave_vectorial(info, record.values, idx)
             indice.delete(valor, rid)
 
     def _aplicar_asignaciones(self, record: Record, schema: Schema, asignaciones: list) -> Record:
@@ -1902,17 +1928,21 @@ class Conexion:
             raise ExecutionError("no hay un extractor de caracteristicas configurado (ExtractFeatures) para construir el indice")
 
         idx = info.schema.column_index(nodo.columna)
-        rids, vectores, rutas = [], [], []
         t0 = time.perf_counter()
-        for rid, record in info.storage.scan_con_rid(info.schema):
-            ruta = self._resolver_archivo_multimedia(record.values[idx])
-            try:
-                vectores.append(self.extractor(ruta))
-            except Exception as e:
-                raise ExecutionError(f"no se pudo extraer caracteristicas de '{record.values[idx]}': {e}")
-            rids.append(rid)
-            rutas.append(record.values[idx])
-        indice = constructor(rids, vectores, self.extractor, self._resolver_archivo_multimedia, rutas)
+        # clave (ruta) o (ruta, segmento) por fila: en audio cada fila es un segmento de la pista
+        pares = [(self._clave_vectorial(info, record.values, idx), rid)
+                 for rid, record in info.storage.scan_con_rid(info.schema)]
+        existentes = [i.n_coleccion for _c, i in self.catalog.indices_vectoriales(info.nombre)
+                      if getattr(i, "n_coleccion", None) is not None]
+        n_coleccion = existentes[0] if existentes else self._n_coleccion_vigente(pares[0][0] if pares else None)
+        indice = constructor([], [], self.extractor, self._resolver_archivo_multimedia, n_coleccion=n_coleccion)
+        try:
+            indice.bulk_load(pares)
+        except ExecutionError:
+            raise
+        except Exception as e:
+            raise ExecutionError(f"no se pudo extraer caracteristicas para el indice de '{nodo.tabla}.{nodo.columna}': {e}")
+        rids = [rid for _clave, rid in pares]
         indice.guardar(os.path.join(self.data_dir, f"{nodo.tabla}_{nodo.columna}_{nodo.metodo.lower()}_vector.npz"))
         dur_ms = round((time.perf_counter() - t0) * 1000, 3)
 

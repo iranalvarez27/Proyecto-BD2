@@ -285,6 +285,10 @@ def _resolver_n(tipo: str, n_coleccion, base=None, directorio=None) -> int:
     return _n_mas_grande(modelo_dir)
 
 
+def n_coleccion_vigente(tipo: str, base=None, directorio=None) -> int:
+    return _resolver_n(config.validar_tipo(tipo), None, base, directorio)
+
+
 def _mtime_ns(ruta) -> int | None:
     try:
         return os.stat(ruta).st_mtime_ns

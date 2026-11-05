@@ -1,4 +1,3 @@
-"""FMA (small/medium): descarga, segmentos de 2 s, subconjuntos 1k/10k/100k y consultas."""
 import argparse
 import csv
 import json
@@ -28,9 +27,15 @@ URLS_AUDIO = {
     "small": "https://os.unil.cloud.switch.ch/fma/fma_small.zip",
 }
 
+# El largo del segmento sale de multimedia/config.py: una sola fuente de verdad para la
+# extraccion (cache, ExtractFeatures) y para estas tablas.
+from multimedia.config import SEG_S  # noqa: E402
+
 DURACION_PISTA_S = 30.0
-SEG_S = 2.0
-SEGMENTOS_POR_PISTA = int(DURACION_PISTA_S // SEG_S)  # 15 segmentos de 2 s por pista
+# Muchas pistas de FMA duran ~29.97 s y el ultimo trozo incompleto se descarta: se cuentan
+# solo los segmentos completos con la duracion util
+DURACION_UTIL_S = 29.9
+SEGMENTOS_POR_PISTA = int(DURACION_UTIL_S // SEG_S)
 
 
 def cargar_config() -> dict:
@@ -132,7 +137,10 @@ def extraer_tracks_csv(zip_meta: Path, dir_destino: Path) -> Path:
 
     print(f"[fma] Extrayendo tracks.csv desde {zip_meta} ...")
     with zipfile.ZipFile(zip_meta, "r") as zf:
-        miembro = next((m for m in zf.namelist() if Path(m).name == "tracks.csv"), None)
+        miembro = next(
+            (m for m in zf.namelist() if m.endswith("/tracks.csv") or m == "tracks.csv"),
+            None,
+        )
         if miembro is None:
             raise RuntimeError(f"No se encontró tracks.csv dentro de {zip_meta}")
         zf.extract(miembro, path=dir_destino)
@@ -162,7 +170,6 @@ def extraer_audios_zip(zip_audio: Path, dir_destino: Path) -> Path:
 
 
 def leer_metadatos_tracks(ruta_tracks_csv: Path) -> dict[int, dict]:
-    """Lee el CSV multi-cabecera de FMA (filas 0: seccion, 1: campo, 2: track_id)."""
     metadatos = {}
     with open(ruta_tracks_csv, "r", encoding="utf-8", errors="replace", newline="") as f:
         lector = csv.reader(f)
@@ -342,13 +349,13 @@ def ingestar_tablas_audio(pistas_base: list[dict], tamanos: list[int], data_dir:
             rid = info.storage.insert(Record(registro), info.schema)
             claves_pk.append((fila_idx, rid))
             rids.append(rid)
-            rutas_rel.append(ruta_rel)
+            rutas_rel.append((ruta_rel, seg_idx))   # clave (ruta, segmento) del indice vectorial
 
         indice_pk, _ = catalog.get_indice(tabla, "id")
         claves_pk.sort(key=lambda p: (p[0], p[1].page_id, p[1].slot_id))
         indice_pk.bulk_load(claves_pk)
 
-        indice_vec = constructor(rids, vectores, rutas=rutas_rel)
+        indice_vec = constructor(rids, vectores, rutas=rutas_rel, n_coleccion=n)   # IDF de la coleccion de n
         ruta_npz = os.path.join(data_dir, f"{tabla}_ruta_{metodo_indice.lower()}_vector.npz")
         indice_vec.guardar(ruta_npz)
         catalog.register_index(tabla, "ruta", indice_vec, INDEX_VECTOR)
@@ -364,12 +371,16 @@ def main(argv=None):
 
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--variante", default="small", choices=("small", "medium"),
-                        help="Variante de FMA a descargar: small (8k pistas, ~7.2 GB, 120k segmentos de 2s) o medium (25k pistas, ~22 GB)")
+                        help=f"Variante de FMA a descargar: small (8k pistas, ~7.2 GB, ~{8_000 * SEGMENTOS_POR_PISTA:,} segmentos de {SEG_S:g} s) "
+                             f"o medium (25k pistas, ~22 GB, ~{25_000 * SEGMENTOS_POR_PISTA:,} segmentos). "
+                             f"Elige la que alcance para el tamano mas grande que pidas con -n")
     parser.add_argument("-n", "--tamanos", nargs="+", default=cfg.get("tamanos", [1000, 10000, 100000]),
-                        help="Tamaños de tablas en segmentos de 2 s (ej: 1k 10k 100k o 1000 10000 100000)")
+                        help=f"Tamaños de tablas en segmentos de {SEG_S:g} s (ej: 1k 10k 100k o 1000 10000 100000)")
     parser.add_argument("--consultas", type=int, default=n_consultas_cfg,
-                        help="Cantidad de segmentos de 2 s separados como consultas")
+                        help=f"Cantidad de segmentos de {SEG_S:g} s separados como consultas")
     parser.add_argument("--semilla", type=int, default=cfg.get("semilla", 42))
+    parser.add_argument("--procesos", type=int, default=min(8, os.cpu_count() or 1),
+                        help="Procesos para extraer descriptores en multimedia.construir (por defecto: min(8, nucleos)). En Windows, sin esto la extraccion corre en un solo proceso")
     parser.add_argument("--salida", default=str(DIR_FMA))
     parser.add_argument("--data-dir", default=str(PROJECT_ROOT / "data"),
                         help="Directorio de datos del motor SQL donde se guardan las tablas (por defecto: data/)")
@@ -421,8 +432,8 @@ def main(argv=None):
 
     tamanos = parsear_tamanos(args.tamanos)
     max_segmentos = max(tamanos)
-    # Muchas pistas de FMA duran ~29.97 s (dan 14 segmentos enteros de 2 s en vez de 15)
-    # o pueden tener algun MP3 danado; agregamos un margen del 12% (minimo 15 pistas).
+    # SEGMENTOS_POR_PISTA ya cuenta solo segmentos completos; el margen del 12% (minimo 15
+    # pistas) cubre MP3 danados y pistas mas cortas.
     pistas_teoricas = math.ceil(max_segmentos / SEGMENTOS_POR_PISTA)
     margen_pistas = max(15, math.ceil(pistas_teoricas * 0.12))
     pistas_para_base = min(len(pistas) - 1, pistas_teoricas + margen_pistas)
@@ -451,6 +462,10 @@ def main(argv=None):
     guardar_segmentos_csv(dir_salida / "consultas.csv", consultas)
 
     for t in tamanos:
+        if t > len(segmentos_base):
+            print(f"[fma] AVISO: la tabla de {t:,} segmentos no se puede armar: la variante "
+                  f"'{args.variante}' solo da {len(segmentos_base):,} segmentos de {SEG_S:g} s. "
+                  f"Use --variante medium para llegar a 100k.")
         if t <= len(segmentos_base):
             etiqueta = f"{t // 1000}k" if t % 1000 == 0 else str(t)
             guardar_segmentos_csv(dir_salida / f"segmentos_{etiqueta}.csv", segmentos_base[:t])
@@ -480,10 +495,14 @@ def main(argv=None):
         from multimedia import bovw, construir
 
         tamanos_validos = [t for t in tamanos if t <= len(segmentos_base)]
+        if not tamanos_validos:
+            raise SystemExit(f"[fma] Ningun tamano pedido ({tamanos}) cabe en los {len(segmentos_base):,} "
+                             f"segmentos de {SEG_S:g} s disponibles en la variante '{args.variante}'")
         construir.main([
             "--tipo", "audio",
             "--objetos", str(dir_salida / "objetos.csv"),
             "--n", ",".join(str(t) for t in tamanos_validos),
+            "--workers", str(max(1, args.procesos)),
         ])
         # se reescriben con los segmentos que de verdad quedaron en cada coleccion
         por_track = {str(p["track_id"]): p for p in pistas_base}

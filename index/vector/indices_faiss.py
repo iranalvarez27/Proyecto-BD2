@@ -7,10 +7,11 @@ class IndiceVectorialFaiss(IndiceExacto):
     clase_faiss = None
     parametros_por_defecto: dict = {}
 
-    def __init__(self, rids, vectores, extractor=None, resolver=None, rutas=None, **parametros):
+    def __init__(self, rids, vectores, extractor=None, resolver=None, rutas=None, n_coleccion=None,
+                 **parametros):
         self._parametros = {**self.parametros_por_defecto, **parametros}
         self._faiss = {}
-        super().__init__(rids, vectores, extractor, resolver, rutas)
+        super().__init__(rids, vectores, extractor, resolver, rutas, n_coleccion)
 
     def _cargar(self, rids, vectores, rutas=None) -> None:
         super()._cargar(rids, vectores, rutas)

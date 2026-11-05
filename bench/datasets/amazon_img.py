@@ -1,4 +1,3 @@
-"""Amazon Reviews'23: descarga de imagenes MAIN, subconjuntos 1k/10k/100k y consultas."""
 import argparse
 import concurrent.futures
 import csv
@@ -25,6 +24,8 @@ DIR_AMAZON_BENCH = BENCH_DIR / "data" / "amazon_img"
 DIR_IMGS = DIR_AMAZON_BENCH / "imgs"
 DIR_IDS = BENCH_DIR / "datasets" / "ids"
 MANIFIESTO_IDS = DIR_IDS / "amazon_img_ids.csv"
+
+TOTAL_PREPARADO = 110_000
 
 URL_META_ELECTRONICS = (
     "https://mcauleylab.ucsd.edu/public_datasets/data/amazon_2023/raw/"
@@ -127,8 +128,8 @@ def descargar_archivo(url: str, destino: Path, bloque: int = 1024 * 1024) -> Pat
     return destino
 
 
-def _contar_filas(ruta: Path) -> int:
-    with open(ruta, "r", encoding="utf-8", newline="") as f:
+def _contar_filas(ruta_csv: Path) -> int:
+    with open(ruta_csv, "r", encoding="utf-8", newline="") as f:
         return sum(1 for _ in csv.DictReader(f))
 
 
@@ -144,11 +145,16 @@ def obtener_manifiesto(total_necesario: int, semilla: int, ruta_meta: Path) -> l
     prod_csv = dir_amazon / "productos.csv"
     img_csv = dir_amazon / "imagenes.csv"
 
-    if not (prod_csv.exists() and img_csv.exists()) or _contar_filas(img_csv) < total_necesario:
+    preparados = _contar_filas(prod_csv) if (prod_csv.exists() and img_csv.exists()) else 0
+    if preparados < total_necesario:
         if not ruta_meta.exists():
             descargar_archivo(URL_META_ELECTRONICS, ruta_meta)
-        print(f"[amazon_img] Extrayendo {total_necesario:,} productos desde {ruta_meta} ...")
-        preparar_amazon.preparar(str(ruta_meta), None, str(dir_amazon), n=total_necesario, semilla=semilla)
+        n_preparar = max(total_necesario, TOTAL_PREPARADO)
+        if preparados:
+            print(f"[amazon_img] {prod_csv} tiene {preparados:,} productos y se necesitan {total_necesario:,}: "
+                  "se vuelve a preparar la lista")
+        print(f"[amazon_img] Extrayendo {n_preparar:,} productos desde {ruta_meta} ...")
+        preparar_amazon.preparar(str(ruta_meta), None, str(dir_amazon), n=n_preparar, semilla=semilla)
 
     categorias = {}
     with open(prod_csv, "r", encoding="utf-8", newline="") as f:
@@ -184,8 +190,7 @@ def obtener_manifiesto(total_necesario: int, semilla: int, ruta_meta: Path) -> l
 def _descargar_una_imagen(item: dict, dir_imgs: Path, timeout: int = 20) -> tuple[str, Path | None, str | None]:
     pid = str(item["id"])
     url = item["url"]
-    # por asin: el id se reasigna cuando el manifiesto se vuelve a muestrear con otro tamano
-    destino = dir_imgs / f"{item['asin']}.jpg"
+    destino = dir_imgs / f"{item.get('asin') or pid}.jpg"
     if destino.exists() and destino.stat().st_size > 256:
         return pid, destino, None
 
@@ -322,7 +327,7 @@ def ingestar_tablas_imagenes(items_base: list[dict], tamanos: list[int], data_di
         claves_pk.sort(key=lambda p: (p[0], p[1].page_id, p[1].slot_id))
         indice_pk.bulk_load(claves_pk)
 
-        indice_vec = constructor(rids, vectores, rutas=rutas_rel)
+        indice_vec = constructor(rids, vectores, rutas=rutas_rel, n_coleccion=n)   # IDF de la coleccion de n
         ruta_npz = os.path.join(data_dir, f"{tabla}_ruta_{metodo_indice.lower()}_vector.npz")
         indice_vec.guardar(ruta_npz)
         catalog.register_index(tabla, "ruta", indice_vec, INDEX_VECTOR)
@@ -342,7 +347,9 @@ def main(argv=None):
     parser.add_argument("--consultas", type=int, default=n_consultas_cfg,
                         help="Cantidad de imágenes de consulta separadas de la base")
     parser.add_argument("--workers", type=int, default=16,
-                        help="Hilos para descarga paralela de imágenes")
+                        help="Hilos para descarga paralela de imágenes (no afecta la extracción de descriptores)")
+    parser.add_argument("--procesos", type=int, default=min(8, os.cpu_count() or 1),
+                        help="Procesos para extraer descriptores en multimedia.construir (por defecto: min(8, nucleos)). En Windows, sin esto la extraccion corre en un solo proceso")
     parser.add_argument("--semilla", type=int, default=cfg.get("semilla", 42))
     parser.add_argument("--meta", default=preparar_amazon.META,
                         help="Ruta local a meta_Electronics.jsonl.gz")
@@ -404,10 +411,18 @@ def main(argv=None):
         from multimedia import construir
 
         tamanos_validos = [t for t in tamanos if t <= len(base)]
+        omitidos = [t for t in tamanos if t > len(base)]
+        if omitidos:
+            print(f"[amazon_img] AVISO: no se pueden armar las tablas de {omitidos}: solo hay "
+                  f"{len(base):,} imagenes base descargadas")
+        if not tamanos_validos:
+            raise SystemExit(f"[amazon_img] Ningun tamano pedido ({tamanos}) cabe en las {len(base):,} "
+                             "imagenes base disponibles; revise los fallos de descarga o pida un tamano menor")
         construir.main([
             "--tipo", "imagen",
             "--objetos", str(dir_salida / "objetos.csv"),
             "--n", ",".join(str(t) for t in tamanos_validos),
+            "--workers", str(max(1, args.procesos)),
         ])
         if args.ingestar and tamanos_validos:
             ingestar_tablas_imagenes(base, tamanos_validos, args.data_dir, metodo_indice=args.indice)

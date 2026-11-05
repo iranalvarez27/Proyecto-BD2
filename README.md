@@ -486,7 +486,7 @@ Esta sección describe cómo descargar, preparar e ingestar automáticamente los
 |---|---|---|---|---|
 | **Texto** | [ESCI (Amazon Shopping Queries)](https://github.com/amazon-science/esci-data) | Productos y queries en Parquet. Consultas clasificadas en 1 palabra, 3 palabras y 5+ palabras. | `documentos_1k`, `documentos_10k`, `documentos_100k` | Invertido con SPIMI (`TF_IDF` y `BM25`) |
 | **Imágenes** | [Amazon Reviews '23 (Electronics)](https://mcauleylab.ucsd.edu/public_datasets/data/amazon_2023/) | Metadatos y descarga paralela de fotos `.jpg`. Descriptores SIFT + K-Means (BoVW) + TF-IDF. | `imagenes_1k`, `imagenes_10k`, `imagenes_100k` | Vectorial (`HNSW`, `IVF`, `EXACTO`) |
-| **Audio** | [Free Music Archive (FMA)](https://github.com/mdeff/fma) | Pistas MP3 divididas en clips continuos de 2s (15 por canción). MFCC + K-Means (BoAW) + TF-IDF. | `audios_1k`, `audios_10k`, `audios_100k` | Vectorial (`HNSW`, `IVF`, `EXACTO`) |
+| **Audio** | [Free Music Archive (FMA)](https://github.com/mdeff/fma) | Pistas MP3 divididas en clips continuos de 2 s (14 por canción; `SEG_S` en `multimedia/config.py`). MFCC + K-Means (BoAW) + TF-IDF. | `audios_1k`, `audios_10k`, `audios_100k` | Vectorial (`HNSW`, `IVF`, `EXACTO`) |
 
 ---
 
@@ -504,9 +504,9 @@ Opciones específicas por dominio:
   * `--workers`: Cantidad de hilos para descarga paralela de imágenes (por defecto `16`).
   * `--solo-manifiesto`: Solo genera el listado de IDs/URLs sin descargar las fotos `.jpg`.
 * **Audio (`fma.py`):**
-  * `--variante {small,medium}`: Subconjunto de FMA a descargar (`small` por defecto con ~8k canciones de ~7.2 GB que producen 120,000 segmentos de 2s, o `medium` con ~25k canciones de ~22 GB).
+  * `--variante {small,medium}`: Subconjunto de FMA a descargar (`small` por defecto: ~8k canciones, ~7.2 GB, ~112,000 segmentos de 2 s, alcanza para 1k, 10k y 100k; `medium`: ~25k canciones, ~22 GB, ~350,000 segmentos de 2 s).
   * `--indice {HNSW,IVF,EXACTO}`: Tipo de índice vectorial (por defecto `HNSW`).
-  * `--solo-descargar`: Descarga los archivos `.zip` sin descomprimir ni cortar en 2 segundos.
+  * `--solo-descargar`: Descarga los archivos `.zip` sin descomprimir ni cortar en segmentos de 2 s.
 
 ---
 
@@ -527,7 +527,7 @@ python3 -m bench.datasets.esci -n 1k 10k --ingestar
 # 2. Imágenes (Amazon) -> descarga ~10k fotos, extrae BoVW y crea imagenes_1k e imagenes_10k
 python3 -m bench.datasets.amazon_img -n 1k 10k --ingestar
 
-# 3. Audio (FMA) -> segmenta pistas en clips de 2s, extrae BoAW y crea audios_1k y audios_10k
+# 3. Audio (FMA) -> segmenta pistas en clips de 2 s, extrae BoAW y crea audios_1k y audios_10k
 python3 -m bench.datasets.fma -n 1k 10k --ingestar
 ```
 
@@ -575,11 +575,41 @@ WHERE SIMILAR_TO(ruta, 'bench/data/amazon_img/imgs/00000001.jpg', 5);
 
 #### 3. Búsqueda Vectorial por Similitud de Audio (SIMILAR_TO)
 ```sql
--- Top-5 clips de 2s más similares acústicamente a un audio de referencia
+-- Top-5 clips de 2 s más similares acústicamente a un audio de referencia
 SELECT id, track_id, seg_inicio, seg_fin, genero, artista, ruta, DISTANCE()
 FROM audios_1k
 WHERE SIMILAR_TO(ruta, 'bench/data/fma/fma_small/000/000002.mp3', 5);
 ```
+
+---
+
+### 2.3.5 Ejecución de los Experimentos Comparativos y Gráficas (Partes 3 y 4)
+
+Todos los resultados experimentales (archivos CSV, tablas comparativas en Markdown y gráficas PNG) se guardan automáticamente en `bench/results/`:
+
+```bash
+# 1. Parte 3 (Texto): TF-IDF + Coseno vs BM25 vs GIN de PostgreSQL (1k, 10k, 100k)
+python3 -m bench.experiments.texto -n 1k 10k 100k --plot
+
+# 2. Parte 4 (Multimedia): EXACTO vs IVF vs HNSW y Euclidiana vs Coseno (k=10)
+python3 -m bench.experiments.vector_compare -n 1k 10k 100k --plot
+
+# Opcional (si aún no se han descargado o construido todas las colecciones reales de 10k/100k):
+python3 -m bench.experiments.vector_compare -n 1k 10k 100k --sintetico-faltantes --plot
+
+# 3. Parte 4 (Galería Cualitativa): Top-5 casos de éxito y error en imágenes y audio
+python3 -m bench.experiments.galeria -n 1k
+
+# 4. Regenerar únicamente todas las gráficas PNG desde los CSV existentes:
+python3 -m bench.plots --parte todo
+```
+
+> **Uso de `--sintetico-faltantes`:** Si aún no has descargado o procesado las colecciones completas de `10k` o `100k` en disco para imágenes o audio, puedes agregar la bandera `--sintetico-faltantes`. Esta opción extrapola automáticamente las escalas ausentes a partir de los vectores BoVW/BoAW reales ya construidos (conservando la dispersidad y clusters del codebook), permitiendo evaluar y generar las gráficas comparativas completas de las tres escalas sin tener que esperar la descarga e indexación de decenas de gigabytes.
+
+**Salidas generadas en `bench/results/`:**
+* **Parte 3 (Texto):** `texto_construccion.csv`, `texto_consultas.csv`, `texto_resumen.md`, `texto_construccion_disco.png`, `texto_latencia_longitud.png`, `texto_relevancia_pr10.png`.
+* **Parte 4 (Vector/Multimedia):** `vector_compare.csv`, `vector_resumen.md`, `vector_tiempo_vs_tamano.png`, `vector_construccion_memoria.png`, `vector_recall_comparativa.png`.
+* **Galería Multimedia:** `galeria.json`, `galeria_imagenes.png`, `galeria_audio.md`.
 
 ---
 
