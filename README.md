@@ -98,7 +98,8 @@ Proyecto-BD2/
 │   ├── preprocesamiento.py      # Normalización, stopwords y stemming (NLTK)
 │   └── ingesta.py               # Ingesta de CSV a tablas e indexación SPIMI
 ├── multimedia/                  # Representación y procesamiento multimedia
-│   ├── extractores.py           # Extracción SIFT (imágenes) y MFCC (audio)
+│   ├── sift.py                  # Extracción SIFT (imágenes, OpenCV)
+│   ├── mfcc.py                  # Extracción MFCC (audio, librosa)
 │   ├── bovw.py                  # Codebooks K-Means, cuantización BoVW/BoAW y TF-IDF
 │   └── construir.py             # Pipeline de construcción de vocabularios y colecciones
 ├── bench/                       # Benchmarks y preparación de datasets reales
@@ -551,35 +552,43 @@ Una vez ingestadas las tablas, están disponibles de inmediato tanto en el **Edi
 #### 1. Recuperación de Información de Texto (MATCH ... USING TF_IDF | BM25)
 ```sql
 -- Búsqueda de productos relevantes con BM25
-SELECT id, contenido, SCORE()
+SELECT id, contenido, SCORE() AS relevancia
 FROM documentos_1k
 WHERE MATCH(contenido, 'wireless noise cancelling headphones') USING BM25
-ORDER BY SCORE() DESC
+ORDER BY relevancia DESC
 LIMIT 10;
 
 -- Búsqueda con TF-IDF tradicional
-SELECT id, contenido, SCORE()
+SELECT id, contenido, SCORE() AS relevancia
 FROM documentos_10k
 WHERE MATCH(contenido, 'mechanical keyboard') USING TF_IDF
-ORDER BY SCORE() DESC
+ORDER BY relevancia DESC
 LIMIT 5;
 ```
 
 #### 2. Búsqueda Vectorial por Similitud Visual (SIMILAR_TO)
 ```sql
 -- Top-5 imágenes visualmente más similares a una imagen de referencia
-SELECT id, titulo, categoria, ruta, DISTANCE()
+SELECT id, titulo, categoria, ruta, SIMILARITY_SCORE() AS score
 FROM imagenes_1k
-WHERE SIMILAR_TO(ruta, 'bench/data/amazon_img/imgs/00000001.jpg', 5);
+WHERE SIMILAR_TO('bench/data/amazon_img/imgs/00000001.jpg', k=5)
+USING HNSW WITH METRIC=cosine
+ORDER BY score DESC;
 ```
+
+`SIMILAR_TO('archivo', k=N) USING HNSW | IVF | EXACT [WITH METRIC=cosine | euclidean | dot]` busca en el índice vectorial de la tabla (el de la columna `ruta`). `SIMILARITY_SCORE()` devuelve un puntaje donde mayor es más parecido (coseno: `1 - distancia`, euclidiana: `1 / (1 + distancia)`, producto punto: el producto punto). Si la tabla no tiene un índice del método pedido, se usa el k-NN exacto y el plan lo indica. `WITH METRIC` es opcional (por defecto `cosine`).
 
 #### 3. Búsqueda Vectorial por Similitud de Audio (SIMILAR_TO)
 ```sql
 -- Top-5 clips de 2 s más similares acústicamente a un audio de referencia
-SELECT id, track_id, seg_inicio, seg_fin, genero, artista, ruta, DISTANCE()
+SELECT id, track_id, seg_inicio, seg_fin, genero, artista, ruta, SIMILARITY_SCORE() AS score
 FROM audios_1k
-WHERE SIMILAR_TO(ruta, 'bench/data/fma/fma_small/000/000002.mp3', 5);
+WHERE SIMILAR_TO('bench/data/fma/fma_small/000/000002.mp3', k=5)
+USING IVF WITH METRIC=euclidean
+ORDER BY score DESC;
 ```
+
+Los índices vectoriales también se pueden crear desde SQL con `CREATE INDEX ON tabla (ruta) USING EXACT | HNSW | IVF`; se guardan en `data/` y se sincronizan con la tabla al reiniciar.
 
 ---
 
