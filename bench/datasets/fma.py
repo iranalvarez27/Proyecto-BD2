@@ -420,7 +420,11 @@ def main(argv=None):
 
     tamanos = parsear_tamanos(args.tamanos)
     max_segmentos = max(tamanos)
-    pistas_para_base = math.ceil(max_segmentos / SEGMENTOS_POR_PISTA)
+    # Muchas pistas de FMA duran ~29.97 s (dan 14 segmentos enteros de 2 s en vez de 15)
+    # o pueden tener algun MP3 danado; agregamos un margen del 12% (minimo 15 pistas).
+    pistas_teoricas = math.ceil(max_segmentos / SEGMENTOS_POR_PISTA)
+    margen_pistas = max(15, math.ceil(pistas_teoricas * 0.12))
+    pistas_para_base = min(len(pistas) - 1, pistas_teoricas + margen_pistas)
     pistas_para_consultas = min(args.consultas, max(1, len(pistas) - pistas_para_base))
 
     pistas_consulta = pistas[:pistas_para_consultas]
@@ -453,7 +457,8 @@ def main(argv=None):
         if t <= len(segmentos_base):
             etiqueta = f"{t // 1000}k" if t % 1000 == 0 else str(t)
             guardar_segmentos_csv(dir_salida / f"segmentos_{etiqueta}.csv", segmentos_base[:t])
-            n_pistas_t = math.ceil(t / SEGMENTOS_POR_PISTA)
+            base_t = math.ceil(t / SEGMENTOS_POR_PISTA)
+            n_pistas_t = min(len(pistas_base), base_t + max(15, math.ceil(base_t * 0.12)))
             guardar_pistas_csv(dir_salida / f"objetos_{etiqueta}.csv", pistas_base[:n_pistas_t])
 
     etiquetas = {str(p["track_id"]): p["genero"] for p in pistas}
