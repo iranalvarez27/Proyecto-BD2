@@ -32,6 +32,8 @@ URL_EJEMPLOS = (
 )
 
 ETIQUETAS_RELEVANTES = {"E", "S", "Exact", "Substitute"}
+ETIQUETAS_NO_RELEVANTES = {"C", "I", "Complement", "Irrelevant"}
+GRUPOS = ("1_palabra", "3_palabras", "5_mas_palabras")
 _HTML_RE = re.compile(r"<[^>]+>")
 _WS_RE = re.compile(r"\s+")
 
@@ -150,7 +152,7 @@ def _leer_parquet(ruta: Path, columnas=None, locale=None):
         ) from exc
 
 
-def seleccionar_productos(ruta_productos: Path, max_n: int, locale: str, semilla: int) -> list[dict]:
+def leer_productos(ruta_productos: Path, locale: str, minimo: int) -> dict[str, dict]:
     cols = [
         "product_id",
         "product_title",
@@ -160,15 +162,14 @@ def seleccionar_productos(ruta_productos: Path, max_n: int, locale: str, semilla
         "product_locale",
     ]
     df = _leer_parquet(ruta_productos, columnas=cols, locale=locale)
-    if locale != "all" and len(df) < max_n:
+    if locale != "all" and len(df) < minimo:
         print(
-            f"[esci] Aviso: locale='{locale}' tiene {len(df)} filas (< {max_n}); "
+            f"[esci] Aviso: locale='{locale}' tiene {len(df)} filas (< {minimo}); "
             "completando con el resto de locales."
         )
         df = _leer_parquet(ruta_productos, columnas=cols)
 
-    productos = []
-    vistos = set()
+    productos = {}
     for pid_raw, tit_raw, desc_raw, bul_raw, mar_raw, loc_raw in zip(
         df["product_id"],
         df["product_title"],
@@ -178,7 +179,7 @@ def seleccionar_productos(ruta_productos: Path, max_n: int, locale: str, semilla
         df["product_locale"],
     ):
         pid = limpiar_texto(pid_raw)
-        if not pid or pid in vistos:
+        if not pid or pid in productos:
             continue
         titulo = limpiar_texto(tit_raw)
         if not titulo:
@@ -188,80 +189,102 @@ def seleccionar_productos(ruta_productos: Path, max_n: int, locale: str, semilla
         cuerpo = " ".join(p for p in (desc, bullets) if p)
         if not cuerpo:
             continue
-        marca = limpiar_texto(mar_raw)
-        loc = limpiar_texto(loc_raw)
-        vistos.add(pid)
-        productos.append({
+        productos[pid] = {
             "product_id": pid,
             "titulo": titulo,
             "descripcion": cuerpo,
-            "marca": marca,
-            "idioma": loc,
-        })
-
-    azar = random.Random(semilla)
-    azar.shuffle(productos)
-    elegidos = productos[:max_n]
-    for idx, prod in enumerate(elegidos, start=1):
-        prod["id"] = idx
-    return elegidos
+            "marca": limpiar_texto(mar_raw),
+            "idioma": limpiar_texto(loc_raw),
+        }
+    return productos
 
 
-def extraer_consultas(ruta_ejemplos: Path, id_por_pid: dict[str, int], tamanos: list[int],
-                      locale: str, max_por_grupo: int, semilla: int) -> dict:
-    cols = ["query", "product_id", "product_locale", "esci_label"]
+def leer_juicios(ruta_ejemplos: Path, locale: str, productos: dict) -> dict[int, dict]:
+    cols = ["query_id", "query", "product_id", "product_locale", "esci_label"]
     df = _leer_parquet(ruta_ejemplos, columnas=cols, locale=locale)
-    if locale != "all":
-        df = df[df["product_locale"] == locale]
-    df = df[df["esci_label"].isin(ETIQUETAS_RELEVANTES)]
-    df = df[df["product_id"].isin(id_por_pid)]
-
-    relevantes_por_query: dict[str, set[int]] = {}
-    for q_raw, pid_raw in zip(df["query"], df["product_id"]):
-        doc_id = id_por_pid.get(str(pid_raw))
-        if doc_id is None:
-            continue
+    juicios = {}
+    for qid, q_raw, pid_raw, etiqueta in zip(df["query_id"], df["query"], df["product_id"], df["esci_label"]):
+        pid = limpiar_texto(pid_raw)
         q = limpiar_texto(q_raw)
-        if not q:
+        if pid not in productos or not q:
             continue
-        relevantes_por_query.setdefault(q, set()).add(doc_id)
+        j = juicios.setdefault(int(qid), {"query": q, "relevantes": set(), "no_relevantes": set()})
+        if etiqueta in ETIQUETAS_RELEVANTES:
+            j["relevantes"].add(pid)
+        elif etiqueta in ETIQUETAS_NO_RELEVANTES:
+            j["no_relevantes"].add(pid)
+    return juicios
 
-    grupos = {"1_palabra": [], "3_palabras": [], "5_mas_palabras": []}
-    for q, doc_ids in relevantes_por_query.items():
-        palabras = q.split()
-        n_pal = len(palabras)
-        if n_pal == 1:
-            clave = "1_palabra"
-        elif n_pal == 3:
-            clave = "3_palabras"
-        elif n_pal >= 5:
-            clave = "5_mas_palabras"
-        else:
-            continue
 
-        por_tamano = {}
-        for t in tamanos:
-            rels_t = sorted(d for d in doc_ids if d <= t)
-            if rels_t:
-                por_tamano[str(t)] = rels_t
-        if str(max(tamanos)) in por_tamano:
-            grupos[clave].append({
-                "query": q,
-                "num_palabras": n_pal,
-                "relevantes_por_tamano": por_tamano,
-            })
+def _grupo(consulta: str):
+    n = len(consulta.split())
+    if n >= 5:
+        return "5_mas_palabras"
+    return {1: "1_palabra", 3: "3_palabras"}.get(n)
 
+
+def seleccionar(ruta_productos: Path, ruta_ejemplos: Path, tamanos: list[int], locale: str,
+                por_grupo: int, n_rel: int, n_no_rel: int, semilla: int) -> tuple[list[dict], dict]:
+    productos = leer_productos(ruta_productos, locale, max(tamanos))
+    juicios = leer_juicios(ruta_ejemplos, locale, productos)
     azar = random.Random(semilla)
-    salida = {}
-    for clave, lista in grupos.items():
-        # Prioriza consultas con relevantes ya desde el subconjunto mas pequeno
-        lista.sort(key=lambda item: (-len(item["relevantes_por_tamano"]), -len(
-            item["relevantes_por_tamano"].get(str(min(tamanos)), [])
-        ), item["query"]))
-        candidatos = lista[: max_por_grupo * 3]
-        azar.shuffle(candidatos)
-        salida[clave] = candidatos[:max_por_grupo]
-    return salida
+
+    candidatas = {g: [] for g in GRUPOS}
+    for qid in sorted(juicios):
+        g = _grupo(juicios[qid]["query"])
+        if g and len(juicios[qid]["relevantes"]) >= n_rel:
+            candidatas[g].append(qid)
+
+    elegidas = []
+    for g in GRUPOS:
+        if len(candidatas[g]) < por_grupo:
+            raise SystemExit(f"[esci] Solo hay {len(candidatas[g])} consultas de '{g}' con {n_rel}+ relevantes")
+        azar.shuffle(candidatas[g])
+        elegidas += [(g, qid) for qid in candidatas[g][:por_grupo]]
+
+    nucleo = {}
+    juzgados = set()
+    for _, qid in elegidas:
+        j = juicios[qid]
+        no_rel = sorted(j["no_relevantes"] - j["relevantes"])
+        for pid in azar.sample(sorted(j["relevantes"]), n_rel) + azar.sample(no_rel, min(n_no_rel, len(no_rel))):
+            nucleo[pid] = None
+        juzgados |= j["relevantes"] | j["no_relevantes"]
+    if len(nucleo) > min(tamanos):
+        raise SystemExit(
+            f"[esci] Los {len(nucleo)} productos juzgados no entran en {min(tamanos)}; "
+            "bajar --consultas-por-grupo o --relevantes-por-consulta"
+        )
+
+    # los juzgados que no entraron al nucleo quedan fuera: serian relevantes sin marcar
+    relleno = [pid for pid in productos if pid not in juzgados]
+    azar.shuffle(relleno)
+    faltan = max(tamanos) - len(nucleo)
+    if len(relleno) < faltan:
+        raise SystemExit(f"[esci] Solo hay {len(relleno):,} productos de relleno y faltan {faltan:,}")
+    # el nucleo va dentro del tamano menor, y por ser prefijos queda en los tres
+    en_menor = min(tamanos) - len(nucleo)
+    primeros = list(nucleo) + relleno[:en_menor]
+    azar.shuffle(primeros)
+    orden = primeros + relleno[en_menor:faltan]
+    print(f"[esci] {len(nucleo)} productos juzgados en todos los tamanos y {faltan:,} de relleno")
+
+    elegidos = [{**productos[pid], "id": idx} for idx, pid in enumerate(orden, start=1)]
+    id_por_pid = {p["product_id"]: p["id"] for p in elegidos}
+
+    consultas = {g: [] for g in GRUPOS}
+    for g, qid in elegidas:
+        j = juicios[qid]
+        rel = sorted(id_por_pid[p] for p in j["relevantes"] if p in nucleo)
+        no_rel = sorted(id_por_pid[p] for p in j["no_relevantes"] - j["relevantes"] if p in nucleo)
+        consultas[g].append({
+            "query_id": qid,
+            "query": j["query"],
+            "num_palabras": len(j["query"].split()),
+            "relevantes_por_tamano": {str(t): rel for t in tamanos},
+            "no_relevantes": no_rel,
+        })
+    return elegidos, consultas
 
 
 def guardar_csv_productos(ruta: Path, productos: list[dict]) -> None:
@@ -283,6 +306,10 @@ def main(argv=None):
                         help="Idioma del dataset ESCI (por defecto: es)")
     parser.add_argument("--consultas-por-grupo", type=int, default=30,
                         help="Cantidad de consultas para cada longitud (1, 3 y 5+ palabras)")
+    parser.add_argument("--relevantes-por-consulta", type=int, default=6,
+                        help="Relevantes (E o S) de cada consulta que entran en todos los tamanos")
+    parser.add_argument("--no-relevantes-por-consulta", type=int, default=2,
+                        help="Juzgados no relevantes (C o I) de cada consulta que entran en todos los tamanos")
     parser.add_argument("--semilla", type=int, default=cfg.get("semilla", 42))
     parser.add_argument("--salida", default=str(DIR_ESCI))
     parser.add_argument("--data-dir", default=str(PROJECT_ROOT / "data"),
@@ -305,9 +332,11 @@ def main(argv=None):
         return
 
     tamanos = parsear_tamanos(args.tamanos)
-    max_n = max(tamanos)
-    print(f"[esci] Seleccionando {max_n:,} productos (locale={args.locale}, semilla={args.semilla})...")
-    productos = seleccionar_productos(ruta_prod, max_n, args.locale, args.semilla)
+    print(f"[esci] Seleccionando {max(tamanos):,} productos (locale={args.locale}, semilla={args.semilla})...")
+    productos, consultas = seleccionar(
+        ruta_prod, ruta_ejem, tamanos, args.locale, args.consultas_por_grupo,
+        args.relevantes_por_consulta, args.no_relevantes_por_consulta, args.semilla,
+    )
     print(f"[esci] {len(productos):,} productos seleccionados.")
 
     csv_principal = dir_salida / "productos.csv"
@@ -323,11 +352,6 @@ def main(argv=None):
     with open(ruta_ids, "w", encoding="utf-8") as f:
         for p in productos:
             f.write(f"{p['id']}\t{p['product_id']}\n")
-
-    id_por_pid = {p["product_id"]: p["id"] for p in productos}
-    consultas = extraer_consultas(
-        ruta_ejem, id_por_pid, tamanos, args.locale, args.consultas_por_grupo, args.semilla
-    )
 
     for destino_q in (dir_salida / "consultas.json", DIR_IDS / "esci_consultas.json"):
         with open(destino_q, "w", encoding="utf-8") as f:
