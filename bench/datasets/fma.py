@@ -132,7 +132,7 @@ def extraer_tracks_csv(zip_meta: Path, dir_destino: Path) -> Path:
 
     print(f"[fma] Extrayendo tracks.csv desde {zip_meta} ...")
     with zipfile.ZipFile(zip_meta, "r") as zf:
-        miembro = next((m for m in zf.namelist() if m.endswith("tracks.csv")), None)
+        miembro = next((m for m in zf.namelist() if Path(m).name == "tracks.csv"), None)
         if miembro is None:
             raise RuntimeError(f"No se encontró tracks.csv dentro de {zip_meta}")
         zf.extract(miembro, path=dir_destino)
@@ -221,26 +221,27 @@ def descubrir_pistas_locales(dir_fma: Path, variante: str, metadatos: dict[int, 
     return pistas
 
 
+def _fila_segmento(p: dict, s: int, seg_s: float = SEG_S) -> dict:
+    return {
+        "id_segmento": json.dumps([str(p["track_id"]), s]),
+        "track_id": p["track_id"],
+        "segmento": s,
+        "seg_inicio": round(s * seg_s, 2),
+        "seg_fin": round((s + 1) * seg_s, 2),
+        "ruta": p["ruta"],
+        "genero": p["genero"],
+        "titulo": p["titulo"],
+        "artista": p["artista"],
+    }
+
+
 def expandir_segmentos(pistas: list[dict], seg_s: float = SEG_S,
                        n_seg: int = SEGMENTOS_POR_PISTA) -> list[dict]:
-    segmentos = []
-    for p in pistas:
-        tid = p["track_id"]
-        for s in range(n_seg):
-            inicio = round(s * seg_s, 2)
-            fin = round((s + 1) * seg_s, 2)
-            segmentos.append({
-                "id_segmento": json.dumps([str(tid), s]),
-                "track_id": tid,
-                "segmento": s,
-                "seg_inicio": inicio,
-                "seg_fin": fin,
-                "ruta": p["ruta"],
-                "genero": p["genero"],
-                "titulo": p["titulo"],
-                "artista": p["artista"],
-            })
-    return segmentos
+    return [_fila_segmento(p, s, seg_s) for p in pistas for s in range(n_seg)]
+
+
+def segmentos_de_coleccion(ids, por_track: dict) -> list[dict]:
+    return [_fila_segmento(por_track[str(oid[0])], int(oid[1])) for oid in ids]
 
 
 def guardar_segmentos_csv(ruta: Path, segmentos: list[dict]) -> None:
@@ -430,23 +431,19 @@ def main(argv=None):
     pistas_consulta = pistas[:pistas_para_consultas]
     pistas_base = pistas[pistas_para_consultas : pistas_para_consultas + pistas_para_base]
 
-    # 1 segmento aleatorio de 5 s por cada pista de consulta (para no repetir la misma cancion)
+    from multimedia.mfcc import segmentar
+
+    # 1 segmento al azar por pista de consulta, entre los que salen al decodificarla
     consultas = []
     for p in pistas_consulta[: args.consultas]:
-        seg_idx = azar.randrange(SEGMENTOS_POR_PISTA)
-        inicio = round(seg_idx * SEG_S, 2)
-        fin = round((seg_idx + 1) * SEG_S, 2)
-        consultas.append({
-            "id_segmento": json.dumps([str(p["track_id"]), seg_idx]),
-            "track_id": p["track_id"],
-            "segmento": seg_idx,
-            "seg_inicio": inicio,
-            "seg_fin": fin,
-            "ruta": p["ruta"],
-            "genero": p["genero"],
-            "titulo": p["titulo"],
-            "artista": p["artista"],
-        })
+        try:
+            n_seg = len(segmentar(p["ruta"]))
+        except Exception:
+            n_seg = 0
+        if n_seg == 0:
+            print(f"[fma] Consulta descartada, no se pudo decodificar: {p['ruta']}")
+            continue
+        consultas.append(_fila_segmento(p, azar.randrange(n_seg)))
 
     segmentos_base = expandir_segmentos(pistas_base)
     guardar_pistas_csv(dir_salida / "objetos.csv", pistas_base)
@@ -480,7 +477,7 @@ def main(argv=None):
     )
 
     if (args.construir_bovw or args.ingestar) and pistas_base:
-        from multimedia import construir
+        from multimedia import bovw, construir
 
         tamanos_validos = [t for t in tamanos if t <= len(segmentos_base)]
         construir.main([
@@ -488,6 +485,13 @@ def main(argv=None):
             "--objetos", str(dir_salida / "objetos.csv"),
             "--n", ",".join(str(t) for t in tamanos_validos),
         ])
+        # se reescriben con los segmentos que de verdad quedaron en cada coleccion
+        por_track = {str(p["track_id"]): p for p in pistas_base}
+        for t in tamanos_validos:
+            reales = segmentos_de_coleccion(bovw.cargar_coleccion("audio", t)[1], por_track)
+            guardar_segmentos_csv(dir_salida / f"segmentos_{etiqueta_tamano(t)}.csv", reales)
+            if t == max_segmentos:
+                guardar_segmentos_csv(dir_salida / "segmentos.csv", reales)
         if args.ingestar and tamanos_validos:
             ingestar_tablas_audio(pistas_base, tamanos_validos, args.data_dir, metodo_indice=args.indice)
 

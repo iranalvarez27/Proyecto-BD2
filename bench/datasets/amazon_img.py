@@ -127,6 +127,11 @@ def descargar_archivo(url: str, destino: Path, bloque: int = 1024 * 1024) -> Pat
     return destino
 
 
+def _contar_filas(ruta: Path) -> int:
+    with open(ruta, "r", encoding="utf-8", newline="") as f:
+        return sum(1 for _ in csv.DictReader(f))
+
+
 def obtener_manifiesto(total_necesario: int, semilla: int, ruta_meta: Path) -> list[dict]:
     if MANIFIESTO_IDS.exists():
         with open(MANIFIESTO_IDS, "r", encoding="utf-8", newline="") as f:
@@ -139,7 +144,7 @@ def obtener_manifiesto(total_necesario: int, semilla: int, ruta_meta: Path) -> l
     prod_csv = dir_amazon / "productos.csv"
     img_csv = dir_amazon / "imagenes.csv"
 
-    if not (prod_csv.exists() and img_csv.exists()):
+    if not (prod_csv.exists() and img_csv.exists()) or _contar_filas(img_csv) < total_necesario:
         if not ruta_meta.exists():
             descargar_archivo(URL_META_ELECTRONICS, ruta_meta)
         print(f"[amazon_img] Extrayendo {total_necesario:,} productos desde {ruta_meta} ...")
@@ -179,7 +184,8 @@ def obtener_manifiesto(total_necesario: int, semilla: int, ruta_meta: Path) -> l
 def _descargar_una_imagen(item: dict, dir_imgs: Path, timeout: int = 20) -> tuple[str, Path | None, str | None]:
     pid = str(item["id"])
     url = item["url"]
-    destino = dir_imgs / f"{pid}.jpg"
+    # por asin: el id se reasigna cuando el manifiesto se vuelve a muestrear con otro tamano
+    destino = dir_imgs / f"{item['asin']}.jpg"
     if destino.exists() and destino.stat().st_size > 256:
         return pid, destino, None
 

@@ -130,10 +130,19 @@ def descargar_archivo(url: str, destino: Path, bloque: int = 1024 * 1024) -> Pat
     return destino
 
 
-def _leer_parquet(ruta: Path, columnas=None):
+def _leer_parquet(ruta: Path, columnas=None, locale=None):
     try:
-        import pandas as pd
-        return pd.read_parquet(ruta, columns=columnas)
+        import pyarrow as pa
+        import pyarrow.compute as pc
+        import pyarrow.parquet as pq
+        # el parquet de productos es un solo row group de ~2 GB: por lotes para no cargarlo entero
+        archivo = pq.ParquetFile(ruta)
+        lotes = []
+        for lote in archivo.iter_batches(batch_size=50_000, columns=columnas):
+            if locale and locale != "all":
+                lote = lote.filter(pc.equal(lote.column("product_locale"), locale))
+            lotes.append(lote)
+        return pa.Table.from_batches(lotes).to_pandas()
     except ImportError as exc:
         raise SystemExit(
             f"Error al leer '{ruta.name}': se necesita 'pyarrow' o 'fastparquet' para abrir archivos Parquet.\n"
@@ -150,16 +159,13 @@ def seleccionar_productos(ruta_productos: Path, max_n: int, locale: str, semilla
         "product_brand",
         "product_locale",
     ]
-    df = _leer_parquet(ruta_productos, columnas=cols)
-    if locale != "all":
-        df_loc = df[df["product_locale"] == locale]
-        if len(df_loc) >= max_n:
-            df = df_loc
-        else:
-            print(
-                f"[esci] Aviso: locale='{locale}' tiene {len(df_loc)} filas (< {max_n}); "
-                "completando con el resto de locales."
-            )
+    df = _leer_parquet(ruta_productos, columnas=cols, locale=locale)
+    if locale != "all" and len(df) < max_n:
+        print(
+            f"[esci] Aviso: locale='{locale}' tiene {len(df)} filas (< {max_n}); "
+            "completando con el resto de locales."
+        )
+        df = _leer_parquet(ruta_productos, columnas=cols)
 
     productos = []
     vistos = set()
@@ -204,7 +210,7 @@ def seleccionar_productos(ruta_productos: Path, max_n: int, locale: str, semilla
 def extraer_consultas(ruta_ejemplos: Path, id_por_pid: dict[str, int], tamanos: list[int],
                       locale: str, max_por_grupo: int, semilla: int) -> dict:
     cols = ["query", "product_id", "product_locale", "esci_label"]
-    df = _leer_parquet(ruta_ejemplos, columnas=cols)
+    df = _leer_parquet(ruta_ejemplos, columnas=cols, locale=locale)
     if locale != "all":
         df = df[df["product_locale"] == locale]
     df = df[df["esci_label"].isin(ETIQUETAS_RELEVANTES)]
