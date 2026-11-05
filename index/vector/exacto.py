@@ -32,12 +32,17 @@ def knn_exacto(consulta, vectores, k: int, metrica: str) -> list[tuple[int, floa
     posiciones, valores = knn_exacto_lote(consulta, vectores, k, metrica)
     return list(zip(posiciones[0].tolist(), valores[0].tolist()))
 
+def separar_clave(clave):
+    if isinstance(clave, (tuple, list)) and len(clave) == 2:
+        return clave[0], int(clave[1])
+    return clave, None
 
 class IndiceExacto(IndiceVectorial):
     metodo = "EXACTO"
 
-    def __init__(self, rids, vectores, extractor=None, resolver=None, rutas=None):
+    def __init__(self, rids, vectores, extractor=None, resolver=None, rutas=None, n_coleccion=None):
         self._extractor = extractor
+        self.n_coleccion = None if n_coleccion is None else int(n_coleccion)
         self._resolver = resolver
         self.archivo = None
         self.sincronizado = True
@@ -61,13 +66,19 @@ class IndiceExacto(IndiceVectorial):
         if resolver is not None:
             self._resolver = resolver
 
-    def extraer(self, ruta: str):
+    def extraer(self, ruta: str, segmento: int | None = None):
         if self._extractor is None:
             raise ValueError("el indice no tiene un extractor de caracteristicas")
-        return np.asarray(self._extractor(ruta), dtype=np.float32)
+        kw = {}
+        if self.n_coleccion is not None:
+            kw["n_coleccion"] = self.n_coleccion
+        if segmento is not None:
+            kw["segmento"] = int(segmento)
+        return np.asarray(self._extractor(ruta, **kw), dtype=np.float32)
 
-    def _vector_de(self, ruta):
-        return self.extraer(self._resolver(ruta) if self._resolver is not None else ruta)
+    def _vector_de(self, clave):
+        ruta, segmento = separar_clave(clave)
+        return self.extraer(self._resolver(ruta) if self._resolver is not None else ruta, segmento)
 
     def buscar(self, vector, k: int, metrica: str) -> list:
         if not self._rids:
@@ -114,10 +125,14 @@ class IndiceExacto(IndiceVectorial):
         if ruta is None:
             raise ValueError("el indice no tiene una ruta de archivo")
         rids = np.array([(r.page_id, r.slot_id) for r in self._rids], dtype=np.int64).reshape(-1, 2)
-        meta = {"metodo": self.metodo, "parametros": self._parametros_guardables()}
+        meta = {"metodo": self.metodo, "parametros": self._parametros_guardables(),
+                "n_coleccion": self.n_coleccion}
+        rutas = [separar_clave(c)[0] for c in self._rutas]
+        segmentos = np.array([-1 if separar_clave(c)[1] is None else separar_clave(c)[1] for c in self._rutas],
+                             dtype=np.int64)
         temporal = ruta + ".tmp.npz"
-        np.savez(temporal, vectores=self._vectores, rids=rids, rutas=np.array(self._rutas, dtype=str),
-                 meta=np.array(json.dumps(meta)))
+        np.savez(temporal, vectores=self._vectores, rids=rids, rutas=np.array(rutas, dtype=str),
+                 segmentos=segmentos, meta=np.array(json.dumps(meta)))
         os.replace(temporal, ruta)
         self.archivo = ruta
 
@@ -126,9 +141,12 @@ class IndiceExacto(IndiceVectorial):
         with np.load(ruta) as f:
             meta = json.loads(str(f["meta"]))
             vectores, rids, rutas = f["vectores"], f["rids"], f["rutas"].tolist()
+            segmentos = f["segmentos"].tolist() if "segmentos" in f.files else [-1] * len(rutas)
         if meta["metodo"] != cls.metodo:
             raise ValueError(f"{ruta} es un indice {meta['metodo']}, no {cls.metodo}")
-        indice = cls([RID(int(p), int(s)) for p, s in rids], vectores, rutas=rutas, **meta["parametros"])
+        claves = [r if s < 0 else (r, int(s)) for r, s in zip(rutas, segmentos)]
+        indice = cls([RID(int(p), int(s)) for p, s in rids], vectores, rutas=claves,
+                     n_coleccion=meta.get("n_coleccion"), **meta["parametros"])
         indice.archivo = ruta
         indice.sincronizado = False
         return indice
