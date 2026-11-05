@@ -16,6 +16,9 @@ BENCH_DIR = Path(__file__).resolve().parent
 DIR_RESULTS = BENCH_DIR / "results"
 
 COLORES_TEXTO = {
+    "SPIMI (Propio)": "#2563eb",
+    "GIN (PostgreSQL)": "#ea580c",
+    "SPIMI": "#2563eb",
     "TF_IDF": "#2563eb",
     "BM25": "#16a34a",
     "GIN": "#ea580c",
@@ -54,9 +57,15 @@ def graficar_texto(dir_results: Path = DIR_RESULTS) -> list[Path]:
 
     if filas_const:
         tamanos = sorted({int(f["n"]) for f in filas_const})
-        motores = ["TF_IDF", "BM25", "GIN"]
+        motores_candidatos = ["SPIMI (Propio)", "GIN (PostgreSQL)"]
+        if not any(f["motor"] in motores_candidatos for f in filas_const):
+            motores_candidatos = ["SPIMI", "GIN", "TF_IDF"]
+        motores = [m for m in motores_candidatos if any(f["motor"] == m for f in filas_const)]
+        if not motores:
+            motores = list(dict.fromkeys(f["motor"] for f in filas_const))
+
         x = np.arange(len(tamanos))
-        ancho = 0.25
+        ancho = 0.32 if len(motores) == 2 else 0.25
 
         fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(13, 5), dpi=150)
         fig.suptitle(
@@ -73,7 +82,7 @@ def graficar_texto(dir_results: Path = DIR_RESULTS) -> list[Path]:
                 tiempos.append(float(match["construccion_s"]) if match else 0.0)
                 discos.append(float(match["disco_mb"]) if match else 0.0)
 
-            despl = (idx - 1) * ancho
+            despl = (idx - 0.5) * ancho if len(motores) == 2 else (idx - 1) * ancho
             b1 = ax1.bar(x + despl, tiempos, width=ancho, label=m, color=COLORES_TEXTO.get(m, "#333"))
             b2 = ax2.bar(x + despl, discos, width=ancho, label=m, color=COLORES_TEXTO.get(m, "#333"))
             ax1.bar_label(b1, fmt="%.2fs", padding=2, fontsize=8)
@@ -286,9 +295,10 @@ def graficar_vector(dir_results: Path = DIR_RESULTS) -> list[Path]:
         sub_tipo = [f for f in filas if f["tipo"] == tipo]
         tamanos = sorted({int(f["n"]) for f in sub_tipo})
         x = np.arange(len(tamanos))
-        ancho = 0.25
+        ancho = 0.32
+        indices_const = ["HNSW", "IVF"]
 
-        for idx, ind in enumerate(indices):
+        for idx, ind in enumerate(indices_const):
             builds, mems = [], []
             for n in tamanos:
                 # Promedio entre metricas (el uso de memoria es identico y el tiempo de build es muy similar)
@@ -296,8 +306,9 @@ def graficar_vector(dir_results: Path = DIR_RESULTS) -> list[Path]:
                 builds.append(float(np.mean([float(m["construccion_s"]) for m in matches])) if matches else 0.0)
                 mems.append(float(np.mean([float(m["memoria_mb"]) for m in matches])) if matches else 0.0)
 
-            b1 = ax_b.bar(x + (idx - 1) * ancho, builds, width=ancho, label=ind, color=COLORES_VECTOR.get(ind, "#333"))
-            b2 = ax_m.bar(x + (idx - 1) * ancho, mems, width=ancho, label=ind, color=COLORES_VECTOR.get(ind, "#333"))
+            despl = (idx - 0.5) * ancho
+            b1 = ax_b.bar(x + despl, builds, width=ancho, label=ind, color=COLORES_VECTOR.get(ind, "#333"))
+            b2 = ax_m.bar(x + despl, mems, width=ancho, label=ind, color=COLORES_VECTOR.get(ind, "#333"))
             ax_b.bar_label(b1, fmt="%.3fs", padding=2, fontsize=7.5)
             ax_m.bar_label(b2, fmt="%.2f", padding=2, fontsize=7.5)
 

@@ -283,7 +283,11 @@ def generar_resumen_md(filas_const: list[dict], filas_cons: list[dict], ruta_md:
         "",
         "## 1. Construcción del Índice y Uso de Disco",
         "",
-        "| N | Motor | Construcción (s) | Espacio en Disco (MB) | Términos | Postings | Modo |",
+        "> **Nota sobre arquitectura e indexación:** TF-IDF y BM25 son algoritmos de *ranking* y scoring que operan sobre "
+        "la misma estructura física de índice invertido (`.dict`, `.post`, `.doc`) construida mediante el algoritmo SPIMI en nuestro motor. "
+        "Por ende, comparten el mismo tiempo de construcción y huella en disco físico frente al índice `GIN` de PostgreSQL.",
+        "",
+        "| N | Índice Invertido | Construcción (s) | Espacio en Disco (MB) | Términos | Postings | Modo |",
         "|---:|:---|---:|---:|---:|---:|:---|",
     ]
     for f in filas_const:
@@ -372,17 +376,16 @@ def main(argv=None):
             mb_spimi = tamano_archivos_mb(indice.file_paths())
             stats = indice.estadisticas or {"terminos": 0, "postings": 0, "bloques": 0}
 
-            for motor_propio in ("TF_IDF", "BM25"):
-                filas_construccion.append({
-                    "n": n,
-                    "motor": motor_propio,
-                    "construccion_s": round(t_spimi, 4),
-                    "disco_mb": round(mb_spimi, 3),
-                    "terminos": stats.get("terminos", 0),
-                    "postings": stats.get("postings", 0),
-                    "bloques": stats.get("bloques", 0),
-                    "modo_pg": "SPIMI nativo",
-                })
+            filas_construccion.append({
+                "n": n,
+                "motor": "SPIMI (Propio)",
+                "construccion_s": round(t_spimi, 4),
+                "disco_mb": round(mb_spimi, 3),
+                "terminos": stats.get("terminos", 0),
+                "postings": stats.get("postings", 0),
+                "bloques": stats.get("bloques", 0),
+                "modo_pg": "SPIMI nativo",
+            })
 
             if conn_pg is not None:
                 t_gin, mb_gin = _construir_pg_gin(conn_pg, sub_docs, idioma_pg=args.idioma)
@@ -391,7 +394,7 @@ def main(argv=None):
 
             filas_construccion.append({
                 "n": n,
-                "motor": "GIN",
+                "motor": "GIN (PostgreSQL)",
                 "construccion_s": round(t_gin, 4),
                 "disco_mb": round(mb_gin, 3),
                 "terminos": stats.get("terminos", 0),

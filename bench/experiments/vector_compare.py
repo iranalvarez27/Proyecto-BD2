@@ -200,10 +200,14 @@ def obtener_coleccion_y_consultas(tipo: str, n: int, max_consultas: int, semilla
     return todo[max_consultas:], todo[:max_consultas], f"Sintético ({dim}D)"
 
 
-def _elegir_ef_search(cfg_vec: dict, metrica: str, n: int) -> int:
-    busq = cfg_vec.get("busqueda", {}).get(metrica, {}).get("efSearch", {})
+def _elegir_ef_search(cfg_vec: dict, tipo: str, metrica: str, n: int) -> int:
+    busq_raiz = cfg_vec.get("busqueda", {})
+    busq_tipo = busq_raiz.get(tipo, busq_raiz) if isinstance(busq_raiz, dict) else {}
+    busq = busq_tipo.get(metrica, {}).get("efSearch", {}) if isinstance(busq_tipo, dict) else {}
     if isinstance(busq, dict) and n in busq and busq[n]:
         return int(busq[n])
+    if isinstance(busq, dict) and str(n) in busq and busq[str(n)]:
+        return int(busq[str(n)])
     if n <= 1_000:
         return 64
     if n <= 10_000:
@@ -211,10 +215,14 @@ def _elegir_ef_search(cfg_vec: dict, metrica: str, n: int) -> int:
     return 128
 
 
-def _elegir_nprobe(cfg_vec: dict, metrica: str, n: int, nlist: int) -> int:
-    busq = cfg_vec.get("busqueda", {}).get(metrica, {}).get("nprobe", {})
+def _elegir_nprobe(cfg_vec: dict, tipo: str, metrica: str, n: int, nlist: int) -> int:
+    busq_raiz = cfg_vec.get("busqueda", {})
+    busq_tipo = busq_raiz.get(tipo, busq_raiz) if isinstance(busq_raiz, dict) else {}
+    busq = busq_tipo.get(metrica, {}).get("nprobe", {}) if isinstance(busq_tipo, dict) else {}
     if isinstance(busq, dict) and n in busq and busq[n]:
         return min(nlist, int(busq[n]))
+    if isinstance(busq, dict) and str(n) in busq and busq[str(n)]:
+        return min(nlist, int(busq[str(n)]))
     if n <= 1_000:
         return min(nlist, 4)
     if n <= 10_000:
@@ -364,7 +372,7 @@ def main(argv=None):
                 })
 
                 # 2. HNSW
-                ef_s = _elegir_ef_search(vcfg, metrica, n)
+                ef_s = _elegir_ef_search(vcfg, tipo, metrica, n)
                 hnsw = HNSW(metrica, M=M_hnsw, efConstruction=ef_c, efSearch=ef_s)
                 t0 = time.perf_counter()
                 hnsw.build(x)
@@ -398,7 +406,7 @@ def main(argv=None):
                 # 3. IVF
                 nlist_val = None if nlist_cfg == "sqrt" else int(nlist_cfg)
                 ivf_tmp_nlist = nlist_val or max(1, round(math.sqrt(n)))
-                nprobe_val = _elegir_nprobe(vcfg, metrica, n, ivf_tmp_nlist)
+                nprobe_val = _elegir_nprobe(vcfg, tipo, metrica, n, ivf_tmp_nlist)
                 ivf = IVF(metrica, nlist=nlist_val, nprobe=nprobe_val, semilla=semilla)
                 t0 = time.perf_counter()
                 ivf.build(x)

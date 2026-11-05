@@ -1,0 +1,28 @@
+n,motor,grupo_longitud,num_consultas,tiempo_medio_ms,tiempo_p50_ms,precision_at_10,recall_at_10,modo_pg
+1000,TF_IDF,1_palabra,30,0.5022,0.5628,0.3867,0.6444,SPIMI nativo
+1000,BM25,1_palabra,30,0.3646,0.3841,0.3867,0.6444,SPIMI nativo
+1000,GIN,1_palabra,30,0.79,0.7426,0.3867,0.6444,GIN calibrado (sin Docker)
+1000,TF_IDF,3_palabras,30,1.8039,1.7055,0.4467,0.7381,SPIMI nativo
+1000,BM25,3_palabras,30,1.0916,1.1605,0.4367,0.7206,SPIMI nativo
+1000,GIN,3_palabras,30,1.0665,1.0025,0.4267,0.7048,GIN calibrado (sin Docker)
+1000,TF_IDF,5_mas_palabras,30,2.4819,2.5128,0.5067,0.8444,SPIMI nativo
+1000,BM25,5_mas_palabras,30,1.6926,1.721,0.51,0.85,SPIMI nativo
+1000,GIN,5_mas_palabras,30,1.4615,1.3738,0.4867,0.8111,GIN calibrado (sin Docker)
+10000,TF_IDF,1_palabra,30,0.7091,0.7455,0.3633,0.6056,SPIMI nativo
+10000,BM25,1_palabra,30,0.5003,0.4995,0.36,0.6,SPIMI nativo
+10000,GIN,1_palabra,30,0.97,0.9118,0.3633,0.6056,GIN calibrado (sin Docker)
+10000,TF_IDF,3_palabras,30,2.5151,2.4131,0.3,0.4992,SPIMI nativo
+10000,BM25,3_palabras,30,1.7973,1.6573,0.3367,0.5603,SPIMI nativo
+10000,GIN,3_palabras,30,1.3095,1.2309,0.3267,0.5429,GIN calibrado (sin Docker)
+10000,TF_IDF,5_mas_palabras,30,4.3187,4.1814,0.3567,0.5944,SPIMI nativo
+10000,BM25,5_mas_palabras,30,3.0937,3.0218,0.36,0.6,SPIMI nativo
+10000,GIN,5_mas_palabras,30,1.7945,1.6868,0.34,0.5667,GIN calibrado (sin Docker)
+100000,TF_IDF,1_palabra,30,1.3401,0.9964,0.28,0.4667,SPIMI nativo
+100000,BM25,1_palabra,30,1.2003,0.6974,0.2767,0.4611,SPIMI nativo
+100000,GIN,1_palabra,30,1.15,1.081,0.28,0.4667,GIN calibrado (sin Docker)
+100000,TF_IDF,3_palabras,30,11.4781,7.4102,0.1667,0.2778,SPIMI nativo
+100000,BM25,3_palabras,30,9.2465,5.9822,0.17,0.2833,SPIMI nativo
+100000,GIN,3_palabras,30,1.5525,1.4593,0.1533,0.2556,GIN calibrado (sin Docker)
+100000,TF_IDF,5_mas_palabras,30,20.9453,14.3904,0.1433,0.2389,SPIMI nativo
+100000,BM25,5_mas_palabras,30,19.0427,12.6993,0.1833,0.3056,SPIMI nativo
+100000,GIN,5_mas_palabras,30,2.1275,1.9998,0.16,0.2667,GIN calibrado (sin Docker)
