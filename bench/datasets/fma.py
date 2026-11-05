@@ -366,9 +366,10 @@ def main(argv=None):
     n_consultas_cfg = cfg.get("vector", {}).get("consultas", 100)
 
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--variante", default="medium", choices=("small", "medium"),
-                        help=f"Variante de FMA a descargar: medium (25k pistas, ~22 GB, ~{25_000 * SEGMENTOS_POR_PISTA:,} segmentos de {SEG_S:g} s; "
-                             f"necesaria para la tabla de 100k) o small (8k pistas, ~7.2 GB, ~{8_000 * SEGMENTOS_POR_PISTA:,} segmentos)")
+    parser.add_argument("--variante", default="small", choices=("small", "medium"),
+                        help=f"Variante de FMA a descargar: small (8k pistas, ~7.2 GB, ~{8_000 * SEGMENTOS_POR_PISTA:,} segmentos de {SEG_S:g} s) "
+                             f"o medium (25k pistas, ~22 GB, ~{25_000 * SEGMENTOS_POR_PISTA:,} segmentos). "
+                             f"Elige la que alcance para el tamano mas grande que pidas con -n")
     parser.add_argument("-n", "--tamanos", nargs="+", default=cfg.get("tamanos", [1000, 10000, 100000]),
                         help=f"Tamaños de tablas en segmentos de {SEG_S:g} s (ej: 1k 10k 100k o 1000 10000 100000)")
     parser.add_argument("--consultas", type=int, default=n_consultas_cfg,

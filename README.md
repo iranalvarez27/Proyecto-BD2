@@ -486,7 +486,7 @@ Esta sección describe cómo descargar, preparar e ingestar automáticamente los
 |---|---|---|---|---|
 | **Texto** | [ESCI (Amazon Shopping Queries)](https://github.com/amazon-science/esci-data) | Productos y queries en Parquet. Consultas clasificadas en 1 palabra, 3 palabras y 5+ palabras. | `documentos_1k`, `documentos_10k`, `documentos_100k` | Invertido con SPIMI (`TF_IDF` y `BM25`) |
 | **Imágenes** | [Amazon Reviews '23 (Electronics)](https://mcauleylab.ucsd.edu/public_datasets/data/amazon_2023/) | Metadatos y descarga paralela de fotos `.jpg`. Descriptores SIFT + K-Means (BoVW) + TF-IDF. | `imagenes_1k`, `imagenes_10k`, `imagenes_100k` | Vectorial (`HNSW`, `IVF`, `EXACTO`) |
-| **Audio** | [Free Music Archive (FMA)](https://github.com/mdeff/fma) | Pistas MP3 divididas en clips continuos de 5 s (5 por canción; `SEG_S` en `multimedia/config.py`). MFCC + K-Means (BoAW) + TF-IDF. | `audios_1k`, `audios_10k`, `audios_100k` | Vectorial (`HNSW`, `IVF`, `EXACTO`) |
+| **Audio** | [Free Music Archive (FMA)](https://github.com/mdeff/fma) | Pistas MP3 divididas en clips continuos de 2 s (14 por canción; `SEG_S` en `multimedia/config.py`). MFCC + K-Means (BoAW) + TF-IDF. | `audios_1k`, `audios_10k`, `audios_100k` | Vectorial (`HNSW`, `IVF`, `EXACTO`) |
 
 ---
 
@@ -504,9 +504,9 @@ Opciones específicas por dominio:
   * `--workers`: Cantidad de hilos para descarga paralela de imágenes (por defecto `16`).
   * `--solo-manifiesto`: Solo genera el listado de IDs/URLs sin descargar las fotos `.jpg`.
 * **Audio (`fma.py`):**
-  * `--variante {small,medium}`: Subconjunto de FMA a descargar (`medium` por defecto: ~25k canciones, ~22 GB, ~125,000 segmentos de 5 s, necesaria para la tabla de 100k; `small`: ~8k canciones, ~7.2 GB, ~40,000 segmentos de 5 s, alcanza para 1k y 10k).
+  * `--variante {small,medium}`: Subconjunto de FMA a descargar (`small` por defecto: ~8k canciones, ~7.2 GB, ~112,000 segmentos de 2 s, alcanza para 1k, 10k y 100k; `medium`: ~25k canciones, ~22 GB, ~350,000 segmentos de 2 s).
   * `--indice {HNSW,IVF,EXACTO}`: Tipo de índice vectorial (por defecto `HNSW`).
-  * `--solo-descargar`: Descarga los archivos `.zip` sin descomprimir ni cortar en segmentos de 5 s.
+  * `--solo-descargar`: Descarga los archivos `.zip` sin descomprimir ni cortar en segmentos de 2 s.
 
 ---
 
@@ -527,7 +527,7 @@ python3 -m bench.datasets.esci -n 1k 10k --ingestar
 # 2. Imágenes (Amazon) -> descarga ~10k fotos, extrae BoVW y crea imagenes_1k e imagenes_10k
 python3 -m bench.datasets.amazon_img -n 1k 10k --ingestar
 
-# 3. Audio (FMA) -> segmenta pistas en clips de 5 s, extrae BoAW y crea audios_1k y audios_10k
+# 3. Audio (FMA) -> segmenta pistas en clips de 2 s, extrae BoAW y crea audios_1k y audios_10k
 python3 -m bench.datasets.fma -n 1k 10k --ingestar
 ```
 
@@ -575,7 +575,7 @@ WHERE SIMILAR_TO(ruta, 'bench/data/amazon_img/imgs/00000001.jpg', 5);
 
 #### 3. Búsqueda Vectorial por Similitud de Audio (SIMILAR_TO)
 ```sql
--- Top-5 clips de 5 s más similares acústicamente a un audio de referencia
+-- Top-5 clips de 2 s más similares acústicamente a un audio de referencia
 SELECT id, track_id, seg_inicio, seg_fin, genero, artista, ruta, DISTANCE()
 FROM audios_1k
 WHERE SIMILAR_TO(ruta, 'bench/data/fma/fma_small/000/000002.mp3', 5);
