@@ -228,8 +228,22 @@ class EngineAdapter:
         vectorial["modalidad"] = "audio" if audio else "imagen"
         for item in vectorial["resultados"]:
             ruta = str(item["ruta"]).replace("\\", "/").lstrip("/")
-            item["audio_url" if audio else "media_url"] = f"/api/media/{ruta}"
-            item["detalles"] = ruta
+            base_url = f"/api/media/{ruta}"
+            item["audio_url" if audio else "media_url"] = base_url
+            if audio and item.get("seg_inicio") is not None and item.get("seg_fin") is not None:
+                ini = float(item["seg_inicio"])
+                fin = float(item["seg_fin"])
+                item["segmento_url"] = f"{base_url}#t={ini:g},{fin:g}"
+                partes = []
+                if item.get("artista"):
+                    partes.append(str(item["artista"]))
+                if item.get("genero"):
+                    partes.append(str(item["genero"]))
+                partes.append(f"Segmento #{item.get('segmento', 0)} ({ini:g}s – {fin:g}s)")
+                partes.append(ruta)
+                item["detalles"] = " · ".join(partes)
+            else:
+                item["detalles"] = ruta
         return vectorial
 
     def get_tables_metadata(self) -> List[Dict[str, Any]]:

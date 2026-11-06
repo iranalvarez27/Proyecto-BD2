@@ -866,7 +866,28 @@ class Conexion:
         }
         return filas, orden_ya_resuelto
 
-    # busqueda por similitud con un indice vectorial (SIMILAR_TO ... USING)
+    @staticmethod
+    def _item_vectorial(f: dict, info: TableInfo, columna: str) -> dict:
+        pk = f.get(info.key_column)
+        titulo_real = str(f.get("titulo") or "").strip()
+        item = {
+            "id": pk,
+            "titulo": f"{titulo_real} (#{pk})" if titulo_real else f"Registro #{pk}",
+            "ruta": f.get(columna),
+            "score": round(f["__score__"], 4),
+            "distancia": round(f["__distancia__"], 4),
+        }
+        if "segmento" in f and f["segmento"] is not None:
+            seg = int(f["segmento"])
+            seg_ini = float(f["seg_inicio"]) if "seg_inicio" in f and f["seg_inicio"] is not None else round(seg * 5.0, 2)
+            seg_fin = float(f["seg_fin"]) if "seg_fin" in f and f["seg_fin"] is not None else round((seg + 1) * 5.0, 2)
+            item["segmento"] = seg
+            item["seg_inicio"] = seg_ini
+            item["seg_fin"] = seg_fin
+        for extra in ("track_id", "artista", "genero", "categoria"):
+            if extra in f and f[extra] is not None and f[extra] != "":
+                item[extra] = f[extra]
+        return item
 
     @staticmethod
     def _clave_vectorial(info: TableInfo, valores, idx: int):
@@ -997,8 +1018,7 @@ class Conexion:
                 "vectores_indexados": len(indice),
             },
             "resultados": [
-                {"id": f.get(info.key_column), "titulo": f"Registro #{f.get(info.key_column)}",
-                 "ruta": f.get(columna), "score": round(f["__score__"], 4), "distancia": round(f["__distancia__"], 4)}
+                self._item_vectorial(f, info, columna)
                 for f in vistas
             ],
         }

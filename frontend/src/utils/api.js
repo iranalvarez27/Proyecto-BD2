@@ -156,7 +156,11 @@ export async function executeVectorSearch({ modalidad = 'imagen', table, targetF
   const cols = result.columns || [];
   const scoreIdx = cols.findIndex(c => c.toLowerCase() === 'score' || c.toLowerCase() === 'similitud');
   const idIdx = cols.findIndex(c => c.toLowerCase() === 'id' || c.toLowerCase() === 'codigo');
-  const mediaIdx = cols.findIndex(c => c.toLowerCase().includes('url') || c.toLowerCase().includes('foto') || c.toLowerCase().includes('archivo'));
+  const mediaIdx = cols.findIndex(c => c.toLowerCase().includes('ruta') || c.toLowerCase().includes('url') || c.toLowerCase().includes('foto') || c.toLowerCase().includes('archivo'));
+  const segIdx = cols.findIndex(c => c.toLowerCase() === 'segmento');
+  const segIniIdx = cols.findIndex(c => c.toLowerCase() === 'seg_inicio');
+  const segFinIdx = cols.findIndex(c => c.toLowerCase() === 'seg_fin');
+  const tituloIdx = cols.findIndex(c => c.toLowerCase() === 'titulo');
 
   const rows = result.rows || [];
 
@@ -171,13 +175,30 @@ export async function executeVectorSearch({ modalidad = 'imagen', table, targetF
       tiempo_busqueda_ms: result.execution_time_ms || 0.0,
       distancias_calculadas: rows.length
     },
-    resultados: rows.map((row, idx) => ({
-      id: idIdx !== -1 ? row[idIdx] : idx + 1,
-      titulo: `Item #${idIdx !== -1 ? row[idIdx] : idx + 1}`,
-      score: scoreIdx !== -1 ? Number(row[scoreIdx]) : 1.0 - idx * 0.1,
-      media_url: mediaIdx !== -1 ? String(row[mediaIdx]) : '',
-      detalles: JSON.stringify(row),
-      es_verdadero_positivo: true
-    }))
+    resultados: rows.map((row, idx) => {
+      const rawPath = mediaIdx !== -1 ? String(row[mediaIdx] || '').replace(/\\/g, '/').replace(/^\/+/, '') : '';
+      const mediaUrl = rawPath ? (rawPath.startsWith('/api/media/') || rawPath.startsWith('http') ? rawPath : `/api/media/${rawPath}`) : '';
+      const seg = segIdx !== -1 && row[segIdx] !== null && row[segIdx] !== undefined ? Number(row[segIdx]) : undefined;
+      const segIni = segIniIdx !== -1 && row[segIniIdx] !== null && row[segIniIdx] !== undefined
+        ? Number(row[segIniIdx])
+        : (seg !== undefined ? seg * 5 : undefined);
+      const segFin = segFinIdx !== -1 && row[segFinIdx] !== null && row[segFinIdx] !== undefined
+        ? Number(row[segFinIdx])
+        : (seg !== undefined ? (seg + 1) * 5 : undefined);
+      const pkVal = idIdx !== -1 ? row[idIdx] : idx + 1;
+      const tituloVal = tituloIdx !== -1 && row[tituloIdx] ? `${row[tituloIdx]} (#${pkVal})` : `Item #${pkVal}`;
+      return {
+        id: pkVal,
+        titulo: tituloVal,
+        score: scoreIdx !== -1 ? Number(row[scoreIdx]) : 1.0 - idx * 0.1,
+        media_url: modalidad === 'imagen' ? mediaUrl : '',
+        audio_url: modalidad === 'audio' ? mediaUrl : '',
+        segmento: seg,
+        seg_inicio: segIni,
+        seg_fin: segFin,
+        detalles: JSON.stringify(row),
+        es_verdadero_positivo: true
+      };
+    })
   };
 }

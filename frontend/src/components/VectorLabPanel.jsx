@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import {
   Sparkles,
   Image as ImageIcon,
@@ -15,11 +15,129 @@ import {
   Cpu,
   BarChart2,
   Compass,
-  Inbox
+  Inbox,
+  Play,
+  Pause,
+  Music
 } from 'lucide-react';
 
 import { buildSimilarSQL } from '../utils/sqlBuilders';
 import { executeVectorSearch, uploadMediaApi } from '../utils/api';
+
+function AudioNeighborPlayer({ item }) {
+  const audioRef = useRef(null);
+  const [playMode, setPlayMode] = useState(null); // 'segment' | 'full' | null
+  const [isPlaying, setIsPlaying] = useState(false);
+
+  const hasSegment = item.seg_inicio !== undefined && item.seg_fin !== undefined;
+  const segIni = hasSegment ? Number(item.seg_inicio) : 0;
+  const segFin = hasSegment ? Number(item.seg_fin) : null;
+
+  const handlePlaySegment = () => {
+    const audio = audioRef.current;
+    if (!audio) return;
+
+    if (isPlaying && playMode === 'segment') {
+      audio.pause();
+      setIsPlaying(false);
+      return;
+    }
+
+    setPlayMode('segment');
+    audio.currentTime = segIni;
+    audio.play().then(() => setIsPlaying(true)).catch(() => {});
+  };
+
+  const handlePlayFull = () => {
+    const audio = audioRef.current;
+    if (!audio) return;
+
+    if (isPlaying && playMode === 'full') {
+      audio.pause();
+      setIsPlaying(false);
+      return;
+    }
+
+    if (playMode !== 'full') {
+      audio.currentTime = 0;
+    }
+    setPlayMode('full');
+    audio.play().then(() => setIsPlaying(true)).catch(() => {});
+  };
+
+  const handleTimeUpdate = () => {
+    const audio = audioRef.current;
+    if (!audio) return;
+    if (playMode === 'segment' && segFin !== null && audio.currentTime >= segFin) {
+      audio.pause();
+      audio.currentTime = segIni;
+      setIsPlaying(false);
+      setPlayMode(null);
+    }
+  };
+
+  return (
+    <div className="mt-2.5 space-y-2">
+      <div className="flex flex-wrap gap-1.5">
+        {hasSegment && (
+          <button
+            type="button"
+            onClick={handlePlaySegment}
+            className={`flex-1 min-w-[140px] flex items-center justify-center gap-1.5 px-2.5 py-1.5 rounded-md text-[11px] font-bold transition-all border ${
+              isPlaying && playMode === 'segment'
+                ? 'bg-pink-600 text-white border-pink-600 shadow-xs'
+                : 'bg-pink-50 dark:bg-pink-950/60 text-pink-700 dark:text-pink-300 border-pink-200 dark:border-pink-800 hover:bg-pink-100 dark:hover:bg-pink-900/60'
+            }`}
+            title={`Reproducir únicamente el segmento #${item.segmento ?? 0} (${segIni}s a ${segFin}s)`}
+          >
+            {isPlaying && playMode === 'segment' ? (
+              <Pause className="w-3.5 h-3.5 shrink-0" />
+            ) : (
+              <Play className="w-3.5 h-3.5 shrink-0" />
+            )}
+            <span>
+              Segmento #{item.segmento ?? 0} ({segIni}s–{segFin}s)
+            </span>
+          </button>
+        )}
+
+        <button
+          type="button"
+          onClick={handlePlayFull}
+          className={`flex-1 min-w-[130px] flex items-center justify-center gap-1.5 px-2.5 py-1.5 rounded-md text-[11px] font-semibold transition-all border ${
+            isPlaying && playMode === 'full'
+              ? 'bg-slate-800 dark:bg-slate-200 text-white dark:text-slate-900 border-slate-800 dark:border-slate-200 shadow-xs'
+              : 'bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-200 border-slate-300 dark:border-slate-700 hover:bg-slate-200 dark:hover:bg-slate-700'
+          }`}
+          title="Reproducir la pista de audio completa desde el inicio"
+        >
+          {isPlaying && playMode === 'full' ? (
+            <Pause className="w-3.5 h-3.5 shrink-0" />
+          ) : (
+            <Music className="w-3.5 h-3.5 shrink-0" />
+          )}
+          <span>Canción completa</span>
+        </button>
+      </div>
+
+      <audio
+        ref={audioRef}
+        controls
+        preload="metadata"
+        onTimeUpdate={handleTimeUpdate}
+        onPlay={() => setIsPlaying(true)}
+        onPause={() => setIsPlaying(false)}
+        onEnded={() => {
+          setIsPlaying(false);
+          setPlayMode(null);
+        }}
+        className="w-full h-7"
+      >
+        <source src={item.audio_url} type="audio/mpeg" />
+      </audio>
+    </div>
+  );
+}
 
 export default function VectorLabPanel({
   tables = [],
@@ -569,9 +687,7 @@ export default function VectorLabPanel({
                         </p>
 
                         {modalidad === 'audio' && item.audio_url && (
-                          <audio controls className="w-full h-7 mt-2">
-                            <source src={item.audio_url} type="audio/mpeg" />
-                          </audio>
+                          <AudioNeighborPlayer item={item} />
                         )}
                       </div>
 
