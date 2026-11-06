@@ -12,7 +12,6 @@ EUCLIDEAN = "euclidean"
 
 
 class MBR(NamedTuple):
-    """MBR R = {L, U} con L = (x_min, y_min) y U = (x_max, y_max); un punto es un MBR degenerado."""
     x_min: float
     y_min: float
     x_max: float

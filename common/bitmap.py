@@ -7,8 +7,6 @@ def _orden_fisico(page_id: int) -> tuple:
 
 
 class RidBitmap:
-    """Conjunto de RIDs agrupado por pagina: {page_id: bitset de slots}."""
-
     __slots__ = ("_pages",)
 
     def __init__(self, pages: dict[int, int] | None = None):
@@ -47,7 +45,6 @@ class RidBitmap:
         return len(self._pages)
 
     def pages(self):
-        """(page_id, slots) en orden fisico, cada pagina una sola vez."""
         for page_id in sorted(self._pages, key=_orden_fisico):
             bits = self._pages[page_id]
             slots = []
