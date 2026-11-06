@@ -18,6 +18,7 @@ from common.record import Record
 from common.types import Column, DataType, Schema
 from engine.external import external_group_by, external_hash_join, external_sort
 from index.bm25 import BM25
+from index.vector.exacto import IndiceExacto
 from index.vector.metricas import puntaje as _puntaje_vectorial
 from index.vector.registro import CONSTRUCTORES as _CONSTRUCTORES_VECTORIALES
 from index.bplus_tree import BPlusTree, DuplicateKey
@@ -934,6 +935,13 @@ class Conexion:
             if indice.metodo == metodo:
                 self._configurar_vectorial(info, columna, indice)
                 return columna, indice, False
+        # IndiceHNSW e IndiceIVF heredan de IndiceExacto y conservan los vectores y RIDs,
+        # por lo que permiten ejecutar k-NN secuencial (EXACTO) sin cambiar el indice de la tabla.
+        if metodo == "EXACTO":
+            for columna, indice in disponibles:
+                if isinstance(indice, IndiceExacto):
+                    self._configurar_vectorial(info, columna, indice)
+                    return columna, indice, False
         # sin indice del metodo pedido se recorre todo con el k-NN exacto
         for columna, indice in disponibles:
             if indice.metodo == "EXACTO":
@@ -970,8 +978,13 @@ class Conexion:
 
         # con otros filtros en el WHERE se piden todos los vecinos y se recorta a k despues de filtrar
         con_filtros = len(condiciones) > 1
+        k_busqueda = len(indice) if con_filtros else similar.k
+        usar_exacto = (similar.metodo == "EXACTO") or es_respaldo
         t1 = time.perf_counter()
-        hallados = indice.buscar(vector, len(indice) if con_filtros else similar.k, metrica)
+        if usar_exacto and isinstance(indice, IndiceExacto):
+            hallados = IndiceExacto.buscar(indice, vector, k_busqueda, metrica)
+        else:
+            hallados = indice.buscar(vector, k_busqueda, metrica)
         t_buscar = time.perf_counter() - t1
 
         filas = []
@@ -994,7 +1007,7 @@ class Conexion:
             filas.reverse()
         orden_ya_resuelto = orden is None or orden_por_puntaje
 
-        usado = "k-NN exacto" if es_respaldo else similar.metodo
+        usado = "k-NN exacto" if usar_exacto else similar.metodo
         aviso = f" (no hay indice {similar.metodo}: se uso el k-NN exacto)" if es_respaldo else ""
         filtro = " + filtro WHERE" if con_filtros else ""
         self.plan.append(f"busqueda por similitud ({usado}) sobre '{info.nombre}.{columna}' (k {similar.k}; metrica {metrica}; archivo '{similar.archivo}'; {len(filas)} fila(s)){aviso}{filtro}")
@@ -1005,7 +1018,7 @@ class Conexion:
             "archivo_consulta": similar.archivo,
             "k": similar.k,
             "indice": similar.metodo,
-            "indice_usado": indice.metodo,
+            "indice_usado": "EXACTO" if usar_exacto else indice.metodo,
             "metrica": metrica,
             "key_column": info.key_column,
             "extraccion": {

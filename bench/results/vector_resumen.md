@@ -4,42 +4,42 @@
 
 | Dominio | N | Dim | Métrica | Índice | Parámetros | Construcción (s) | Memoria (MB) | Consulta (ms/q) | Speedup | Recall@10 | Origen |
 |:---|---:|---:|:---|:---|:---|---:|---:|---:|---:|---:|:---|
-| **imagen** | 1,000 | 512 | `euclidean` | **EXACTO** | `secuencial` | 0.0000 | 1.95 | 0.0748 | 1.00x | 1.0000 | BoVW real (SIFT) |
-| **imagen** | 1,000 | 512 | `euclidean` | **HNSW** | `M=16, efC=200, efS=32` | 0.0524 | 2.09 | 0.0242 | 3.09x | 0.9680 | BoVW real (SIFT) |
-| **imagen** | 1,000 | 512 | `euclidean` | **IVF** | `nlist=32, nprobe=4` | 0.0029 | 2.02 | 0.0230 | 3.25x | 0.9310 | BoVW real (SIFT) |
-| **imagen** | 1,000 | 512 | `cosine` | **EXACTO** | `secuencial` | 0.0000 | 1.95 | 0.0830 | 1.00x | 1.0000 | BoVW real (SIFT) |
-| **imagen** | 1,000 | 512 | `cosine` | **HNSW** | `M=16, efC=200, efS=16` | 0.0610 | 2.09 | 0.0234 | 3.55x | 0.8220 | BoVW real (SIFT) |
-| **imagen** | 1,000 | 512 | `cosine` | **IVF** | `nlist=32, nprobe=16` | 0.0023 | 2.02 | 0.0333 | 2.49x | 0.9830 | BoVW real (SIFT) |
-| **imagen** | 10,000 | 512 | `euclidean` | **EXACTO** | `secuencial` | 0.0000 | 19.53 | 0.6995 | 1.00x | 1.0000 | BoVW real (SIFT) |
-| **imagen** | 10,000 | 512 | `euclidean` | **HNSW** | `M=16, efC=200, efS=64` | 0.9483 | 20.91 | 0.0508 | 13.77x | 0.9110 | BoVW real (SIFT) |
-| **imagen** | 10,000 | 512 | `euclidean` | **IVF** | `nlist=100, nprobe=8` | 0.0232 | 19.80 | 0.1339 | 5.22x | 0.9740 | BoVW real (SIFT) |
-| **imagen** | 10,000 | 512 | `cosine` | **EXACTO** | `secuencial` | 0.0000 | 19.53 | 0.7059 | 1.00x | 1.0000 | BoVW real (SIFT) |
-| **imagen** | 10,000 | 512 | `cosine` | **HNSW** | `M=16, efC=200, efS=32` | 1.2939 | 20.91 | 0.0465 | 15.19x | 0.7500 | BoVW real (SIFT) |
-| **imagen** | 10,000 | 512 | `cosine` | **IVF** | `nlist=100, nprobe=16` | 0.0294 | 19.80 | 0.0811 | 8.71x | 0.8220 | BoVW real (SIFT) |
-| **imagen** | 100,000 | 512 | `euclidean` | **EXACTO** | `secuencial` | 0.0000 | 195.31 | 7.1313 | 1.00x | 1.0000 | BoVW real (SIFT) |
-| **imagen** | 100,000 | 512 | `euclidean` | **HNSW** | `M=16, efC=200, efS=256` | 28.1018 | 209.08 | 0.3617 | 19.72x | 0.6890 | BoVW real (SIFT) |
-| **imagen** | 100,000 | 512 | `euclidean` | **IVF** | `nlist=316, nprobe=32` | 0.4813 | 196.70 | 1.1905 | 5.99x | 0.8070 | BoVW real (SIFT) |
-| **imagen** | 100,000 | 512 | `cosine` | **EXACTO** | `secuencial` | 0.0000 | 195.31 | 7.0848 | 1.00x | 1.0000 | BoVW real (SIFT) |
-| **imagen** | 100,000 | 512 | `cosine` | **HNSW** | `M=16, efC=200, efS=128` | 38.0121 | 209.08 | 0.3959 | 17.90x | 0.7830 | BoVW real (SIFT) |
-| **imagen** | 100,000 | 512 | `cosine` | **IVF** | `nlist=316, nprobe=32` | 0.5142 | 196.70 | 0.4605 | 15.38x | 0.8080 | BoVW real (SIFT) |
-| **audio** | 1,000 | 256 | `euclidean` | **EXACTO** | `secuencial` | 0.0000 | 0.98 | 0.0424 | 1.00x | 1.0000 | BoAW real (MFCC) |
-| **audio** | 1,000 | 256 | `euclidean` | **HNSW** | `M=16, efC=200, efS=32` | 0.0417 | 1.11 | 0.0179 | 2.37x | 0.9600 | BoAW real (MFCC) |
-| **audio** | 1,000 | 256 | `euclidean` | **IVF** | `nlist=32, nprobe=4` | 0.0022 | 1.02 | 0.0150 | 2.84x | 0.9590 | BoAW real (MFCC) |
-| **audio** | 1,000 | 256 | `cosine` | **EXACTO** | `secuencial` | 0.0000 | 0.98 | 0.0499 | 1.00x | 1.0000 | BoAW real (MFCC) |
-| **audio** | 1,000 | 256 | `cosine` | **HNSW** | `M=16, efC=200, efS=16` | 0.0506 | 1.11 | 0.0190 | 2.63x | 0.8640 | BoAW real (MFCC) |
-| **audio** | 1,000 | 256 | `cosine` | **IVF** | `nlist=32, nprobe=16` | 0.0025 | 1.02 | 0.0214 | 2.33x | 0.9850 | BoAW real (MFCC) |
-| **audio** | 10,000 | 256 | `euclidean` | **EXACTO** | `secuencial` | 0.0000 | 9.77 | 0.2918 | 1.00x | 1.0000 | BoAW real (MFCC) |
-| **audio** | 10,000 | 256 | `euclidean` | **HNSW** | `M=16, efC=200, efS=64` | 0.7759 | 11.14 | 0.0371 | 7.87x | 0.9890 | BoAW real (MFCC) |
-| **audio** | 10,000 | 256 | `euclidean` | **IVF** | `nlist=100, nprobe=16` | 0.0167 | 9.94 | 0.0927 | 3.15x | 0.9950 | BoAW real (MFCC) |
-| **audio** | 10,000 | 256 | `cosine` | **EXACTO** | `secuencial` | 0.0000 | 9.77 | 0.2971 | 1.00x | 1.0000 | BoAW real (MFCC) |
-| **audio** | 10,000 | 256 | `cosine` | **HNSW** | `M=16, efC=200, efS=32` | 0.8765 | 11.14 | 0.0321 | 9.24x | 0.9890 | BoAW real (MFCC) |
-| **audio** | 10,000 | 256 | `cosine` | **IVF** | `nlist=100, nprobe=16` | 0.0160 | 9.94 | 0.0402 | 7.39x | 0.9540 | BoAW real (MFCC) |
-| **audio** | 100,000 | 256 | `euclidean` | **EXACTO** | `secuencial` | 0.0000 | 97.66 | 3.0207 | 1.00x | 1.0000 | BoAW real (MFCC) |
-| **audio** | 100,000 | 256 | `euclidean` | **HNSW** | `M=16, efC=200, efS=32` | 15.1696 | 111.42 | 0.0430 | 70.28x | 0.9590 | BoAW real (MFCC) |
-| **audio** | 100,000 | 256 | `euclidean` | **IVF** | `nlist=316, nprobe=32` | 0.3122 | 98.73 | 0.4286 | 7.05x | 0.9700 | BoAW real (MFCC) |
-| **audio** | 100,000 | 256 | `cosine` | **EXACTO** | `secuencial` | 0.0000 | 97.66 | 3.3944 | 1.00x | 1.0000 | BoAW real (MFCC) |
-| **audio** | 100,000 | 256 | `cosine` | **HNSW** | `M=16, efC=200, efS=32` | 16.0475 | 111.42 | 0.0459 | 73.89x | 0.9700 | BoAW real (MFCC) |
-| **audio** | 100,000 | 256 | `cosine` | **IVF** | `nlist=316, nprobe=4` | 0.3023 | 98.73 | 0.0364 | 93.16x | 0.9120 | BoAW real (MFCC) |
+| **imagen** | 1,000 | 512 | `euclidean` | **EXACTO** | `secuencial` | 0.0000 | 1.95 | 0.0787 | 1.00x | 1.0000 | BoVW real (SIFT) |
+| **imagen** | 1,000 | 512 | `euclidean` | **HNSW** | `M=16, efC=200, efS=32` | 0.0527 | 2.09 | 0.0218 | 3.60x | 0.9760 | BoVW real (SIFT) |
+| **imagen** | 1,000 | 512 | `euclidean` | **IVF** | `nlist=32, nprobe=4` | 0.0038 | 2.02 | 0.0232 | 3.40x | 0.9520 | BoVW real (SIFT) |
+| **imagen** | 1,000 | 512 | `cosine` | **EXACTO** | `secuencial` | 0.0000 | 1.95 | 0.0845 | 1.00x | 1.0000 | BoVW real (SIFT) |
+| **imagen** | 1,000 | 512 | `cosine` | **HNSW** | `M=16, efC=200, efS=16` | 0.0599 | 2.09 | 0.0216 | 3.91x | 0.9550 | BoVW real (SIFT) |
+| **imagen** | 1,000 | 512 | `cosine` | **IVF** | `nlist=32, nprobe=16` | 0.0023 | 2.02 | 0.0314 | 2.69x | 0.9910 | BoVW real (SIFT) |
+| **imagen** | 10,000 | 512 | `euclidean` | **EXACTO** | `secuencial` | 0.0000 | 19.53 | 0.6975 | 1.00x | 1.0000 | BoVW real (SIFT) |
+| **imagen** | 10,000 | 512 | `euclidean` | **HNSW** | `M=16, efC=200, efS=64` | 0.9477 | 20.91 | 0.0490 | 14.24x | 0.9640 | BoVW real (SIFT) |
+| **imagen** | 10,000 | 512 | `euclidean` | **IVF** | `nlist=100, nprobe=8` | 0.0246 | 19.80 | 0.1161 | 6.01x | 0.9720 | BoVW real (SIFT) |
+| **imagen** | 10,000 | 512 | `cosine` | **EXACTO** | `secuencial` | 0.0000 | 19.53 | 0.7179 | 1.00x | 1.0000 | BoVW real (SIFT) |
+| **imagen** | 10,000 | 512 | `cosine` | **HNSW** | `M=16, efC=200, efS=32` | 1.2537 | 20.91 | 0.0415 | 17.32x | 0.9490 | BoVW real (SIFT) |
+| **imagen** | 10,000 | 512 | `cosine` | **IVF** | `nlist=100, nprobe=16` | 0.0249 | 19.80 | 0.0689 | 10.42x | 0.9490 | BoVW real (SIFT) |
+| **imagen** | 100,000 | 512 | `euclidean` | **EXACTO** | `secuencial` | 0.0000 | 195.31 | 6.9082 | 1.00x | 1.0000 | BoVW real (SIFT) |
+| **imagen** | 100,000 | 512 | `euclidean` | **HNSW** | `M=16, efC=200, efS=256` | 24.8400 | 209.08 | 0.4428 | 15.60x | 0.9540 | BoVW real (SIFT) |
+| **imagen** | 100,000 | 512 | `euclidean` | **IVF** | `nlist=316, nprobe=32` | 0.4266 | 196.70 | 1.0137 | 6.81x | 0.9810 | BoVW real (SIFT) |
+| **imagen** | 100,000 | 512 | `cosine` | **EXACTO** | `secuencial` | 0.0000 | 195.31 | 6.9394 | 1.00x | 1.0000 | BoVW real (SIFT) |
+| **imagen** | 100,000 | 512 | `cosine` | **HNSW** | `M=16, efC=200, efS=128` | 35.4688 | 209.08 | 0.3125 | 22.20x | 0.9610 | BoVW real (SIFT) |
+| **imagen** | 100,000 | 512 | `cosine` | **IVF** | `nlist=316, nprobe=32` | 0.4026 | 196.70 | 0.3643 | 19.05x | 0.9410 | BoVW real (SIFT) |
+| **audio** | 1,000 | 256 | `euclidean` | **EXACTO** | `secuencial` | 0.0000 | 0.98 | 0.0464 | 1.00x | 1.0000 | BoAW real (MFCC) |
+| **audio** | 1,000 | 256 | `euclidean` | **HNSW** | `M=16, efC=200, efS=32` | 0.0391 | 1.11 | 0.0140 | 3.33x | 0.9000 | BoAW real (MFCC) |
+| **audio** | 1,000 | 256 | `euclidean` | **IVF** | `nlist=32, nprobe=4` | 0.0018 | 1.02 | 0.0158 | 2.93x | 0.8000 | BoAW real (MFCC) |
+| **audio** | 1,000 | 256 | `cosine` | **EXACTO** | `secuencial` | 0.0000 | 0.98 | 0.0508 | 1.00x | 1.0000 | BoAW real (MFCC) |
+| **audio** | 1,000 | 256 | `cosine` | **HNSW** | `M=16, efC=200, efS=16` | 0.0493 | 1.11 | 0.0160 | 3.18x | 1.0000 | BoAW real (MFCC) |
+| **audio** | 1,000 | 256 | `cosine` | **IVF** | `nlist=32, nprobe=16` | 0.0016 | 1.02 | 0.0210 | 2.41x | 1.0000 | BoAW real (MFCC) |
+| **audio** | 10,000 | 256 | `euclidean` | **EXACTO** | `secuencial` | 0.0000 | 9.77 | 0.2450 | 1.00x | 1.0000 | BoAW real (MFCC) |
+| **audio** | 10,000 | 256 | `euclidean` | **HNSW** | `M=16, efC=200, efS=64` | 0.7440 | 11.14 | 0.0198 | 12.35x | 1.0000 | BoAW real (MFCC) |
+| **audio** | 10,000 | 256 | `euclidean` | **IVF** | `nlist=100, nprobe=16` | 0.0154 | 9.94 | 0.0912 | 2.68x | 0.9000 | BoAW real (MFCC) |
+| **audio** | 10,000 | 256 | `cosine` | **EXACTO** | `secuencial` | 0.0000 | 9.77 | 0.3582 | 1.00x | 1.0000 | BoAW real (MFCC) |
+| **audio** | 10,000 | 256 | `cosine` | **HNSW** | `M=16, efC=200, efS=32` | 0.8644 | 11.14 | 0.0199 | 17.99x | 1.0000 | BoAW real (MFCC) |
+| **audio** | 10,000 | 256 | `cosine` | **IVF** | `nlist=100, nprobe=16` | 0.0149 | 9.94 | 0.0363 | 9.88x | 1.0000 | BoAW real (MFCC) |
+| **audio** | 100,000 | 256 | `euclidean` | **EXACTO** | `secuencial` | 0.0000 | 97.66 | 2.7118 | 1.00x | 1.0000 | BoAW real (MFCC) |
+| **audio** | 100,000 | 256 | `euclidean` | **HNSW** | `M=16, efC=200, efS=32` | 13.5672 | 111.42 | 0.0127 | 213.40x | 1.0000 | BoAW real (MFCC) |
+| **audio** | 100,000 | 256 | `euclidean` | **IVF** | `nlist=316, nprobe=32` | 0.3011 | 98.73 | 0.4149 | 6.54x | 1.0000 | BoAW real (MFCC) |
+| **audio** | 100,000 | 256 | `cosine` | **EXACTO** | `secuencial` | 0.0000 | 97.66 | 3.4365 | 1.00x | 1.0000 | BoAW real (MFCC) |
+| **audio** | 100,000 | 256 | `cosine` | **HNSW** | `M=16, efC=200, efS=32` | 14.6503 | 111.42 | 0.0193 | 178.13x | 1.0000 | BoAW real (MFCC) |
+| **audio** | 100,000 | 256 | `cosine` | **IVF** | `nlist=316, nprobe=4` | 0.2704 | 98.73 | 0.0316 | 108.66x | 1.0000 | BoAW real (MFCC) |
 
 ## 2. Comparación de Índices Vectoriales: Ventajas, Desventajas y Cuándo Usar Cada Uno
 
