@@ -1,12 +1,3 @@
-"""Igualdad, rango y ORDER BY con el mismo trabajo para las tres estructuras.
-
-Cada medicion devuelve las filas completas, como el motor: el B+ agrupado lee
-MAIN, el B+ no agrupado y el hash leen sus RIDs con el bitmap, y el ORDER BY
-sin indice usa el external sort del motor. Antes de guardar se comprueba que
-las tres estructuras devuelvan las mismas filas.
-
-    python3 data/bench_indices_consultas.py [--sizes 1000 10000 100000]
-"""
 import argparse
 import json
 import os

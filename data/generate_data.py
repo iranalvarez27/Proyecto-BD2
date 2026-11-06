@@ -118,7 +118,6 @@ def _format_bytes(n_bytes: int) -> str:
 
 
 def _clean_data_files():
-    """Elimina los archivos .bin e .idx en data/ para empezar limpio."""
     os.makedirs(DATA_DIR, exist_ok=True)
     for fname in [
         "estudiantes.bin",
@@ -168,7 +167,6 @@ SCHEMA_TIENDAS = Schema(
 
 
 def build_tiendas(n: int):
-    """Puebla 'tiendas' (HeapFile, puntos en Lima) con B+ en 'id' y R-Tree en 'ubicacion'."""
     print(f"\nGenerando tabla espacial 'tiendas' (HeapFile + B+ Tree + R-Tree) con {n:,} puntos...")
     heap_path = os.path.join(DATA_DIR, "tiendas.bin")
     bplus_path = os.path.join(DATA_DIR, "tiendas_id_bplus.idx")
@@ -216,7 +214,6 @@ def build_tiendas(n: int):
 
 
 def generate_estudiantes_data(n: int) -> List[Tuple[int, str, str, float]]:
-    """Genera N tuplas de estudiantes con IDs del 1 al N."""
     random.seed(42 + n)
     data = []
     for i in range(1, n + 1):
@@ -228,7 +225,6 @@ def generate_estudiantes_data(n: int) -> List[Tuple[int, str, str, float]]:
 
 
 def generate_cursos_data(n: int) -> List[Tuple[int, str, int, str]]:
-    """Genera N tuplas de cursos con códigos ordenados del 101 en adelante."""
     random.seed(1337 + n)
     data = []
     n_areas = len(AREAS_CURSOS)
@@ -244,7 +240,6 @@ def generate_cursos_data(n: int) -> List[Tuple[int, str, int, str]]:
 
 
 def build_estudiantes(n: int):
-    """Puebla estudiantes (HeapFile) e índices B+ Tree y Extendible Hash."""
     print(f"\n[1/2] Generando tabla 'estudiantes' (HeapFile + B+ Tree + Hash) con {n:,} registros...")
     data = generate_estudiantes_data(n)
 
@@ -297,7 +292,6 @@ def build_estudiantes(n: int):
 
 
 def build_cursos(n: int):
-    """Puebla cursos (SequentialFile) y construye el B+ Clustered Tree."""
     print(f"\n[2/2] Generando tabla 'cursos' (SequentialFile + Clustered B+) con {n:,} registros...")
     data = generate_cursos_data(n)
 
@@ -334,7 +328,6 @@ def build_cursos(n: int):
 
 
 def reset_to_initial():
-    """Restaura los datos de muestra iniciales (8 estudiantes, 6 cursos)."""
     print("\nRestaurando datos iniciales de prueba...")
     _clean_data_files()
 
@@ -384,7 +377,6 @@ def reset_to_initial():
 
 
 def print_stats():
-    """Muestra el estado actual de los archivos en data/."""
     print("\n" + "=" * 65)
     print("  ESTADO ACTUAL DE LA CARPETA data/")
     print("=" * 65)
@@ -413,7 +405,6 @@ def print_stats():
 
 
 def print_cheat_sheet(n: int):
-    """Muestra consultas SQL recomendadas para ejecutar en el Frontend."""
     print("\n" + "=" * 75)
     print(f"  GUÍA DE CONSULTAS PARA EL FRONTEND (Con dataset de {n:,} registros)")
     print("=" * 75)

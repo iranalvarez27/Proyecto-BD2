@@ -1,22 +1,3 @@
-"""
-=============================================================================
-  BENCHMARK DE INSERCIONES Y ELIMINACIONES FRECUENTES – Sección 2.1.6
-  Proyecto BD2 – Minigestor Multimodal
-=============================================================================
-  Evalúa el rendimiento de los tres índices relacionales ante una carga mixta
-  (churn / mutaciones frecuentes):
-    1. B+ Tree No Agrupado (sobre HeapFile)
-    2. Extendible Hash (sobre HeapFile)
-    3. B+ Tree Agrupado (sobre SequentialFile)
-
-  Metodología:
-    - Estado inicial: Tabla pre-poblada con N = 10,000 registros.
-    - Carga de churn: M = 1,000 operaciones intercaladas (500 inserts + 500 deletes).
-    - Métricas: Latencia total de inserción, latencia total de eliminación,
-                tiempo por operación (us), throughput (ops/s) y estado físico.
-=============================================================================
-"""
-
 import os
 import sys
 import time

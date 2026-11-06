@@ -1,26 +1,3 @@
-"""
-=============================================================================
-  BENCHMARK ESPACIAL – Sección 2.2.4
-  Proyecto BD2 – Minigestor Multimodal
-=============================================================================
-  Compara formalmente:
-    1. Búsqueda Secuencial (Baseline sin índice)
-    2. R-Tree (Implementación propia en disco con BufferPool y páginas de 4KB)
-    3. PostgreSQL con extensión PostGIS e índice GiST
-
-  Evalúa:
-    - Datasets: 1 000 (1K), 10 000 (10K) y 100 000 (100K) puntos en Lima.
-    - Consultas por rango: Radio 1 km (1 000 m), 5 km (5 000 m), 10 km (10 000 m).
-    - Consultas k-NN: k = 10, k = 50, k = 100.
-    - Repeticiones: Promedio exacto sobre 100 consultas con centros aleatorios.
-    - Métricas: Tiempo de construcción, espacio en disco, tiempo promedio de consulta.
-
-  Uso:
-    python3 data/bench_spatial.py [--sizes 1k 10k 100k] [--queries 100] [--plot]
-    python3 data/bench_spatial.py --sizes 1k --plot  # Prueba rápida
-=============================================================================
-"""
-
 import os
 import sys
 import time
@@ -93,10 +70,6 @@ POSTGIS_CALIBRATED_REF = {
 
 
 def load_env_config(env_path: str = None) -> Dict[str, Any]:
-    """
-    Carga variables de conexión para PostgreSQL desde el archivo .env
-    o variables de entorno, evitando credenciales hardcodeadas en el código.
-    """
     if env_path is None:
         env_path = os.path.join(PROJECT_ROOT, ".env")
 
