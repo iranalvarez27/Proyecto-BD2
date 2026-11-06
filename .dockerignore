@@ -1,0 +1,14 @@
+# no entran a la imagen: datos (se montan como volúmenes), dependencias locales y el frontend (tiene su propia imagen)
+.git
+.venv
+venv
+**/__pycache__
+**/*.pyc
+.pytest_cache
+data/*
+!data/*.py
+bench/data/
+bench/results/
+frontend/
+*.pdf
+.env

@@ -1,0 +1,90 @@
+# Minigestor BD2: todo se levanta con un solo comando
+#   docker compose up --build
+# Orden: postgres -> seed (datasets + ingesta) -> backend -> frontend
+# App: http://localhost:8080 · API: http://localhost:8000/docs
+#
+# Variables opcionales (en la terminal o en un archivo .env junto a este compose):
+#   TAMANOS="1k 10k 100k"   tablas a generar (por defecto 1k)
+#   FMA_VARIANTE=medium     variante de FMA (por defecto small, ~7,2 GB)
+#   CORRER_EXPERIMENTOS=1   además corre los experimentos y genera las gráficas
+#   SEED=0                  no generar datasets (solo levantar la app)
+
+name: minigestor-bd2
+
+services:
+  postgres:
+    image: postgis/postgis:17-3.5          # sirve para GiST (PostGIS) y GIN (texto)
+    environment:
+      POSTGRES_USER: bench
+      POSTGRES_PASSWORD: bench
+      POSTGRES_DB: bench
+    ports:
+      - "5433:5432"                        # 5433 afuera para no chocar con un PostgreSQL local
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U bench -d bench"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+
+  seed:                                    # descarga datasets, extrae, entrena K-Means, crea tablas e índices
+    build:
+      context: .
+      target: bench
+    volumes:
+      - ./data:/app/data
+      - ./bench/data:/app/bench/data
+      - ./bench/results:/app/bench/results
+    environment:
+      MULTIMEDIA_DATA: /app/data/multimedia
+      SEED: ${SEED:-1}
+      TAMANOS: ${TAMANOS:-1k}
+      FMA_VARIANTE: ${FMA_VARIANTE:-small}
+      CORRER_EXPERIMENTOS: ${CORRER_EXPERIMENTOS:-0}
+      PG_HOST: postgres
+      PG_PORT: "5432"
+      PG_USER: bench
+      PG_PASSWORD: bench
+      PG_DB: bench                         # lo lee bench/experiments/texto.py
+      PG_DBNAME: bench                     # lo lee data/bench_spatial.py
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: ["bash", "docker/seed.sh"]
+    restart: "no"
+
+  backend:                                 # motor + API + multimedia + índices vectoriales
+    build:
+      context: .
+      target: app
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data:/app/data                   # tablas, catalog.json, uploads, data/multimedia
+      - ./bench/data:/app/bench/data       # fotos y MP3 (los lee SIMILAR_TO y /api/media)
+    environment:
+      MULTIMEDIA_DATA: /app/data/multimedia
+    depends_on:
+      seed:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/tables', timeout=4)"]
+      interval: 10s
+      timeout: 5s
+      retries: 18
+      start_period: 30s
+    restart: unless-stopped
+
+  frontend:                                # React compilado y servido por nginx
+    build: ./frontend
+    ports:
+      - "8080:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  pgdata:
