@@ -1,5 +1,3 @@
-"""Smoke test de los contratos JSON usados por las visualizaciones del frontend."""
-
 from __future__ import annotations
 
 import tempfile
