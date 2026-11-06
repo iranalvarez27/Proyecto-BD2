@@ -13,6 +13,7 @@ import yaml
 BENCH = os.path.dirname(os.path.abspath(__file__))
 ENTRADA = os.path.join(BENCH, "results", "vector_params.csv")
 
+METRICAS = {"cosine": "coseno", "euclidean": "euclidiana"}
 INDICES = (("HNSW", "efSearch", "#2a78d6", "o"), ("IVF", "nprobe", "#eb6834", "s"))
 INK_PRIMARY = "#0b0b0b"
 INK_SECONDARY = "#52514e"
@@ -44,6 +45,7 @@ def _tamano(n: int) -> str:
 
 
 def cargar(ruta):
+    tipo = ""
     datos = defaultdict(lambda: defaultdict(lambda: defaultdict(list)))
     with open(ruta, newline="") as f:
         for fila in csv.DictReader(f):
@@ -52,11 +54,12 @@ def cargar(ruta):
             fila["tiempo_ms"] = float(fila["tiempo_ms"])
             fila["valor"] = int(fila["valor"]) if fila["valor"] else None
             datos[fila["metrica"]][fila["n"]][fila["indice"]].append(fila)
+            tipo = fila["datos"].split("_")[0]
     for por_n in datos.values():
         for por_indice in por_n.values():
             for filas in por_indice.values():
                 filas.sort(key=lambda f: f["valor"] or 0)
-    return datos
+    return tipo, datos
 
 
 def _ms(v, _pos=None) -> str:
@@ -80,9 +83,9 @@ def _eje_tiempo(ax, tiempos):
     ax.xaxis.set_minor_formatter(mticker.NullFormatter())
 
 
-def graficar(metrica, por_n, objetivo, salida):
+def graficar(tipo, metrica, por_n, objetivo, salida):
     tamanos = sorted(por_n)
-    fig, ejes = plt.subplots(1, len(tamanos), figsize=(3.6 * len(tamanos), 3.4), sharey=True, squeeze=False)
+    fig, ejes = plt.subplots(1, len(tamanos), figsize=(3.6 * len(tamanos), 3.8), sharey=True, squeeze=False)
     for ax, n in zip(ejes[0], tamanos):
         _estilo(ax)
         _eje_tiempo(ax, [f["tiempo_ms"] for filas in por_n[n].values() for f in filas])
@@ -111,9 +114,11 @@ def graficar(metrica, por_n, objetivo, salida):
         ax.set_xlabel("tiempo por consulta (ms)")
     ejes[0][0].set_ylabel("Recall@10")
     ejes[0][0].set_ylim(top=1.06)
+    fig.tight_layout(rect=(0, 0, 1, 0.84))
+    fig.suptitle(f"Parámetros óptimos de HNSW e IVF ({tipo}, métrica {METRICAS.get(metrica, metrica)})",
+                 fontsize=12, y=0.985)
     asas, etiquetas = ejes[0][0].get_legend_handles_labels()
-    fig.legend(asas, etiquetas, loc="upper center", ncol=len(asas), bbox_to_anchor=(0.5, 1.0))
-    fig.tight_layout(rect=(0, 0, 1, 0.92))
+    fig.legend(asas, etiquetas, loc="upper center", ncol=len(asas), bbox_to_anchor=(0.5, 0.93))
     fig.savefig(salida, dpi=200)
     plt.close(fig)
 
@@ -126,9 +131,10 @@ def main():
     objetivo = yaml.safe_load(open(os.path.join(BENCH, "config.yaml")))["vector"]["recall_objetivo"]
     os.makedirs(args.salida, exist_ok=True)
     nombre = os.path.splitext(os.path.basename(args.entrada))[0]
-    for metrica, por_n in cargar(args.entrada).items():
+    tipo, datos = cargar(args.entrada)
+    for metrica, por_n in datos.items():
         ruta = os.path.join(args.salida, f"{nombre}_{metrica}.png")
-        graficar(metrica, por_n, objetivo, ruta)
+        graficar(tipo, metrica, por_n, objetivo, ruta)
         print(ruta)
 
 
