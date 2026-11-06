@@ -1,4 +1,3 @@
-"""Graficos generados desde los CSV de results/ para las Partes 3 (Texto) y 4 (Vector/Multimedia)."""
 import argparse
 import csv
 import os
@@ -49,7 +48,6 @@ def _etiqueta_n(n: int) -> str:
 
 
 def graficar_texto(dir_results: Path = DIR_RESULTS) -> list[Path]:
-    """Genera las 3 figuras de la Parte 3 comparando todos los tamaños N (1k, 10k, 100k)."""
     dir_results = Path(dir_results)
     filas_const = _leer_csv(dir_results / "texto_construccion.csv")
     filas_cons = _leer_csv(dir_results / "texto_consultas.csv")
@@ -214,7 +212,6 @@ def graficar_texto(dir_results: Path = DIR_RESULTS) -> list[Path]:
 
 
 def graficar_vector(dir_results: Path = DIR_RESULTS) -> list[Path]:
-    """Genera las 3 figuras de la Parte 4 comparando todos los tamaños N (1k, 10k, 100k)."""
     dir_results = Path(dir_results)
     filas = _leer_csv(dir_results / "vector_compare.csv")
     if not filas:

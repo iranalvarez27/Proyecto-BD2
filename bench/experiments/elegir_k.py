@@ -1,8 +1,3 @@
-"""Provisional: K del codebook por tipo, con multimedia.barrido_k y las etiquetas de bench/data.
-
-Calidad de cada K = Precision@10 por categoria (imagen) o genero (audio) de los vecinos exactos.
-Se elige el menor K que logra al menos (1 - tolerancia) de la mejor ganancia sobre el azar.
-"""
 import argparse
 import csv
 import json
@@ -23,7 +18,6 @@ CAMPOS = ["tipo", "N", "K", "precision@10", "azar", "ganancia", "segundos_offlin
 
 
 def precision_azar(ids, etiquetas):
-    """Precision@10 esperada con vecinos al azar: suma de p^2 por etiqueta."""
     conteo = Counter(barrido_k._etiqueta(i, etiquetas) for i in ids)
     conteo.pop(None, None)
     total = sum(conteo.values())

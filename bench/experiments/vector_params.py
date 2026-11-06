@@ -1,4 +1,3 @@
-"""Barrido de efSearch (HNSW) y nprobe (IVF): Recall@10 y tiempo por valor."""
 import argparse
 import csv
 import os
@@ -35,7 +34,6 @@ def sinteticos(rng, n, dim, grupos, separacion):
 
 
 def vectores_multimedia(tipo, tamanos):
-    """{n: (coleccion de n, consultas)}; cada coleccion tiene su idf y las consultas usan el mismo."""
     from multimedia import bovw, codebook, config as mcfg
     with open(os.path.join(BENCH, "data", DATASET[tipo], "consultas.csv"), newline="") as f:
         filas = list(csv.DictReader(f))
@@ -51,7 +49,6 @@ def vectores_multimedia(tipo, tamanos):
 
 
 def cargar_datos(args, cfg, rng):
-    """(nombre, {n: (base, consultas)}); las consultas no estan en la base."""
     if args.tipo:
         return vectores_multimedia(args.tipo, args.tamanos)
     nq = cfg["vector"]["consultas"]
@@ -70,7 +67,6 @@ def cargar_datos(args, cfg, rng):
 
 
 def medir(fn, q, args):
-    """Cada consulta se corre `repeticiones` veces; tiempo = mediana de todas las corridas."""
     res, t = medir_tiempo(fn, np.tile(q, (args.repeticiones, 1)), args.calentamiento)
     return res[:len(q)], float(np.median(t))
 

@@ -1,4 +1,3 @@
-"""IVF vs HNSW y euclidiana vs coseno: construccion, consulta, memoria y Recall@10."""
 import argparse
 import csv
 import math
@@ -80,7 +79,6 @@ def cargar_config() -> dict:
 
 
 def _expandir_coleccion_real(rng: np.random.Generator, base_real: np.ndarray, n_objetivo: int) -> np.ndarray:
-    """Expande una coleccion real BoVW/BoAW preservando su dispersidad y estructura de clusters."""
     n_real, dim = base_real.shape
     if n_objetivo <= n_real:
         return np.ascontiguousarray(base_real[:n_objetivo], dtype=np.float32)
@@ -112,7 +110,6 @@ def _generar_sinteticos(rng: np.random.Generator, n: int, dim: int, grupos: int 
 
 def _cargar_consultas_reales(tipo: str, n_coleccion: int, max_consultas: int, base_vectores: np.ndarray,
                              rng: np.random.Generator) -> np.ndarray:
-    """Extrae o reutiliza los vectores TF-IDF de consultas.csv para la coleccion dada."""
     dir_bench = DIR_AMAZON_BENCH if tipo == "imagen" else DIR_FMA
     cache_npy = dir_bench / f"consultas_vec_{n_coleccion}.npy"
     if cache_npy.exists():
@@ -157,7 +154,6 @@ def _cargar_consultas_reales(tipo: str, n_coleccion: int, max_consultas: int, ba
 
 def obtener_coleccion_y_consultas(tipo: str, n: int, max_consultas: int, semilla: int,
                                   permitir_sintetico: bool = False) -> tuple[np.ndarray, np.ndarray, str] | None:
-    """Devuelve (vectores_base, vectores_consulta, etiqueta_origen) o None si no esta disponible."""
     rng = np.random.default_rng(semilla + n + (0 if tipo == "imagen" else 1000))
     etiqueta_real = "BoVW real (SIFT)" if tipo == "imagen" else "BoAW real (MFCC)"
 
@@ -238,7 +234,6 @@ def _medir_memoria_indice_faiss(indice_faiss, rids=None) -> float:
 
 
 def _medir_consulta(fn_lote, consultas: np.ndarray, repeticiones: int, calentamiento: int = 2) -> tuple[np.ndarray, float, float]:
-    """Ejecuta `fn_lote` sobre el lote de consultas y devuelve (posiciones, ms_por_consulta, ms_lote)."""
     nq = len(consultas)
     for _ in range(calentamiento):
         fn_lote(consultas[: min(10, nq)])

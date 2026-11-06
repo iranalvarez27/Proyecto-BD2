@@ -1,4 +1,3 @@
-"""Metricas de evaluacion (Recall@k, Precision@k), medicion de tiempos y espacio en disco."""
 import os
 import time
 from pathlib import Path
@@ -13,7 +12,6 @@ def _conjunto(fila) -> set:
 
 
 def recall_vs_exacto(resultados, exactos) -> float:
-    """Promedio por consulta de cuantos del exacto aparecen en el aproximado, sobre k."""
     if len(resultados) != len(exactos):
         raise ValueError(f"hay {len(resultados)} resultados y {len(exactos)} exactos")
     recalls = []
@@ -27,7 +25,6 @@ def recall_vs_exacto(resultados, exactos) -> float:
 
 
 def precision_at_k(recuperados, relevantes: set, k: int = 10) -> float:
-    """Fraccion de los primeros k documentos recuperados que son relevantes."""
     if k <= 0:
         return 0.0
     top_k = list(recuperados)[:k]
@@ -38,7 +35,6 @@ def precision_at_k(recuperados, relevantes: set, k: int = 10) -> float:
 
 
 def recall_at_k(recuperados, relevantes: set, k: int = 10) -> float:
-    """Fraccion del total de documentos relevantes que aparecen en los primeros k recuperados."""
     if not relevantes or k <= 0:
         return 0.0
     top_k = set(list(recuperados)[:k])
@@ -47,7 +43,6 @@ def recall_at_k(recuperados, relevantes: set, k: int = 10) -> float:
 
 
 def tamano_archivos_mb(rutas) -> float:
-    """Suma en MB del tamano en disco de una lista de rutas."""
     total_bytes = 0
     for r in rutas:
         p = Path(r)
@@ -57,7 +52,6 @@ def tamano_archivos_mb(rutas) -> float:
 
 
 def medir_tiempo(fn, consultas, calentamiento=5):
-    """Corre fn(q) por cada consulta, de a una; devuelve (resultados, tiempos en ms)."""
     for q in consultas[:calentamiento]:
         fn(q)
     resultados, tiempos = [], []

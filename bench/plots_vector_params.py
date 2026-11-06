@@ -1,4 +1,3 @@
-"""Recall@10 vs tiempo por indice, desde un csv de vector_params.py."""
 import argparse
 import csv
 import math
@@ -45,7 +44,6 @@ def _tamano(n: int) -> str:
 
 
 def cargar(ruta):
-    """{metrica: {n: {indice: [filas ordenadas por valor]}}}"""
     datos = defaultdict(lambda: defaultdict(lambda: defaultdict(list)))
     with open(ruta, newline="") as f:
         for fila in csv.DictReader(f):

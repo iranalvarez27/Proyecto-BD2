@@ -1,4 +1,3 @@
-"""TF-IDF vs BM25 vs GIN: construccion, consulta, disco, P@10 y R@10."""
 import argparse
 import csv
 import json
@@ -226,8 +225,6 @@ def _consultar_pg_gin(conn, texto_q: str, k: int, idioma_pg: str = "spanish") ->
 
 
 def _simular_ranking_gin(indice: IndiceInvertido, consulta: str, k: int) -> list[int]:
-    """Emula ts_rank_cd de PostgreSQL GIN: prioriza documentos que contienen todos los terminos (AND)
-    y ordena por densidad de ocurrencias normalizada por longitud del documento."""
     terminos = list(dict.fromkeys(indice.terminos_consulta(consulta)))
     if not terminos:
         return []
@@ -249,7 +246,6 @@ def _simular_ranking_gin(indice: IndiceInvertido, consulta: str, k: int) -> list
 
 
 def _estimar_gin_calibrado(n: int, spimi_s: float, spimi_mb: float, n_palabras: int) -> tuple[float, float, float]:
-    """Curva de referencia calibrada para PostgreSQL 17 GIN cuando el contenedor no esta activo."""
     # PostgreSQL GIN en C es mas rapido en indexacion en memoria pero ocupa ~45-60% del espacio de postings crudos
     construccion_s = max(0.015, spimi_s * 0.42)
     disco_mb = max(0.08, spimi_mb * 0.68)

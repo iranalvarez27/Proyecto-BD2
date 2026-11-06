@@ -1,11 +1,3 @@
-"""Galeria de exito y error: top 5 del k-NN exacto con euclidiana y con coseno.
-
-1. Correr ~50 consultas y guardar el top 5 de cada metrica con la categoria
-   (imagenes) o la cancion y el genero (audio) de cada resultado.
-2. Candidatos a exito: casi todo el top 5 coincide con la consulta.
-   Candidatos a error: casi nada coincide.
-3. Revisar los candidatos a ojo y explicar por que falla cada error.
-"""
 import argparse
 import csv
 import json
@@ -425,7 +417,6 @@ def _recortar_texto(texto: str, max_chars: int = 22) -> str:
 
 
 def renderizar_galeria_imagenes(datos_img: dict, ruta_png: Path) -> None:
-    """Genera una cuadricula visual de 4 filas (Exito Cosine, Exito Euclidean, Error Cosine, Error Euclidean) x 6 columnas."""
     filas_casos = [
         ("ÉXITO — Coseno", datos_img["metricas"]["cosine"]["candidatos_exito"][0]),
         ("ÉXITO — Euclidiana", datos_img["metricas"]["euclidean"]["candidatos_exito"][0]),
