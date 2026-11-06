@@ -233,21 +233,13 @@ def _medir_memoria_indice_faiss(indice_faiss, rids=None) -> float:
         return tamano_archivos_mb([ruta, ruta + ".meta.npz"])
 
 
-def _medir_consulta(fn_lote, consultas: np.ndarray, repeticiones: int, calentamiento: int = 2) -> tuple[np.ndarray, float, float]:
+def _medir_consulta(fn_una, consultas: np.ndarray, repeticiones: int, calentamiento: int = 10) -> tuple[np.ndarray, float, float]:
     nq = len(consultas)
-    for _ in range(calentamiento):
-        fn_lote(consultas[: min(10, nq)])
-
-    tiempos_lote = []
-    pos_final = None
-    for _ in range(repeticiones):
-        t0 = time.perf_counter()
-        pos_final = fn_lote(consultas)
-        dt_ms = (time.perf_counter() - t0) * 1000.0
-        tiempos_lote.append(dt_ms)
-
-    mediana_lote_ms = float(np.median(tiempos_lote))
-    ms_por_consulta = mediana_lote_ms / max(1, nq)
+    lote_rep = np.tile(consultas, (max(1, repeticiones), 1))
+    res, tiempos_ms = medir_tiempo(fn_una, lote_rep, calentamiento=min(calentamiento, len(lote_rep)))
+    pos_final = np.asarray(res[:nq])
+    ms_por_consulta = float(np.median(tiempos_ms))
+    mediana_lote_ms = ms_por_consulta * nq
     return pos_final, ms_por_consulta, mediana_lote_ms
 
 
@@ -344,11 +336,13 @@ def main(argv=None):
             mem_exacto_mb = float(x.nbytes) / (1024.0 * 1024.0)
 
             for metrica in args.metricas:
-                # 1. Ground Truth: EXACTO
+                # 1. Ground Truth: EXACTO (evaluado consulta por consulta en igualdad de condiciones)
+                rep_exacto = 1 if n >= 100_000 else min(args.repeticiones, 2)
                 pos_exacto, ms_q_exacto, ms_lote_exacto = _medir_consulta(
-                    lambda c: knn_exacto_lote(c, x, args.k, metrica)[0],
+                    lambda c: knn_exacto_lote(c, x, args.k, metrica)[0][0],
                     q,
-                    args.repeticiones,
+                    rep_exacto,
+                    calentamiento=5 if n >= 100_000 else 10,
                 )
                 filas.append({
                     "tipo": tipo,
@@ -375,7 +369,7 @@ def main(argv=None):
                 mem_hnsw_mb = _medir_memoria_indice_faiss(hnsw)
 
                 pos_hnsw, ms_q_hnsw, ms_lote_hnsw = _medir_consulta(
-                    lambda c: hnsw.search_lote(c, args.k, efSearch=ef_s)[0],
+                    lambda c: hnsw.search_lote(c, args.k, efSearch=ef_s)[0][0],
                     q,
                     args.repeticiones,
                 )
@@ -409,7 +403,7 @@ def main(argv=None):
                 mem_ivf_mb = _medir_memoria_indice_faiss(ivf)
 
                 pos_ivf, ms_q_ivf, ms_lote_ivf = _medir_consulta(
-                    lambda c: ivf.search_lote(c, args.k, nprobe=nprobe_val)[0],
+                    lambda c: ivf.search_lote(c, args.k, nprobe=nprobe_val)[0][0],
                     q,
                     args.repeticiones,
                 )
