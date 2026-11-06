@@ -108,48 +108,32 @@ def _generar_sinteticos(rng: np.random.Generator, n: int, dim: int, grupos: int 
     return np.ascontiguousarray(x, dtype=np.float32)
 
 
-def _cargar_consultas_reales(tipo: str, n_coleccion: int, max_consultas: int, base_vectores: np.ndarray,
-                             rng: np.random.Generator) -> np.ndarray:
+def _cargar_consultas_reales(tipo: str, n_coleccion: int, max_consultas: int, dim: int) -> np.ndarray:
     dir_bench = DIR_AMAZON_BENCH if tipo == "imagen" else DIR_FMA
-    cache_npy = dir_bench / f"consultas_vec_{n_coleccion}.npy"
-    if cache_npy.exists():
-        try:
-            q = np.load(cache_npy).astype(np.float32)
-            if q.ndim == 2 and q.shape[1] == base_vectores.shape[1] and len(q) > 0:
-                return q[:max_consultas]
-        except Exception:
-            pass
-
     ruta_csv = dir_bench / "consultas.csv"
+    if not ruta_csv.exists():
+        raise FileNotFoundError(f"no existe {ruta_csv}: hay que preparar el dataset de {tipo}")
+    with open(ruta_csv, "r", encoding="utf-8", newline="") as f:
+        filas = list(csv.DictReader(f))[:max_consultas]
+
+    faltantes = [f.get("ruta", "") for f in filas if not os.path.exists(f.get("ruta", ""))]
+    if faltantes:
+        raise FileNotFoundError(f"{len(faltantes)} de {len(filas)} consultas de {ruta_csv} no existen, "
+                                f"por ejemplo {faltantes[0]!r}: hay que regenerar consultas.csv en esta maquina")
+
     vectores_q = []
-    if ruta_csv.exists():
-        with open(ruta_csv, "r", encoding="utf-8", newline="") as f:
-            filas = list(csv.DictReader(f))
-        for fila in filas[:max_consultas]:
-            ruta_archivo = fila.get("ruta", "")
-            if not ruta_archivo or not os.path.exists(ruta_archivo):
-                continue
-            try:
-                seg = int(fila["segmento"]) if tipo == "audio" and "segmento" in fila else None
-                vec = bovw.ExtractFeatures(ruta_archivo, tipo=tipo, n_coleccion=n_coleccion, segmento=seg)
-                if np.any(vec > 0):
-                    vectores_q.append(vec.astype(np.float32))
-            except Exception:
-                continue
-
-    if len(vectores_q) >= min(10, max_consultas):
-        q = np.vstack(vectores_q).astype(np.float32)
-        try:
-            np.save(cache_npy, q)
-        except OSError:
-            pass
-        return q[:max_consultas]
-
-    # Respaldo: perturbaciones suaves de elementos de la base si no hay archivos de consulta
-    indices = rng.choice(len(base_vectores), size=min(max_consultas, len(base_vectores)), replace=False)
-    ruido = rng.normal(scale=0.02, size=(len(indices), base_vectores.shape[1])).astype(np.float32)
-    q = np.clip(base_vectores[indices] + ruido, 0.0, None).astype(np.float32)
-    return q
+    for fila in filas:
+        seg = int(fila["segmento"]) if tipo == "audio" and "segmento" in fila else None
+        vec = bovw.ExtractFeatures(fila["ruta"], tipo=tipo, n_coleccion=n_coleccion, segmento=seg)
+        if vec.shape != (dim,):
+            raise ValueError(f"la consulta {fila['ruta']} da un vector de {vec.shape}, se esperaba ({dim},)")
+        if np.any(vec > 0):
+            vectores_q.append(vec.astype(np.float32))
+    if len(vectores_q) < len(filas):
+        print(f"[vector] {len(filas) - len(vectores_q)} consultas de {tipo} sin descriptores, se omiten")
+    if not vectores_q:
+        raise ValueError(f"{ruta_csv} no tiene consultas con descriptores")
+    return np.vstack(vectores_q)
 
 
 def obtener_coleccion_y_consultas(tipo: str, n: int, max_consultas: int, semilla: int,
@@ -160,10 +144,11 @@ def obtener_coleccion_y_consultas(tipo: str, n: int, max_consultas: int, semilla
     # 1. Intentar coleccion exacta de tamano n
     try:
         vectores, _ids = bovw.cargar_coleccion(tipo, n)
-        q = _cargar_consultas_reales(tipo, n, max_consultas, vectores, rng)
-        return np.ascontiguousarray(vectores, dtype=np.float32), q, etiqueta_real
     except FileNotFoundError:
-        pass
+        vectores = None
+    if vectores is not None:
+        q = _cargar_consultas_reales(tipo, n, max_consultas, vectores.shape[1])
+        return np.ascontiguousarray(vectores, dtype=np.float32), q, etiqueta_real
 
     # 2. Revisar si existe una coleccion mas grande de la cual tomar los primeros n
     dir_cols = mm_config.directorio_colecciones(tipo)
@@ -177,7 +162,7 @@ def obtener_coleccion_y_consultas(tipo: str, n: int, max_consultas: int, semilla
         n_disp = mayores[0]
         vectores, _ids = bovw.cargar_coleccion(tipo, n_disp)
         sub = np.ascontiguousarray(vectores[:n], dtype=np.float32)
-        q = _cargar_consultas_reales(tipo, n_disp, max_consultas, sub, rng)
+        q = _cargar_consultas_reales(tipo, n_disp, max_consultas, sub.shape[1])
         return sub, q, f"{etiqueta_real} (subconjunto de {n_disp:,})"
 
     if not permitir_sintetico:
@@ -188,7 +173,7 @@ def obtener_coleccion_y_consultas(tipo: str, n: int, max_consultas: int, semilla
         n_disp = max(disponibles)
         vectores_base, _ids = bovw.cargar_coleccion(tipo, n_disp)
         expandidos = _expandir_coleccion_real(rng, vectores_base, n)
-        q = _cargar_consultas_reales(tipo, n_disp, max_consultas, vectores_base, rng)
+        q = _cargar_consultas_reales(tipo, n_disp, max_consultas, vectores_base.shape[1])
         return expandidos, q, f"{etiqueta_real} (extrapolado de {n_disp:,})"
 
     dim = mm_config.k_por_defecto(tipo)
