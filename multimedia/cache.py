@@ -24,7 +24,6 @@ _BLOQUE_HUELLA = 1 << 20
 # Identificadores
 # ---------------------------------------------------------------------------
 def _id_segmento(track_id, segmento: int):
-    """Convierte el id de una pista en ``(track_id, segmento)``."""
     if isinstance(track_id, tuple):
         return track_id + (segmento,)
     return (track_id, segmento)
