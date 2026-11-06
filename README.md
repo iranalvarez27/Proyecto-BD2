@@ -1,6 +1,6 @@
 # Minigestor de Base de Datos Multimodal - BD2 (2026-2)
 
-Sistema gestor de base de datos multimodal desarrollado desde cero. Esta versión cubre la Parte 1 (datos relacionales con almacenamiento paginado, índices, SQL, transacciones y algoritmos externos), la Parte 2 (datos espaciales con R-Tree) y la Parte 3 (recuperación de información textual con índice invertido SPIMI y búsqueda vectorial/multimedia con BoVW/BoAW sobre HNSW, IVF y búsqueda exacta).
+Sistema gestor de base de datos multimodal desarrollado desde cero. Esta versión cubre la Parte 1 (datos relacionales con almacenamiento paginado, índices, SQL, transacciones y algoritmos externos), la Parte 2 (datos espaciales con R-Tree), la Parte 3 (recuperación de información textual con índice invertido SPIMI) y la Parte 4 (búsqueda multimedia con BoVW/BoAW sobre HNSW, IVF y búsqueda exacta).
 
 ---
 
@@ -33,7 +33,8 @@ flowchart TD
 | Transacciones | `transaction/` | Locks compartidos y exclusivos por tabla, `BEGIN TRANSACTION`, `END TRANSACTION` (o `COMMIT`) y `ROLLBACK`, verificación de serializabilidad y simulación con hilos. |
 | Algoritmos externos | `engine/external.py` | External sort (k-way merge) para `ORDER BY` y external hash para `GROUP BY` y `JOIN`. |
 | Archivos | `storage/` | Heap File con reutilización de espacio libre y Sequential File con MAIN, AUX, eliminación lazy y reorganización. |
-| Índices | `index/` | B+ Tree agrupado y no agrupado, hash extendible y R-Tree, todos paginados en disco. |
+| Índices | `index/` | B+ Tree agrupado y no agrupado, hash extendible y R-Tree, todos paginados en disco; índices vectoriales en `index/vector/`. |
+| Multimedia | `multimedia/`, `index/vector/` | Extracción SIFT/MFCC, vocabulario K-Means y vectores TF-IDF (`ExtractFeatures`); índices EXACTO, HNSW e IVF para `SIMILAR_TO`. |
 | Almacenamiento | `engine/` | Buffer pool de páginas de 4 KB, `Segment` (archivo de páginas con free list y metapágina) y `FileManager` (lectura y escritura en disco). |
 | Común | `common/` | Tipos de datos, slotted page, formato de registros, bitmap de RIDs y funciones geométricas. |
 
@@ -81,7 +82,12 @@ Proyecto-BD2/
 │   ├── hash_utils.py            # Función de hash de claves
 │   ├── extendible_hash.py       # Hash extendible
 │   ├── rtree_page.py            # Página de nodo del R-Tree
-│   └── rtree.py                 # R-Tree: radio, rectángulo, polígono, k-NN y carga masiva STR
+│   ├── rtree.py                 # R-Tree: radio, rectángulo, polígono, k-NN y carga masiva STR
+│   └── vector/                  # Índices vectoriales EXACTO, HNSW e IVF
+│       ├── exacto.py            # k-NN exacto; base de los demás (clave ruta/segmento, n_coleccion, .npz)
+│       ├── faiss_base.py, hnsw.py, ivf.py, indices_faiss.py   # HNSW e IVF sobre FAISS
+│       ├── metricas.py          # euclidean, cosine, dot
+│       └── registro.py          # constructor de cada método
 ├── query/                       # Procesamiento de consultas SQL
 │   ├── tokens.py, lexer.py      # Análisis léxico
 │   ├── ast.py, parser.py        # Análisis sintáctico y AST
@@ -97,11 +103,17 @@ Proyecto-BD2/
 ├── text/                        # Recuperación de información textual
 │   ├── preprocesamiento.py      # Normalización, stopwords y stemming (NLTK)
 │   └── ingesta.py               # Ingesta de CSV a tablas e indexación SPIMI
-├── multimedia/                  # Representación y procesamiento multimedia
-│   ├── sift.py                  # Extracción SIFT (imágenes, OpenCV)
-│   ├── mfcc.py                  # Extracción MFCC (audio, librosa)
-│   ├── bovw.py                  # Codebooks K-Means, cuantización BoVW/BoAW y TF-IDF
-│   └── construir.py             # Pipeline de construcción de vocabularios y colecciones
+├── multimedia/                  # Parte 4: extracción de características (BoVW / BoAW)
+│   ├── config.py                # Parámetros (K, SEG_S, SIFT, MFCC) y rutas; MULTIMEDIA_DATA
+│   ├── sift.py                  # Descriptores SIFT (OpenCV): hasta 500 × 128 por imagen
+│   ├── mfcc.py                  # Segmentos de SEG_S s y MFCC por ventana (librosa): 19 coeficientes
+│   ├── cache.py                 # Caché de descriptores por id con huella sha1, shards y compactación
+│   ├── kmeans.py                # K-Means propio: k-means++ y Lloyd por bloques
+│   ├── codebook.py              # Muestreo estratificado, estandarización y vocabulario (codebook)
+│   ├── histogramas.py           # Conteos de palabras por objeto (uint16)
+│   ├── bovw.py                  # IDF, TF-IDF, colecciones y ExtractFeatures
+│   ├── construir.py             # Comando del pipeline completo
+│   └── barrido_k.py             # Precision@10 por K para elegir el tamaño del vocabulario
 ├── bench/                       # Benchmarks y preparación de datasets reales
 │   ├── datasets/                # Descarga e ingesta (esci.py, amazon_img.py, fma.py)
 │   └── data/                    # Almacenamiento local de descargas (excluido de git)
@@ -477,7 +489,7 @@ python3 data/plot_spatial.py
 
 ---
 
-## Parte 3: Recuperación de Información y Búsqueda Multimedia
+## Partes 3 y 4: Recuperación de Información (texto) y Búsqueda Multimedia
 
 Esta sección describe cómo descargar, preparar e ingestar automáticamente los datasets de los tres dominios multimodales utilizando las URLs oficiales públicas.
 
@@ -576,7 +588,7 @@ USING HNSW WITH METRIC=cosine
 ORDER BY score DESC;
 ```
 
-`SIMILAR_TO('archivo', k=N) USING HNSW | IVF | EXACT [WITH METRIC=cosine | euclidean | dot]` busca en el índice vectorial de la tabla (el de la columna `ruta`). `SIMILARITY_SCORE()` devuelve un puntaje donde mayor es más parecido (coseno: `1 - distancia`, euclidiana: `1 / (1 + distancia)`, producto punto: el producto punto). Si la tabla no tiene un índice del método pedido, se usa el k-NN exacto y el plan lo indica. `WITH METRIC` es opcional (por defecto `cosine`).
+`SIMILAR_TO('archivo', k=N) USING HNSW | IVF | EXACT [WITH METRIC=cosine | euclidean | dot]` busca en el índice vectorial de la tabla (el de la columna `ruta`). `SIMILARITY_SCORE()` devuelve un puntaje donde mayor es más parecido (coseno: `1 - distancia`, euclidiana: `1 / (1 + distancia)`, producto punto: el producto punto). Si la tabla no tiene un índice del método pedido pero sí uno EXACTO, se usa el k-NN exacto y el plan lo indica; si no tiene ninguno de los dos, la consulta da error. `WITH METRIC` es opcional (por defecto `cosine`).
 
 #### 3. Búsqueda Vectorial por Similitud de Audio (SIMILAR_TO)
 ```sql
@@ -619,6 +631,47 @@ python3 -m bench.plots --parte todo
 * **Parte 3 (Texto):** `texto_construccion.csv`, `texto_consultas.csv`, `texto_resumen.md`, `texto_construccion_disco.png`, `texto_latencia_longitud.png`, `texto_relevancia_pr10.png`.
 * **Parte 4 (Vector/Multimedia):** `vector_compare.csv`, `vector_resumen.md`, `vector_tiempo_vs_tamano.png`, `vector_construccion_memoria.png`, `vector_recall_comparativa.png`.
 * **Galería Multimedia:** `galeria.json`, `galeria_imagenes.png`, `galeria_audio.md`.
+
+---
+
+### 2.4.1 Módulo multimedia (`multimedia/`)
+
+Convierte cada imagen o segmento de audio en un vector TF-IDF de tamaño fijo K (Bag of Visual/Audio Words).
+La consulta pasa por la misma extracción, con el mismo vocabulario e IDF de la colección.
+
+```
+archivo → SIFT / MFCC → caché (sha1) → K-Means (vocabulario de K palabras) → histograma → TF-IDF → vector K
+```
+
+| Paso | Archivo | Imagen | Audio |
+|---|---|---|---|
+| Descriptores locales | `sift.py` / `mfcc.py` | SIFT, ≤ 500 × 128, lado ≤ 512 px | segmentos de 2 s, 87 ventanas × 19 MFCC (sin c0) |
+| Caché | `cache.py` | por id y huella sha1; solo se extrae lo nuevo o modificado | ídem, una entrada por segmento `(track_id, segmento)` |
+| Vocabulario | `codebook.py`, `kmeans.py` | K = 512 | K = 256 (MFCC estandarizados con z-score) |
+| Histograma | `histogramas.py` | conteo de descriptores por palabra | ídem |
+| Vector | `bovw.py` | `tf/total · log10(N/df)`, sin normalización L2 | ídem |
+
+El vocabulario se entrena una sola vez (offline) con una muestra estratificada de 200 000 descriptores; la consulta usa el mismo vocabulario y el mismo IDF, como exige el pipeline de una base de datos vectorial.
+
+K se eligió con `bench/experiments/elegir_k.py`: el menor K que logra al menos el 95 % de la mejor
+ganancia de Precision@10 sobre el azar (resultados en `bench/results/elegir_k.csv`).
+
+**Artefactos:** `data/multimedia/<imagen|audio>/` (caché, `codebook.npy`, `meta.json`, histogramas y
+`colecciones/<N>/vectores.npy`). Se puede usar otra carpeta con la variable `MULTIMEDIA_DATA`.
+
+**Construir a mano** (los scripts de `bench/datasets/` ya lo llaman con `--ingestar`):
+
+```bash
+python3 -m multimedia.construir --tipo imagen --objetos bench/data/amazon_img/objetos.csv --n 1000,10000,100000 --workers 8
+python3 -m bench.experiments.elegir_k --tipos imagen audio --n 10000
+```
+
+**Interfaz para el resto del motor:**
+- `ExtractFeatures(ruta, n_coleccion=N, segmento=None)`: vector de la consulta en el mismo espacio que la colección de N objetos.
+- `cargar_coleccion(tipo, N)`: matriz N × K y los ids de cada fila.
+
+**Nota sobre audio:** cada fila de `audios_N` es un segmento de 2 s. `SIMILAR_TO` extrae el archivo
+completo que se le pasa; se compara con los segmentos porque el TF es relativo (proporciones, no conteos).
 
 ---
 
