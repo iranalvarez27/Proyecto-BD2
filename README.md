@@ -1,6 +1,6 @@
 # Minigestor de Base de Datos Multimodal - BD2 (2026-2)
 
-Sistema gestor de base de datos multimodal desarrollado desde cero. Esta versión cubre la Parte 1 (datos relacionales con almacenamiento paginado, índices, SQL, transacciones y algoritmos externos), la Parte 2 (datos espaciales con R-Tree), la Parte 3 (recuperación de información textual con índice invertido SPIMI) y la Parte 4 (búsqueda multimedia con BoVW/BoAW sobre HNSW, IVF y búsqueda exacta).
+Sistema gestor de base de datos multimodal desarrollado desde cero. Esta versión cubre la Parte 1 (datos relacionales con almacenamiento paginado, índices, SQL, transacciones y algoritmos externos), la Parte 2 (datos espaciales con R-Tree), la Parte 3 (recuperación de información textual con índice invertido SPIMI), la Parte 4 (búsqueda multimedia con BoVW/BoAW sobre HNSW, IVF y búsqueda exacta) y la Parte 5 (detección de coincidencias de audio con verificación temporal y una biblioteca musical unificada).
 
 ---
 
@@ -26,7 +26,7 @@ flowchart TD
 
 | Capa | Directorio | Responsabilidad |
 |---|---|---|
-| Interfaz | `frontend/` | Paneles de archivos, consultas, resultados, plan de ejecución, mapa e inspector físico. |
+| Interfaz | `frontend/` | Paneles de archivos, consultas, resultados, plan de ejecución, mapa, inspector físico, búsqueda multimedia y copyright de audio. |
 | API | `backend/` | Recibe el SQL por HTTP (FastAPI) y lo pasa al motor a través de `EngineAdapter`, que también arma el plan que se muestra en la interfaz. |
 | SQL | `query/` | El lexer y el parser convierten el texto en un AST, el analizador semántico valida tablas, columnas y tipos, y `conexion.py` elige el plan y lo ejecuta. |
 | Catálogo | `query/catalog.py`, `query/catalog_store.py` | Registra las tablas, su organización física y sus índices, y los persiste en `data/catalog.json`. |
@@ -35,6 +35,7 @@ flowchart TD
 | Archivos | `storage/` | Heap File con reutilización de espacio libre y Sequential File con MAIN, AUX, eliminación lazy y reorganización. |
 | Índices | `index/` | B+ Tree agrupado y no agrupado, hash extendible y R-Tree, todos paginados en disco; índices vectoriales en `index/vector/`. |
 | Multimedia | `multimedia/`, `index/vector/` | Extracción SIFT/MFCC, vocabulario K-Means y vectores TF-IDF (`ExtractFeatures`); índices EXACTO, HNSW e IVF para `SIMILAR_TO`. |
+| Detección de audio | `deteccion/`, `backend/audio_detection.py` | Recupera candidatos, verifica alineación temporal y secuencias MFCC, y devuelve coincidencias con metadatos SQL y procedencia. |
 | Almacenamiento | `engine/` | Buffer pool de páginas de 4 KB, `Segment` (archivo de páginas con free list y metapágina) y `FileManager` (lectura y escritura en disco). |
 | Común | `common/` | Tipos de datos, slotted page, formato de registros, bitmap de RIDs y funciones geométricas. |
 
@@ -56,7 +57,8 @@ Proyecto-BD2/
 ├── backend/                     # API REST
 │   ├── main.py                  # Endpoints FastAPI (/api/query, /api/tables, /api/visualize, ...)
 │   ├── engine_adapter.py        # Une catálogo, almacenamiento, índices y transacciones; crea las tablas de demo
-│   └── visualize.py             # Snapshots y trazas para el inspector físico
+│   ├── visualize.py             # Snapshots y trazas para el inspector físico
+│   └── audio_detection.py       # Colecciones, detección de audio y caché de metadatos
 ├── common/                      # Lo que comparten todas las capas
 │   ├── types.py                 # Tipos de datos, columnas y esquemas
 │   ├── page.py                  # Slotted page de 4096 bytes
@@ -113,9 +115,10 @@ Proyecto-BD2/
 │   ├── histogramas.py           # Conteos de palabras por objeto (uint16)
 │   ├── bovw.py                  # IDF, TF-IDF, colecciones y ExtractFeatures
 │   ├── construir.py             # Comando del pipeline completo
+│   ├── colecciones_audio.py     # Nombres de datasets y resolución de la tabla de audio
 │   └── barrido_k.py             # Precision@10 por K para elegir el tamaño del vocabulario
 ├── bench/                       # Benchmarks y preparación de datasets reales
-│   ├── datasets/                # Descarga e ingesta (esci.py, amazon_img.py, fma.py)
+│   ├── datasets/                # Descarga, ingesta y unificación de datasets
 │   └── data/                    # Almacenamiento local de descargas (excluido de git)
 ├── data/                        # Datos generados (.bin, .idx, catalog.json) y benchmarks
 │   ├── generate_data.py         # Datasets de 1K, 10K y 100K para las Partes 1 y 2
@@ -124,8 +127,9 @@ Proyecto-BD2/
 │   ├── bench_spatial.py         # Benchmark espacial: secuencial vs R-Tree vs GiST de PostgreSQL
 │   ├── plot_spatial.py          # Gráficas de la Parte 2
 │   └── charts/                  # Gráficas PNG generadas por los benchmarks
-├── tools/
-│   └── smoke_visualizations.py  # Verificación de los snapshots del inspector físico
+├── deteccion/                   # Detector temporal, experimentos y pruebas de audio
+├── tools/                       # Verificación del inspector físico
+│   └── smoke_visualizations.py  # Snapshots y trazas de las estructuras
 ├── frontend/                    # Interfaz de usuario (React + Vite + Tailwind CSS + Leaflet)
 │   └── src/
 │       ├── App.jsx              # Layout y llamadas a la API
@@ -148,6 +152,7 @@ Todos los archivos de datos se guardan en `data/` y no se suben al repositorio. 
 | Node.js | 20.19+ o 22.12+ | Frontend (Vite 8) |
 | pnpm | 9 o superior | Dependencias del frontend (`pnpm-lock.yaml`) |
 | PostgreSQL + PostGIS | Opcional | Solo para comparar con GiST en el benchmark espacial |
+| FFmpeg | Opcional | Recuperación de MP3 con cabeceras problemáticas y conversión de audio |
 
 Si no tienes pnpm, se puede activar con `corepack enable` (viene con Node) o instalar con `npm install -g pnpm`.
 
@@ -219,7 +224,9 @@ El usuario de PostgreSQL necesita poder ejecutar `CREATE EXTENSION postgis`. Los
 
 ---
 
-## 2.1.5 Interfaz de Usuario (Los 4 Paneles)
+## 2.1.5 Interfaz de Usuario
+
+Los cuatro paneles base permiten consultar el motor y revisar sus estructuras. Las pestañas adicionales incorporan búsqueda textual, multimedia, datos espaciales y detección de audio.
 
 1. **Panel de Archivos (Izquierda):**
    * Inspección de tablas cargadas (`HEAP` y `SEQUENTIAL`).
@@ -244,6 +251,8 @@ El usuario de PostgreSQL necesita poder ejecutar `CREATE EXTENSION postgis`. Los
    * Representación visual en árbol de la estrategia del planificador de consultas.
    * Muestra nodos jerárquicos: `IndexScan (B+ Tree Agrupado)`, `IndexScan (B+ Tree No Agrupado)`, `IndexScan (Extendible Hash)`, `SequentialBinarySearch`, `FullTableScan`, `Sort (ORDER BY)`.
    * Costos estimados de E/S y conteo de filas estimadas.
+
+Las pestañas **Mapa**, **Búsqueda textual**, **Laboratorio vectorial**, **Inspector físico** y **Copyright audio** amplían estas herramientas. La biblioteca musical aparece con su nombre descriptivo junto a las tablas de origen y las muestras de audio.
 
 ---
 
@@ -689,3 +698,59 @@ El contrato completo puede comprobarse sin abrir el navegador:
 ```bash
 python tools/smoke_visualizations.py
 ```
+
+
+## Parte 5: Detección de Copyright en Audio (Opción C)
+
+La pestaña **Copyright audio** busca fragmentos coincidentes y muestra la canción de referencia, su artista, la posición y el porcentaje de similitud. Integra audio y metadatos relacionales mediante la API del motor.
+
+### 2.5.1 Implementación y datos
+
+| Componente | Implementación |
+|---|---|
+| Características | MFCC, vocabulario K-Means y vectores BoAW con TF-IDF sobre segmentos de 2 s. |
+| Búsqueda | EXACTO, HNSW e IVF para recuperar candidatos por similitud del coseno. |
+| Verificación | Alineación temporal y secuencias MFCC en bloques de 5–10 s. Chroma CQT y DTW complementan las consultas de al menos 10 s. |
+| Metadatos | Tabla `audio_segmentos` con título, artista, género, ruta y procedencia. |
+
+La **Biblioteca musical** reúne las colecciones locales en una sola búsqueda.
+
+| Colección | Canciones | Segmentos |
+|---|---:|---:|
+| FMA | 7.994 | 115.266 |
+| Perú e internacional | 500 | 54.736 |
+| **Biblioteca musical** | **8.494** | **170.002** |
+
+Los audios originales, vectores y modelos deben estar disponibles localmente. La preparación de FMA y del vocabulario se describe en la sección 2.3.3.
+
+### 2.5.2 Panel de Copyright audio
+
+1. Selecciona la biblioteca y carga un audio de **5 segundos a 10 minutos**, de hasta **50 MB**.
+2. Configura el bloque de **5 o 10 s**, los vecinos, la similitud mínima y el método de búsqueda. Los controles de secuencia y ruido están en **Ajustes avanzados**.
+3. Pulsa **Analizar audio** para consultar las coincidencias en la línea de tiempo y la tabla de resultados.
+4. Reproduce los tramos de consulta y referencia, o usa **Exportar informe** para descargar el JSON.
+
+La detección de covers depende de conservar suficiente similitud musical. Las posiciones tonales son aproximadas y los porcentajes expresan similitud orientativa.
+
+### 2.5.3 API y consulta SQL
+
+| Endpoint | Función |
+|---|---|
+| `GET /api/audio/collections` | Lista las bibliotecas disponibles. |
+| `POST /api/media/upload` | Sube el archivo de consulta. |
+| `POST /api/audio/detect` | Devuelve coincidencias, segmentos, metadatos y tiempos. |
+| `GET /api/media/{ruta}` | Reproduce los audios por rangos. |
+
+```sql
+SELECT track_id, titulo, artista, fuente
+FROM audio_segmentos
+WHERE id = 1;
+```
+
+### 2.5.4 Verificación
+
+```bash
+python -m pytest deteccion bench/datasets/test_fma_todas.py -q
+```
+
+Las pruebas cubren alineación, secuencias, Chroma, integración de la API e invalidación de cachés. El detector reutiliza metadatos, descriptores y cálculos MFCC entre bloques para reducir el tiempo de análisis.
