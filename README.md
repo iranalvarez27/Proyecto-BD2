@@ -700,11 +700,55 @@ python tools/smoke_visualizations.py
 ```
 
 
+## Parte 5: Sistema de Recomendación E-commerce Híbrido (Opción B)
+
+La pestaña **Tienda** integra en una sola experiencia de comercio electrónico las 4 partes del motor: índices relacionales (`B+ Tree`, `Extendible Hash`) y transacciones con control de concurrencia, índice espacial (`R-Tree`), índice invertido de texto (`SPIMI` con `BM25` y `TF-IDF`) e índices vectoriales multimedia (`BoVW` con `HNSW`, `IVF` y `EXACT`).
+
+### 2.5.1 Tablas e índices del subsistema E-commerce
+
+| Tabla | Esquema principal | Índices en el motor | Rol en la aplicación |
+|---|---|---|---|
+| `ecommerce_productos` | `id`, `asin`, `nombre`, `categoria`, `subcategoria`, `marca`, `precio_centavos`, `moneda`, `rating` | `B+ Tree` (`id`), `Hash` (`categoria`, `subcategoria`), `B+ Tree` (`precio_centavos`) | Catálogo maestro, filtros por categoría y rangos de precio. |
+| `ecommerce_textos` | `id`, `contenido` | `B+ Tree` (`id`), `INVERTED` SPIMI en inglés (`contenido`) | Búsqueda y similitud textual con `BM25` y `TF_IDF`. |
+| `ecommerce_imagenes_hnsw` / `ecommerce_imagenes_ivf` | `id`, `ruta` | `B+ Tree` (`id`), `HNSW` / `IVF` (`ruta`) | Similitud visual SIFT + BoVW (dimensión 512) con métricas `cosine`, `euclidean` y `dot`. |
+| `ecommerce_tiendas` | `id`, `nombre`, `ubicacion (POINT)` | `B+ Tree` (`id`), `R-Tree` (`ubicacion`) | Búsqueda espacial k-NN best-first (`distancia_haversine`) de sucursales cercanas con stock. |
+| `ecommerce_inventario`, `ecommerce_interacciones`, `ecommerce_afinidades`, `ecommerce_operaciones`, `ecommerce_estado` | Inventario por sucursal, historial de vistas/compras y matriz item-item | `B+ Tree` (`id`), `Hash` (`producto_id`, `usuario_id`, `producto_origen`, `solicitud`) | Compras transaccionales e idempotentes (`BEGIN` / `COMMIT` / `ROLLBACK` con locks `X`) y recomendación por compras compartidas. |
+
+### 2.5.2 Preparación del catálogo y los índices
+
+Con el backend detenido, ejecuta:
+
+```bash
+python3 -m recomendacion.preparar --size 1000
+```
+
+Este comando selecciona de forma determinística y reanudable los productos de `data/amazon/productos.csv` con imagen válida en `bench/data/amazon_img/imgs`, construye los índices `B+ Tree`, `Hash`, `R-Tree`, `SPIMI`, `HNSW` e `IVF`, e inicializa el inventario y las interacciones semilla.
+
+### 2.5.3 Fusión híbrida y API REST
+
+El recomendador combina las 4 señales (`visual`, `texto`, `metadata`, `compras`) mediante **Reciprocal Rank Fusion Ponderado (Weighted RRF, $k=60$)**, devolviendo el porcentaje exacto de aporte de cada modalidad (`aportes_pct`) y las trazas SQL con sus planes de ejecución:
+
+| Endpoint | Función |
+|---|---|
+| `GET /api/ecommerce/status` | Estado del manifiesto, conteo de productos e índices activos. |
+| `GET /api/ecommerce/catalog` | Catálogo paginado por cursor con filtros por texto (`BM25`), categoría (`Hash`) y rango de precios (`B+ Tree`). |
+| `GET /api/ecommerce/products/{id}` | Detalle completo del producto y descripción. |
+| `POST /api/ecommerce/recommend` | Recomendación híbrida Top-$K$, sucursales cercanas con stock (`R-Tree`) y trazabilidad SQL. |
+| `POST /api/ecommerce/interactions` | Registra eventos de vista o adición al carrito. |
+| `POST /api/ecommerce/purchases` | Registra compras atómicas e idempotentes, descuenta stock y actualiza `ecommerce_afinidades`. |
+
+### 2.5.4 Verificación
+
+```bash
+pytest recomendacion/ -q
+```
+
+
 ## Parte 5: Detección de Copyright en Audio (Opción C)
 
 La pestaña **Copyright audio** busca fragmentos coincidentes y muestra la canción de referencia, su artista, la posición y el porcentaje de similitud. Integra audio y metadatos relacionales mediante la API del motor.
 
-### 2.5.1 Implementación y datos
+### 2.6.1 Implementación y datos
 
 | Componente | Implementación |
 |---|---|
@@ -723,7 +767,7 @@ La **Biblioteca musical** reúne las colecciones locales en una sola búsqueda.
 
 Los audios originales, vectores y modelos deben estar disponibles localmente. La preparación de FMA y del vocabulario se describe en la sección 2.3.3.
 
-### 2.5.2 Panel de Copyright audio
+### 2.6.2 Panel de Copyright audio
 
 1. Selecciona la biblioteca y carga un audio de **5 segundos a 10 minutos**, de hasta **50 MB**.
 2. Configura el bloque de **5 o 10 s**, los vecinos, la similitud mínima y el método de búsqueda. Los controles de secuencia y ruido están en **Ajustes avanzados**.
@@ -732,7 +776,7 @@ Los audios originales, vectores y modelos deben estar disponibles localmente. La
 
 La detección de covers depende de conservar suficiente similitud musical. Las posiciones tonales son aproximadas y los porcentajes expresan similitud orientativa.
 
-### 2.5.3 API y consulta SQL
+### 2.6.3 API y consulta SQL
 
 | Endpoint | Función |
 |---|---|
@@ -747,7 +791,7 @@ FROM audio_segmentos
 WHERE id = 1;
 ```
 
-### 2.5.4 Verificación
+### 2.6.4 Verificación
 
 ```bash
 python -m pytest deteccion bench/datasets/test_fma_todas.py -q
@@ -755,46 +799,31 @@ python -m pytest deteccion bench/datasets/test_fma_todas.py -q
 
 Las pruebas cubren alineación, secuencias, Chroma, integración de la API e invalidación de cachés. El detector reutiliza metadatos, descriptores y cálculos MFCC entre bloques para reducir el tiempo de análisis.
 
+### 2.6.5 Despliegue de la biblioteca de audio
 
-## Parte 5: Sistema de Recomendación E-commerce Híbrido (Opción B)
-
-La pestaña **Tienda** integra en una sola experiencia de comercio electrónico las 4 partes del motor: índices relacionales (`B+ Tree`, `Extendible Hash`) y transacciones con control de concurrencia, índice espacial (`R-Tree`), índice invertido de texto (`SPIMI` con `BM25` y `TF-IDF`) e índices vectoriales multimedia (`BoVW` con `HNSW`, `IVF` y `EXACT`).
-
-### 2.6.1 Tablas e índices del subsistema E-commerce
-
-| Tabla | Esquema principal | Índices en el motor | Rol en la aplicación |
-|---|---|---|---|
-| `ecommerce_productos` | `id`, `asin`, `nombre`, `categoria`, `subcategoria`, `marca`, `precio_centavos`, `moneda`, `rating` | `B+ Tree` (`id`), `Hash` (`categoria`, `subcategoria`), `B+ Tree` (`precio_centavos`) | Catálogo maestro, filtros por categoría y rangos de precio. |
-| `ecommerce_textos` | `id`, `contenido` | `B+ Tree` (`id`), `INVERTED` SPIMI en inglés (`contenido`) | Búsqueda y similitud textual con `BM25` y `TF_IDF`. |
-| `ecommerce_imagenes_hnsw` / `ecommerce_imagenes_ivf` | `id`, `ruta` | `B+ Tree` (`id`), `HNSW` / `IVF` (`ruta`) | Similitud visual SIFT + BoVW (dimensión 512) con métricas `cosine`, `euclidean` y `dot`. |
-| `ecommerce_tiendas` | `id`, `nombre`, `ubicacion (POINT)` | `B+ Tree` (`id`), `R-Tree` (`ubicacion`) | Búsqueda espacial k-NN best-first (`distancia_haversine`) de sucursales cercanas con stock. |
-| `ecommerce_inventario`, `ecommerce_interacciones`, `ecommerce_afinidades`, `ecommerce_operaciones`, `ecommerce_estado` | Inventario por sucursal, historial de vistas/compras y matriz item-item | `B+ Tree` (`id`), `Hash` (`producto_id`, `usuario_id`, `producto_origen`, `solicitud`) | Compras transaccionales e idempotentes (`BEGIN` / `COMMIT` / `ROLLBACK` con locks `X`) y recomendación por compras compartidas. |
-
-### 2.6.2 Preparación del catálogo y los índices
-
-Con el backend detenido, ejecuta:
+El frontend en Vercel solo sirve la interfaz: `frontend/vercel.json` reenvía `/api/*` al backend. Ese backend necesita la biblioteca (`data/` y los modelos no están en Git), si no la lista de bibliotecas sale vacía. La biblioteca se empaqueta una vez y el servidor la instala al arrancar.
 
 ```bash
-python3 -m recomendacion.preparar --size 1000
+# 1) en la máquina donde se construyó la biblioteca (regenera las cachés si cambió el modelo)
+python -m deteccion.precalcular -n 10000
+python -m deteccion.biblioteca exportar -n 10000 -o biblioteca-10k.tar.gz      # ~100 MB; --con-audio añade los MP3 (~0.8 GB)
+# 2) sube el .tar.gz a un enlace público (GitHub Release, Cloudflare R2, S3...). El paquete de 10k ya está publicado:
+#    https://github.com/iranalvarez27/Proyecto-BD2/releases/download/biblioteca-audio-10k/biblioteca-10k.tar.gz
+#    sha256 e8cf0d66fe3366cc225a2afb3bb0ef13103c61f74c9312ec3999bbe19d9968b5
+#    Para instalarlo sin exportar nada: python -m deteccion.biblioteca importar <esa URL>
+# 3) en el servidor (Dockerfile, target `app`), variables de entorno:
+#    BIBLIOTECA_URL=https://.../biblioteca-10k.tar.gz   BIBLIOTECA_SHA256=<sha256 que imprime exportar>
+#    MEDIA_BASE_URL=https://.../musica                   (opcional: de dónde escuchar los MP3 originales)
+# 4) en frontend/vercel.json, `destination` = URL pública de ese backend
 ```
 
-Este comando selecciona de forma determinística y reanudable los productos de `data/amazon/productos.csv` con imagen válida en `bench/data/amazon_img/imgs`, construye los índices `B+ Tree`, `Hash`, `R-Tree`, `SPIMI`, `HNSW` e `IVF`, e inicializa el inventario y las interacciones semilla.
-
-### 2.6.3 Fusión híbrida y API REST
-
-El recomendador combina las 4 señales (`visual`, `texto`, `metadata`, `compras`) mediante **Reciprocal Rank Fusion Ponderado (Weighted RRF, $k=60$)**, devolviendo el porcentaje exacto de aporte de cada modalidad (`aportes_pct`) y las trazas SQL con sus planes de ejecución:
-
-| Endpoint | Función |
+| Elemento | Detalle |
 |---|---|
-| `GET /api/ecommerce/status` | Estado del manifiesto, conteo de productos e índices activos. |
-| `GET /api/ecommerce/catalog` | Catálogo paginado por cursor con filtros por texto (`BM25`), categoría (`Hash`) y rango de precios (`B+ Tree`). |
-| `GET /api/ecommerce/products/{id}` | Detalle completo del producto y descripción. |
-| `POST /api/ecommerce/recommend` | Recomendación híbrida Top-$K$, sucursales cercanas con stock (`R-Tree`) y trazabilidad SQL. |
-| `POST /api/ecommerce/interactions` | Registra eventos de vista o adición al carrito. |
-| `POST /api/ecommerce/purchases` | Registra compras atómicas e idempotentes, descuenta stock y actualiza `ecommerce_afinidades`. |
-
-### 2.6.4 Verificación
-
-```bash
-pytest recomendacion/ -q
-```
+| Qué contiene el paquete | Tablas `audios_N` con su índice, `catalog.json` (solo la entrada de la tabla, se fusiona con la del servidor), modelo (`meta.json`, codebook, estandarización), colección, `huellas.json` y las cachés de secuencias MFCC y chroma de las originales. |
+| Cachés portables | Su clave es la huella de contenido de cada MP3 (`huella_archivo`) y el contenido del modelo, no la fecha, el inodo ni la ruta. Si no está el MP3, la huella sale de `huellas.json`. |
+| Sin los MP3 | La detección funciona igual. Solo no se puede escuchar la referencia, salvo que se sirvan aparte con `MEDIA_BASE_URL` (misma estructura `bench/data/fma/...`). Si falta una original sin caché, esa pista queda sin verificar y se informa en `metricas.originales_ausentes`. |
+| Dos fuentes | Además del paquete de 10k hay uno por fuente: `python -m deteccion.biblioteca importar peru fma` (Perú e internacional: 329 MB, 500 canciones; FMA: 727 MB, 7 994 canciones). La pestaña Copyright audio deja elegir en cuál buscar y ofrece solo esas dos opciones (la biblioteca unificada no aparece si existen las fuentes); con una sola fuente se comparan menos vectores y responde antes. Se separan con `python -m deteccion.dividir` y se exportan con `exportar -n <segmentos>`. |
+| Releases publicados | `peru`: `releases/download/biblioteca-audio-peru/biblioteca-peru.tar.gz`, sha256 `137f20a21ee111370151d2a94a6ec38d18420bcbf6552eee82756d951e5e75ba`. `fma`: `releases/download/biblioteca-audio-fma/biblioteca-fma.tar.gz`, sha256 `475c13f563707a505cbfcda7d651e168f8e4835f700ac321b5deff40fd087c1d`. `importar` verifica el hash y rechaza paquetes con un modelo distinto al instalado (`--forzar` lo omite). |
+| Varias bibliotecas | Cada paquete trae su registro `modelo/huellas/<tabla>.json`; al instalar varios no se pisan entre sí. Validado instalando ambos en un directorio limpio y sin MP3: ambas fuentes detectan (6,8 s Perú, 4,6 s FMA), sin falsos positivos y sin originales ausentes. |
+| Preparación para publicar | `python -m deteccion.precalcular -n <N>` y luego `exportar`; después `gh release create biblioteca-audio-<fuente> <archivo>` y comprobar con `curl -sL <url> \| sha256sum`. |
+| Idempotencia | `docker/arrancar.sh` instala solo si la marca `.biblioteca_N.json` no coincide; con disco efímero se reinstala en cada arranque en frío. |
