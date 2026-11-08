@@ -1,6 +1,7 @@
 import base64
 import os
 import sys
+import threading
 import uuid
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -31,8 +32,14 @@ app.add_middleware(
 )
 
 engine = EngineAdapter(data_dir=os.environ.get("BD2_DATA_DIR", "data"))
-app.include_router(crear_router(engine, PROJECT_ROOT))
+audio_router = crear_router(engine, PROJECT_ROOT)
+app.include_router(audio_router)
 app.include_router(crear_router_ecommerce(engine))
+
+
+@app.on_event("startup")
+def precalentar_audio():
+    threading.Thread(target=audio_router.precalentar, daemon=True).start()
 
 class QueryRequest(BaseModel):
     query: str

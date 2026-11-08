@@ -14,6 +14,7 @@ from pydantic import BaseModel, Field
 from deteccion.detector import BusquedaAudio, Detector, Parametros
 from multimedia import bovw, config
 from multimedia import colecciones_audio
+from multimedia.colecciones_audio import normalizar_ruta, ruta_local
 from multimedia.mfcc import cargar_audio
 
 
@@ -46,9 +47,7 @@ def tabla_audio(n):
 
 
 def url_original(ruta, root):
-    ruta = str(ruta).replace('\\', '/')
-    if ruta.startswith('/app/'):
-        ruta = ruta[5:]
+    ruta = normalizar_ruta(ruta)
     if Path(ruta).is_absolute():
         try:
             ruta = Path(ruta).resolve().relative_to(Path(root).resolve()).as_posix()
@@ -57,7 +56,8 @@ def url_original(ruta, root):
 
     if not ruta.startswith(('bench/data/', 'data/')) or '..' in Path(ruta).parts:
         return None
-    return '/api/media/' + quote(ruta, safe='/')
+    base = os.environ.get('MEDIA_BASE_URL', '').rstrip('/')
+    return (base or '/api/media') + '/' + quote(ruta, safe='/')
 
 
 def enriquecer(resultado, metadatos, root):
@@ -73,23 +73,27 @@ def enriquecer(resultado, metadatos, root):
     return resultado
 
 
+def leer_metadatos(engine, tabla, con_procedencia):
+    columnas_origen = ', fuente, id_origen' if con_procedencia else ''
+    res = engine.execute_query('SELECT track_id, segmento, titulo, artista, genero, ruta' + columnas_origen + ' FROM ' + tabla + ';')
+    if res['status'] != 'success':
+        raise ValueError(res.get('error') or 'No se pudieron leer los metadatos')
+    metas, segmentos = {}, set()
+    for fila in res['rows']:
+        meta = dict(zip(res['columns'], fila))
+        metas[str(meta['track_id'])] = meta
+        segmentos.add((str(meta['track_id']), int(meta['segmento'])))
+    return metas, segmentos
+
+
 def crear_router(engine, root):
     router = APIRouter(prefix='/api/audio', tags=['Deteccion de audio'])
     catalog_lock = threading.RLock()
     busqueda_lock = threading.Lock()
     metadatos_lock = threading.Lock()
 
-    def leer_metadatos(tabla, con_procedencia):
-        columnas_origen = ', fuente, id_origen' if con_procedencia else ''
-        res = engine.execute_query('SELECT track_id, segmento, titulo, artista, genero, ruta' + columnas_origen + ' FROM ' + tabla + ';')
-        if res['status'] != 'success':
-            raise ValueError(res.get('error') or 'No se pudieron leer los metadatos')
-        metas, segmentos = {}, set()
-        for fila in res['rows']:
-            meta = dict(zip(res['columns'], fila))
-            metas[str(meta['track_id'])] = meta
-            segmentos.add((str(meta['track_id']), int(meta['segmento'])))
-        return metas, segmentos
+    def leer_tabla(tabla, con_procedencia):
+        return leer_metadatos(engine, tabla, con_procedencia)
 
     @lru_cache(maxsize=2)
     def metadatos_guardados(tabla, con_procedencia, firma, revision, refrescar=False):
@@ -113,7 +117,7 @@ def crear_router(engine, root):
                     return metas, segmentos, 'disco'
             except (OSError, ValueError, TypeError, KeyError):
                 pass
-        metas, segmentos = leer_metadatos(tabla, con_procedencia)
+        metas, segmentos = leer_tabla(tabla, con_procedencia)
         if ruta is not None and revision == 0:
             temporal = None
             try:
@@ -142,7 +146,7 @@ def crear_router(engine, root):
             firma = tuple((str(p), s.st_mtime_ns, s.st_ctime_ns, s.st_size, s.st_ino)
                           for p in archivos for s in [Path(p).stat()])
         except (AttributeError, FileNotFoundError):
-            return (*leer_metadatos(tabla, con_procedencia), False, 'sql')
+            return (*leer_tabla(tabla, con_procedencia), False, 'sql')
         with metadatos_lock:
             if refrescar:
                 metadatos_guardados.cache_clear()
@@ -171,6 +175,19 @@ def crear_router(engine, root):
         with busqueda_lock:
             return busqueda_guardada(n, params.metodo, params.representacion, firma)
 
+    def precalentar():
+        try:
+            import scipy.signal
+            import librosa
+            from deteccion import chroma
+            n = bovw.n_coleccion_vigente('audio')
+            bovw._extractor('audio', n)
+            obtener_busqueda(n, Parametros())
+        except Exception:
+            pass
+
+    router.precalentar = precalentar
+
     @router.get('/collections')
     def colecciones(incluir_auxiliares: bool = False):
         if getattr(engine, 'data_dir', None) is not None and getattr(engine, 'pool', None) is not None:
@@ -188,8 +205,8 @@ def crear_router(engine, root):
             if engine.catalog.existe_tabla(tabla):
                 salida.append(colecciones_audio.describir(n, info))
         if not incluir_auxiliares:
-            unificadas = [c for c in salida if c['unificada']]
-            salida = unificadas or [c for c in salida if c['completa']] or salida
+            fuentes = [c for c in salida if c['completa'] and not c['unificada']]
+            salida = fuentes or [c for c in salida if c['completa']] or salida
         return {'colecciones': sorted(salida, key=lambda c: c['n'])}
 
     @router.post('/detect')
@@ -219,10 +236,7 @@ def crear_router(engine, root):
                                  'Actualice la biblioteca y compruebe que usa la colección correspondiente.')
             y = cargar_audio(ruta, int(extractor.meta['sr']))
             def original(pid):
-                original_path = str(metas[pid]['ruta']).replace('\\', '/')
-                if original_path.startswith('/app/'):
-                    original_path = original_path[5:]
-                return Path(root) / original_path
+                return ruta_local(metas[pid]['ruta'], root)
             detector = Detector(None, None, extractor, params, resolver_original=original, busqueda=busqueda)
             resultado = enriquecer(detector.detectar(y), metas, root)
             resultado['metricas'].update(metadata_ms=round(tiempo_meta, 2), metadata_cache=cache_meta,
