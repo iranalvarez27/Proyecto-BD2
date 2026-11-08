@@ -4,17 +4,8 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
-from deteccion.detector import BusquedaAudio, Detector, Parametros, alinear, buscar_exacto, fusionar
+from deteccion.detector import BusquedaAudio, Detector, Parametros, alinear, fusionar
 from index.vector.exacto import knn_exacto_lote
-
-
-def test_busqueda_bloques_equivale_a_exacta_global():
-    rng = np.random.default_rng(5)
-    x, q = rng.random((71, 12)), rng.random((7, 12))
-    p, d = buscar_exacto(q, x, 13, bloque=9)
-    esperado, dist = knn_exacto_lote(q, x, 13, 'cosine')
-    np.testing.assert_array_equal(p, esperado)
-    np.testing.assert_allclose(d, dist, atol=1e-6)
 
 
 def test_busqueda_hibrida_plana_conserva_top_k_exacto_de_ambas_representaciones():
@@ -27,7 +18,7 @@ def test_busqueda_hibrida_plana_conserva_top_k_exacto_de_ambas_representaciones(
     posiciones, distancias = busqueda.buscar(q, k)
 
     for columna, transformar in ((0, lambda a: a), (k, np.sqrt)):
-        esperado, dist = buscar_exacto(transformar(q), transformar(x), k)
+        esperado, dist = knn_exacto_lote(transformar(q), transformar(x), k, 'cosine')
         np.testing.assert_array_equal(posiciones[:, columna:columna + k], esperado)
         np.testing.assert_allclose(distancias[:, columna:columna + k], dist, atol=1e-6)
 
@@ -99,12 +90,55 @@ def test_extractor_cubre_ultima_ventana_y_valida_salto():
     ext = Extractor.__new__(Extractor)
     ext.tipo, ext.meta = 'audio', {'sr': 10, 'seg_s': 2}
     ext.idf, ext.codebook = np.ones(2), np.array([[1., 0.], [0., 1.]])
-    ext._descriptores_audio = lambda y: np.array([[1., 0.]])
+    ext._descriptores_lote = lambda ventanas: np.tile([[1., 0.]], (len(ventanas), 1, 1))
     tiempos, q = ext.vectores_senal(np.ones(63), .5)
     assert tiempos[-1] == 4.3
     assert len(q) == len(tiempos)
     with pytest.raises(ValueError):
         ext.vectores_senal(np.ones(63), 0)
+
+
+def test_mfcc_por_lote_equivale_a_ventana_por_ventana():
+    from multimedia import mfcc
+    ventanas = np.random.default_rng(3).normal(size=(5, 4410)).astype(np.float32)
+    lote = mfcc.extraer_mfcc_lote(ventanas, sr=22050, n_fft=2048, hop=512, n_mfcc=20)
+    for i, ventana in enumerate(ventanas):
+        np.testing.assert_allclose(lote[i], mfcc.extraer_mfcc(ventana, 22050, 2048, 512, 20), atol=1e-4)
+    assert mfcc.extraer_mfcc_lote(np.empty((3, 0))).shape == (3, 0, 19)
+
+
+def test_vectores_por_lote_equivalen_a_tfidf_por_ventana():
+    from multimedia import codebook
+    from multimedia.bovw import Extractor, tfidf_denso
+    rng = np.random.default_rng(8)
+    ext = Extractor.__new__(Extractor)
+    ext.tipo, ext.meta = 'audio', {'sr': 10, 'seg_s': 2}
+    ext.codebook, ext.idf = rng.normal(size=(6, 3)).astype(np.float32), rng.random(6).astype(np.float32)
+    descriptores = rng.normal(size=(4, 9, 3)).astype(np.float32)
+    ext._descriptores_lote = lambda ventanas: descriptores
+    lote = ext._vectores_lote(np.zeros((4, 20)))
+    for i in range(4):
+        np.testing.assert_array_equal(lote[i], tfidf_denso(codebook.histograma(descriptores[i], ext.codebook), ext.idf))
+
+
+def test_poda_chroma_no_cambia_las_decisiones():
+    from deteccion.chroma import UMBRAL, alinear_chroma
+    rng = np.random.default_rng(5)
+    for caso in range(30):
+        notas = np.cumsum(rng.integers(1, 12, 150)) % 12
+        ref = np.eye(12, dtype=np.float32)[notas] * .8 + rng.random((150, 12)).astype(np.float32) * .2
+        ref /= np.linalg.norm(ref, axis=1, keepdims=True)
+        if caso % 2:
+            q = np.roll(ref[30:60], rng.integers(0, 12), axis=1) + rng.random((30, 12)).astype(np.float32) * rng.uniform(0, .6)
+        else:
+            q = np.eye(12, dtype=np.float32)[rng.integers(0, 12, 30)] + rng.random((30, 12)).astype(np.float32) * .3
+        q = (q / np.linalg.norm(q, axis=1, keepdims=True)).astype(np.float32)
+        completa, podada = alinear_chroma(q, ref), alinear_chroma(q, ref, UMBRAL)
+        aceptada = completa is not None and completa['similitud'] >= UMBRAL
+        assert aceptada == (podada is not None and podada['similitud'] >= UMBRAL)
+        if aceptada:
+            assert podada['similitud'] == completa['similitud']
+            assert podada['transposicion_semitonos'] == completa['transposicion_semitonos']
 
 
 def test_verificacion_secuencia_rechaza_timbres_sin_orden():
@@ -314,7 +348,7 @@ def test_chroma_complementa_sin_solapar_coincidencias(tmp_path, monkeypatch):
     ruta.write_bytes(b'original')
     monkeypatch.setattr(chroma, 'extraer_chroma', lambda y: np.eye(12)[np.arange(30) % 12])
     monkeypatch.setattr(chroma, 'chroma_original', lambda *args: np.eye(12)[np.arange(100) % 12])
-    def alinear(q, r):
+    def alinear(q, r, minimo=0.):
         return dict(similitud=.95, camino=np.column_stack((np.arange(len(q)), np.arange(len(q)) + 20)))
     monkeypatch.setattr(chroma, 'alinear_chroma', alinear)
     existente = dict(track_id='A', inicio_s=5., fin_s=9.)

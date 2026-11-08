@@ -10,17 +10,20 @@ import time
 import numpy as np
 
 from deteccion.detector import Detector, Parametros
-from deteccion.experimento import modificar
 from multimedia import bovw, config
+from multimedia.colecciones_audio import ruta_local
 from multimedia.mfcc import cargar_audio
 
 
-def ruta_local(ruta):
-    ruta = str(ruta).replace('\\', '/')
-    if ruta.startswith('/app/'):
-        return config.RAIZ / ruta[5:]
-    p = Path(ruta)
-    return p if p.is_absolute() else config.RAIZ / p
+def modificar(y, mod, rng):
+    if mod == 'ruido':
+        return y + rng.normal(0, np.sqrt(np.mean(y ** 2)) / 10, len(y)).astype(np.float32), 1.0
+    if mod == 'volumen':
+        return y * 0.4, 1.0
+    if mod == 'tempo':
+        import librosa
+        return librosa.effects.time_stretch(y, rate=1.05), 1.05
+    return y, 1.0
 
 
 def leer_rutas(ruta):

@@ -1,4 +1,5 @@
 from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor
 from functools import lru_cache
 import hashlib
 import json
@@ -9,6 +10,7 @@ import tempfile
 import librosa
 import numpy as np
 
+from multimedia.colecciones_audio import huella_archivo
 from multimedia.mfcc import cargar_audio
 
 SR = 22050
@@ -30,11 +32,14 @@ def extraer_chroma(y):
     return np.asarray(cromas, dtype=np.float32)
 
 
+def ruta_cache_chroma(firma, cache_dir):
+    identidad = json.dumps([2, firma, SR, HOP, AGRUPAR], separators=(',', ':'))
+    return Path(cache_dir) / (hashlib.sha256(identidad.encode('utf-8')).hexdigest() + '.npy')
+
+
 @lru_cache(maxsize=256)
 def chroma_original(ruta, firma, cache_dir):
-    identidad = json.dumps([1, ruta, firma, librosa.__version__], separators=(',', ':'))
-    clave = hashlib.sha256(identidad.encode('utf-8')).hexdigest()
-    destino = Path(cache_dir) / (clave + '.npy')
+    destino = ruta_cache_chroma(firma, cache_dir)
     try:
         datos = np.load(destino, allow_pickle=False)
         if (datos.ndim == 2 and datos.shape[1] == 12 and len(datos)
@@ -61,7 +66,7 @@ def chroma_original(ruta, firma, cache_dir):
     return datos
 
 
-def alinear_chroma(consulta, referencia):
+def alinear_chroma(consulta, referencia, minimo=0.):
     if min(len(consulta), len(referencia)) < 8:
         return None
     if np.mean(np.std(consulta, axis=0)) < .015 or np.mean(np.std(referencia, axis=0)) < .015:
@@ -71,6 +76,10 @@ def alinear_chroma(consulta, referencia):
     for desplazamiento in range(12):
         original = np.roll(referencia, desplazamiento, axis=1)
         costos = np.clip(1 - consulta @ original.T, 0, 1)
+        m = int(np.ceil(.8 * len(consulta)))
+        cota = .5 * (1 - np.partition(costos.min(axis=1), m - 1)[:m].mean()) + .5
+        if cota < minimo - 1e-9 or (mejor is not None and cota <= mejor['similitud']):
+            continue
         try:
             _, camino = librosa.sequence.dtw(C=costos, subseq=True,
                 step_sizes_sigma=pasos, weights_add=np.array([0., .05, .05]))
@@ -131,16 +140,24 @@ def verificar_tonal(y, sr, hits, params, resolver, cache_dir, existentes):
     salto = max(1, round(10 / PASO))
     inicios = sorted(set(range(0, max(1, len(consulta) - largo + 1), salto)) | {len(consulta) - largo})
     propuestas = []
-    for pista in candidatos:
-        ruta = Path(resolver(pista)).resolve()
-        info = ruta.stat()
-        firma = (info.st_mtime_ns, info.st_ctime_ns, info.st_size, info.st_ino)
-        referencia = chroma_original(str(ruta), firma, str(cache_dir))
+
+    def cargar_referencia(pista):
+        ruta = Path(resolver(pista))
+        try:
+            return chroma_original(str(ruta), huella_archivo(ruta), str(cache_dir))
+        except (FileNotFoundError, RuntimeError):
+            return None
+
+    with ThreadPoolExecutor(min(4, len(candidatos))) as pool:
+        referencias = list(pool.map(cargar_referencia, candidatos))
+    for pista, referencia in zip(candidatos, referencias):
+        if referencia is None:
+            continue
         for a in inicios:
             qi, qf = float(a * PASO), min(duracion, float((a + largo) * PASO))
             if not intervalos_libres(qi, qf, existentes, pista):
                 continue
-            alineacion = alinear_chroma(consulta[a:a + largo], referencia)
+            alineacion = alinear_chroma(consulta[a:a + largo], referencia, UMBRAL)
             if alineacion is None or alineacion['similitud'] < UMBRAL:
                 continue
             camino = alineacion.pop('camino')

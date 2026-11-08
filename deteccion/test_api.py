@@ -175,3 +175,25 @@ def test_motor_invalida_snapshots_despues_de_escribir_y_revertir(tmp_path):
         assert fila['status'] == 'success' and fila['rows'] == [[15.0]]
     finally:
         engine.pool.close_all()
+
+
+def test_se_puede_elegir_la_fuente_de_busqueda(tmp_path, monkeypatch):
+    import json
+    from backend import audio_detection as api
+    fuentes = [(1155, {'alcance': 'musica_propia_piloto', 'canciones': 10}),
+               (54736, {'alcance': 'musica_propia', 'canciones': 500}),
+               (115266, {'alcance': 'todas_fma_small', 'canciones': 7994}),
+               (170002, {'alcance': 'biblioteca_musical', 'tabla': 'audio_segmentos', 'canciones': 8494})]
+    for n, info in fuentes:
+        carpeta = tmp_path / str(n)
+        carpeta.mkdir()
+        (carpeta / 'coleccion.json').write_text(json.dumps(info), encoding='utf-8')
+    monkeypatch.setattr(api.config, 'directorio_colecciones', lambda tipo, base=None: tmp_path)
+    engine = SimpleNamespace(catalog=SimpleNamespace(existe_tabla=lambda t: True))
+    app = FastAPI()
+    app.include_router(crear_router(engine, tmp_path))
+    client = TestClient(app)
+    elegibles = client.get('/api/audio/collections').json()['colecciones']
+    assert [(c['n'], c['nombre']) for c in elegibles] == [
+        (54736, 'Perú e internacional'), (115266, 'FMA · catálogo completo')]
+    assert len(client.get('/api/audio/collections?incluir_auxiliares=true').json()['colecciones']) == 4

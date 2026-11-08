@@ -13,10 +13,10 @@ import time
 import faiss
 import numpy as np
 
-from index.vector.exacto import knn_exacto_lote
 from index.vector.faiss_base import IndiceFaiss
 from index.vector.hnsw import HNSW
 from index.vector.ivf import IVF
+from multimedia.colecciones_audio import huella_archivo
 
 
 @dataclass(frozen=True)
@@ -61,22 +61,6 @@ def representar(x, modo):
     if not np.isfinite(x).all() or (x < 0).any():
         raise ValueError('los vectores BoAW deben ser finitos y no negativos')
     return np.sqrt(x) if modo == 'raiz' else x
-
-
-def buscar_exacto(consultas, vectores, k, bloque=4096):
-
-    q = np.asarray(consultas, dtype=np.float32)
-    k = min(k, len(vectores))
-    posiciones = np.empty((len(q), 0), np.int64)
-    distancias = np.empty((len(q), 0), np.float32)
-    for inicio in range(0, len(vectores), bloque):
-        p, d = knn_exacto_lote(q, vectores[inicio:inicio + bloque], k, 'cosine')
-        p = np.concatenate((posiciones, p + inicio), axis=1)
-        d = np.concatenate((distancias, d), axis=1)
-        orden = np.argsort(d, axis=1, kind='stable')[:, :k]
-        posiciones = np.take_along_axis(p, orden, axis=1)
-        distancias = np.take_along_axis(d, orden, axis=1)
-    return posiciones, distancias
 
 
 def alinear(hits, params, max_alineaciones=1):
@@ -212,23 +196,24 @@ def _extraer_original(ruta, extractor):
     return extractor._descriptores_audio(senal)
 
 
+def ruta_cache_secuencia(extractor, firma):
+    modelo = Path(extractor.directorio)
+    parametros = {k: extractor.meta.get(k) for k in
+                  ('sr', 'n_fft', 'hop', 'n_mfcc', 'dim', 'huella_codebook')}
+    firma_modelo = [(p.name, hashlib.sha1(p.read_bytes()).hexdigest())
+                    for p in (modelo / 'meta.json', modelo / 'estandarizacion.npz') if p.exists()]
+    identidad = json.dumps([2, firma, parametros, firma_modelo], sort_keys=True, separators=(',', ':'))
+    return modelo / 'secuencias' / (hashlib.sha256(identidad.encode('utf-8')).hexdigest() + '.npy')
+
+
 @lru_cache(maxsize=512)
 def _mfcc_original(ruta, extractor, firma):
     modelo = getattr(extractor, 'directorio', None)
     if modelo is None:
         return _extraer_original(ruta, extractor)
-    modelo = Path(modelo)
     ruta_cache = None
     try:
-        parametros = {k: extractor.meta.get(k) for k in
-                      ('sr', 'n_fft', 'hop', 'n_mfcc', 'dim', 'huella_codebook')}
-        archivos = [modelo / 'meta.json', modelo / 'estandarizacion.npz']
-        firma_modelo = [(p.name, s.st_mtime_ns, s.st_ctime_ns, s.st_size)
-                        for p in archivos if p.exists() for s in [p.stat()]]
-        identidad = json.dumps([1, str(Path(ruta).resolve()), firma, parametros, firma_modelo],
-                              sort_keys=True, separators=(',', ':'))
-        clave = hashlib.sha256(identidad.encode('utf-8')).hexdigest()
-        ruta_cache = modelo / 'secuencias' / (clave + '.npy')
+        ruta_cache = ruta_cache_secuencia(extractor, firma)
         datos = np.load(ruta_cache, allow_pickle=False)
         dim = int(extractor.meta.get('dim', int(extractor.meta.get('n_mfcc', 20)) - 1))
         if datos.ndim == 2 and datos.shape[1] == dim and datos.dtype == np.float32 and np.isfinite(datos).all():
@@ -265,6 +250,7 @@ class Detector:
         self.extractor = extractor
         self.resolver_original = resolver_original
         self._originales = OrderedDict()
+        self.originales_ausentes = set()
         self._secuencias_preparadas = OrderedDict()
         self._fft_consultas = OrderedDict()
         self.busqueda = busqueda or BusquedaAudio(
@@ -278,10 +264,14 @@ class Detector:
     def _leer_original(self, pista):
         ruta = Path(self.resolver_original(pista))
         try:
-            info = ruta.stat()
+            firma = huella_archivo(ruta)
         except FileNotFoundError:
-            return _extraer_original(ruta, self.extractor)
-        firma = (info.st_mtime_ns, info.st_ctime_ns, info.st_size, info.st_ino)
+            try:
+                return _extraer_original(ruta, self.extractor)
+            except (OSError, RuntimeError):
+                self.originales_ausentes.add(pista)
+                return np.empty((0, int(self.extractor.meta.get('dim', int(self.extractor.meta.get('n_mfcc', 20)) - 1))),
+                                np.float32)
         return _mfcc_original(ruta, self.extractor, firma)
 
     def _precargar_originales(self, candidatos):
@@ -500,5 +490,6 @@ class Detector:
             'aviso': 'La similitud es orientativa y no demuestra una infraccion. La verificacion musical puede omitir versiones con arreglos muy distintos; sus posiciones son aproximadas.',
             'parametros': asdict(self.params),
             'metricas': {'ventanas': len(Q), 'vectores_base': len(self.ids), 'chroma_ms': round(tiempo_chroma, 2),
+                         'originales_ausentes': len(self.originales_ausentes),
                          'tiempo_ms': round((time.perf_counter() - inicio) * 1000, 2)},
         }
