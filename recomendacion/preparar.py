@@ -142,6 +142,8 @@ def main():
         if not args.solo_catalogo:
             from recomendacion.indices import preparar_indices
             resultado = preparar_indices(conexion, args.modelo)
+            from recomendacion.compras import preparar_compras
+            preparar_compras(conexion)
         print(json.dumps({'productos': len(resultado['asins']), 'catalogo_listo': True,
                           'indices_listos': resultado.get('indices_listos', False)}))
     finally:

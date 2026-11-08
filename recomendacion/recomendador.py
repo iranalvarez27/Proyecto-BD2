@@ -146,6 +146,10 @@ class Servicio:
         limites = min(len(productos), max(100, 10 * k))
         errores = {}
         listas = {m: [] for m in MODALIDADES}
+        if self.conexion.catalog.existe_tabla('ecommerce_afinidades') and pesos['compras'] > 0:
+            afines = repo.ejecutar(f'SELECT producto_destino, score, soporte FROM ecommerce_afinidades WHERE producto_origen = {int(pid)}')
+            afines.sort(key=lambda r: (-r['score'], -r['soporte'], r['producto_destino']))
+            listas['compras'] = [(r['producto_destino'], r['score']) for r in afines]
         contenido = repo.ejecutar(f'SELECT contenido FROM ecommerce_textos WHERE id = {int(pid)}')
         import re
         palabras = list(dict.fromkeys(re.findall(r'\w+', base['nombre'] + ' ' + (contenido[0]['contenido'] if contenido else ''))))[:40]
@@ -181,4 +185,5 @@ class Servicio:
         return {'producto_base': base, 'recomendaciones': recomendaciones,
                 'modalidades': {m: ('error' if m in errores else 'desactivada' if pesos[m] == 0 else 'activa' if filtradas[m] else 'sin_datos') for m in MODALIDADES},
                 'errores_modalidades': errores, 'trazas': repo.trazas, 'candidatos_por_busqueda': limites,
-                'version_catalogo': estado['firma_catalogo'], 'tiempo_total_ms': round((time.perf_counter() - inicio) * 1000, 3)}
+                'version_catalogo': estado['firma_catalogo'],
+                'version_afinidades': repo.ejecutar('SELECT revision FROM ecommerce_estado WHERE id = 1')[0]['revision'] if self.conexion.catalog.existe_tabla('ecommerce_estado') else 0, 'tiempo_total_ms': round((time.perf_counter() - inicio) * 1000, 3)}

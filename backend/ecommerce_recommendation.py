@@ -33,6 +33,24 @@ class SolicitudRecomendacion(BaseModel):
         return self
 
 
+class Interaccion(BaseModel):
+    usuario_id: int = Field(gt=0, le=2147483647)
+    producto_id: int = Field(gt=0, le=2147483647)
+    tipo: Literal['vista', 'carrito']
+
+
+class ItemCompra(BaseModel):
+    producto_id: int = Field(gt=0, le=2147483647)
+    tienda_id: int = Field(gt=0, le=2147483647)
+    cantidad: int = Field(ge=1, le=100)
+
+
+class Compra(BaseModel):
+    usuario_id: int = Field(gt=0, le=2147483647)
+    solicitud: str = Field(min_length=1, max_length=64, pattern=r'^[a-zA-Z0-9_-]+$')
+    items: list[ItemCompra] = Field(min_length=1, max_length=20)
+
+
 def crear_router(engine):
     router = APIRouter(prefix='/api/ecommerce', tags=['E-commerce'])
     servicio = Servicio(engine.conexion)
@@ -68,5 +86,15 @@ def crear_router(engine):
         datos = req.model_dump()
         pid = datos.pop('product_id')
         return ejecutar(servicio.recomendar, pid, **datos)
+
+    @router.post('/interactions')
+    def interaction(req: Interaccion):
+        from recomendacion.compras import registrar_interaccion
+        return ejecutar(registrar_interaccion, engine.conexion, **req.model_dump())
+
+    @router.post('/purchases')
+    def purchase(req: Compra):
+        from recomendacion.compras import comprar
+        return ejecutar(comprar, engine.conexion, **req.model_dump())
 
     return router
