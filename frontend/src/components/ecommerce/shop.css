@@ -24,8 +24,9 @@
 .shop-count { color: var(--shop-muted); font-size: 12px; white-space: nowrap; }
 .shop-search { display: flex; gap: 10px; margin-bottom: 24px; }
 .shop-search > div { flex: 1; display: flex; align-items: center; padding: 0 12px; background: var(--shop-card); border: 1px solid var(--shop-line); border-radius: 8px; color: var(--shop-muted); }
-.shop-search input { width: 100%; border: 0 !important; outline-offset: 0; font-size: 13px; }
+.shop-search input:not(.shop-price-input) { width: 100%; border: 0 !important; outline-offset: 0; font-size: 13px; }
 .shop-search select { max-width: 210px; font-size: 12px; }
+.shop-price-input { width: 105px; font-size: 12px; }
 .shop-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 16px; }
 .shop-card { display: flex; flex-direction: column; text-align: left; background: var(--shop-card); border: 1px solid var(--shop-line); border-radius: 12px; padding: 12px; min-width: 0; transition: box-shadow .15s, transform .15s; }
 .shop-card:hover { transform: translateY(-3px); box-shadow: 0 10px 24px #17325615; }

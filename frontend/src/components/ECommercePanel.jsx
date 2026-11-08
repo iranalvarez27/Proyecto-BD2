@@ -27,8 +27,10 @@ function usuarioDemo() {
 export default function ECommercePanel({ onUseSQL }) {
   const [status, setStatus] = useState(null);
   const [catalog, setCatalog] = useState(null);
-  const [filters, setFilters] = useState({ category: '', search: '' });
+  const [filters, setFilters] = useState({ category: '', search: '', min_price: '', max_price: '' });
   const [draftSearch, setDraftSearch] = useState('');
+  const [draftMinPrice, setDraftMinPrice] = useState('');
+  const [draftMaxPrice, setDraftMaxPrice] = useState('');
   const [cursor, setCursor] = useState('');
   const [selected, setSelected] = useState(null);
   const [product, setProduct] = useState(null);
@@ -60,7 +62,9 @@ export default function ECommercePanel({ onUseSQL }) {
     const controller = new AbortController();
     setLoadingCatalog(true);
     setError('');
-    const params = { ...filters, limit: 24 };
+    const params = { category: filters.category, search: filters.search, limit: 24 };
+    if (filters.min_price !== '') params.min_price = filters.min_price;
+    if (filters.max_price !== '') params.max_price = filters.max_price;
     if (cursor) params[filters.search ? 'cursor' : 'after_id'] = cursor;
     fetchEcommerceCatalog(params, controller.signal).then(data => {
       setCatalog(previous => ({ ...data, productos: cursor ? [...(previous?.productos || []), ...data.productos] : data.productos }));
@@ -145,9 +149,25 @@ export default function ECommercePanel({ onUseSQL }) {
     </section>}
     {status?.listo && !selected && <>
       <div className="shop-intro"><div><p className="shop-eyebrow">TECNOLOGÍA PARA TU DÍA A DÍA</p><h1>Descubre algo que va contigo.</h1><p>Explora productos y encuentra alternativas por imagen, descripción y compras compartidas.</p></div><span className="shop-count">{status.productos.toLocaleString()} productos</span></div>
-      <form className="shop-search" onSubmit={e => { e.preventDefault(); setCursor(''); setFilters(f => ({ ...f, search: draftSearch })); }}>
+      <form className="shop-search" onSubmit={e => {
+        e.preventDefault();
+        const minCents = draftMinPrice.trim() !== '' ? Math.round(Number(draftMinPrice) * 100) : '';
+        const maxCents = draftMaxPrice.trim() !== '' ? Math.round(Number(draftMaxPrice) * 100) : '';
+        if ((minCents !== '' && (!Number.isFinite(minCents) || minCents < 0)) || (maxCents !== '' && (!Number.isFinite(maxCents) || maxCents < 0))) {
+          setError('Ingrese un rango de precios válido');
+          return;
+        }
+        if (minCents !== '' && maxCents !== '' && minCents > maxCents) {
+          setError('El precio mínimo supera el máximo');
+          return;
+        }
+        setCursor('');
+        setFilters(f => ({ ...f, search: draftSearch, min_price: minCents, max_price: maxCents }));
+      }}>
         <div><Search size={18} /><input aria-label="Buscar productos" value={draftSearch} onChange={e => setDraftSearch(e.target.value)} placeholder="Busca por nombre o descripción" /></div>
         <select aria-label="Categoría" value={filters.category} onChange={e => { setCursor(''); setFilters(f => ({ ...f, category: e.target.value })); }}><option value="">Todas las categorías</option>{catalog?.categorias.map(c => <option key={c}>{c}</option>)}</select>
+        <input className="shop-price-input" type="number" min="0" step="0.01" aria-label="Precio mínimo USD" value={draftMinPrice} onChange={e => setDraftMinPrice(e.target.value)} placeholder="Mín USD" />
+        <input className="shop-price-input" type="number" min="0" step="0.01" aria-label="Precio máximo USD" value={draftMaxPrice} onChange={e => setDraftMaxPrice(e.target.value)} placeholder="Máx USD" />
         <button className="shop-primary" type="submit">Buscar</button>
       </form>
       <div className="shop-grid" aria-busy={loadingCatalog}>{catalog?.productos.map(p => <ProductCard key={p.id} producto={p} onSelect={selectProduct} />)}</div>
@@ -155,6 +175,9 @@ export default function ECommercePanel({ onUseSQL }) {
       {!loadingCatalog && catalog?.productos.length === 0 && <p className="shop-empty">No hay productos con estos filtros.</p>}
       {catalog?.busqueda_acotada && <p className="shop-empty">Mostrando los primeros 500 resultados. Puedes precisar la búsqueda.</p>}
       {catalog?.next_cursor && <button className="shop-more shop-button" disabled={loadingCatalog} onClick={() => setCursor(catalog.next_cursor)}>Mostrar más productos</button>}
+      {!!catalog?.trazas?.length && <details className="shop-traces"><summary>Consultas y planes de ejecución del catálogo</summary>
+        {catalog.trazas.map((t, i) => <article key={i}><pre>{t.sql}</pre><p>{t.plan.join(' → ')}</p><span>{t.tiempo_ms.toFixed(2)} ms</span><button className="shop-button" onClick={() => onUseSQL(t.sql)}>Enviar al editor SQL</button></article>)}
+      </details>}
     </>}
     {selected && <>
       <button className="shop-back" onClick={() => setSelected(null)}><ArrowLeft size={16} /> Volver al catálogo</button>

@@ -299,6 +299,13 @@ export default function App() {
     handleExecuteQuery(sql, { keepTab: true });
   };
 
+  const handleRunFromEcommerce = (sql) => {
+    const q = sql.trim().endsWith(';') ? sql.trim() : `${sql.trim()};`;
+    setQuery(q);
+    setActiveBottomTab('results');
+    handleExecuteQuery(q, { keepTab: true });
+  };
+
   const handleCsvScriptReady = (script) => {
     setQuery(script);
     setCsvImportOpen(false);
@@ -511,7 +518,7 @@ export default function App() {
 
             {/* Tab Content */}
             <div className="flex-1 min-h-0 overflow-hidden">
-              {ecommerceMounted && <div className={activeBottomTab === 'ecommerce' ? 'h-full' : 'hidden'}><ECommercePanel onUseSQL={sql => { setQuery(sql); setActiveBottomTab('results'); }} /></div>}
+              {ecommerceMounted && <div className={activeBottomTab === 'ecommerce' ? 'h-full' : 'hidden'}><ECommercePanel onUseSQL={handleRunFromEcommerce} /></div>}
               {audioMounted && <div className={activeBottomTab === 'audio' ? 'h-full' : 'hidden'}><AudioCopyrightPanel /></div>}
               {activeBottomTab === 'results' && (
                 <ResultsPanel

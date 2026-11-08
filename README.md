@@ -754,3 +754,47 @@ python -m pytest deteccion bench/datasets/test_fma_todas.py -q
 ```
 
 Las pruebas cubren alineación, secuencias, Chroma, integración de la API e invalidación de cachés. El detector reutiliza metadatos, descriptores y cálculos MFCC entre bloques para reducir el tiempo de análisis.
+
+
+## Parte 5: Sistema de Recomendación E-commerce Híbrido (Opción B)
+
+La pestaña **Tienda** integra en una sola experiencia de comercio electrónico las 4 partes del motor: índices relacionales (`B+ Tree`, `Extendible Hash`) y transacciones con control de concurrencia, índice espacial (`R-Tree`), índice invertido de texto (`SPIMI` con `BM25` y `TF-IDF`) e índices vectoriales multimedia (`BoVW` con `HNSW`, `IVF` y `EXACT`).
+
+### 2.6.1 Tablas e índices del subsistema E-commerce
+
+| Tabla | Esquema principal | Índices en el motor | Rol en la aplicación |
+|---|---|---|---|
+| `ecommerce_productos` | `id`, `asin`, `nombre`, `categoria`, `subcategoria`, `marca`, `precio_centavos`, `moneda`, `rating` | `B+ Tree` (`id`), `Hash` (`categoria`, `subcategoria`), `B+ Tree` (`precio_centavos`) | Catálogo maestro, filtros por categoría y rangos de precio. |
+| `ecommerce_textos` | `id`, `contenido` | `B+ Tree` (`id`), `INVERTED` SPIMI en inglés (`contenido`) | Búsqueda y similitud textual con `BM25` y `TF_IDF`. |
+| `ecommerce_imagenes_hnsw` / `ecommerce_imagenes_ivf` | `id`, `ruta` | `B+ Tree` (`id`), `HNSW` / `IVF` (`ruta`) | Similitud visual SIFT + BoVW (dimensión 512) con métricas `cosine`, `euclidean` y `dot`. |
+| `ecommerce_tiendas` | `id`, `nombre`, `ubicacion (POINT)` | `B+ Tree` (`id`), `R-Tree` (`ubicacion`) | Búsqueda espacial k-NN best-first (`distancia_haversine`) de sucursales cercanas con stock. |
+| `ecommerce_inventario`, `ecommerce_interacciones`, `ecommerce_afinidades`, `ecommerce_operaciones`, `ecommerce_estado` | Inventario por sucursal, historial de vistas/compras y matriz item-item | `B+ Tree` (`id`), `Hash` (`producto_id`, `usuario_id`, `producto_origen`, `solicitud`) | Compras transaccionales e idempotentes (`BEGIN` / `COMMIT` / `ROLLBACK` con locks `X`) y recomendación por compras compartidas. |
+
+### 2.6.2 Preparación del catálogo y los índices
+
+Con el backend detenido, ejecuta:
+
+```bash
+python3 -m recomendacion.preparar --size 1000
+```
+
+Este comando selecciona de forma determinística y reanudable los productos de `data/amazon/productos.csv` con imagen válida en `bench/data/amazon_img/imgs`, construye los índices `B+ Tree`, `Hash`, `R-Tree`, `SPIMI`, `HNSW` e `IVF`, e inicializa el inventario y las interacciones semilla.
+
+### 2.6.3 Fusión híbrida y API REST
+
+El recomendador combina las 4 señales (`visual`, `texto`, `metadata`, `compras`) mediante **Reciprocal Rank Fusion Ponderado (Weighted RRF, $k=60$)**, devolviendo el porcentaje exacto de aporte de cada modalidad (`aportes_pct`) y las trazas SQL con sus planes de ejecución:
+
+| Endpoint | Función |
+|---|---|
+| `GET /api/ecommerce/status` | Estado del manifiesto, conteo de productos e índices activos. |
+| `GET /api/ecommerce/catalog` | Catálogo paginado por cursor con filtros por texto (`BM25`), categoría (`Hash`) y rango de precios (`B+ Tree`). |
+| `GET /api/ecommerce/products/{id}` | Detalle completo del producto y descripción. |
+| `POST /api/ecommerce/recommend` | Recomendación híbrida Top-$K$, sucursales cercanas con stock (`R-Tree`) y trazabilidad SQL. |
+| `POST /api/ecommerce/interactions` | Registra eventos de vista o adición al carrito. |
+| `POST /api/ecommerce/purchases` | Registra compras atómicas e idempotentes, descuenta stock y actualiza `ecommerce_afinidades`. |
+
+### 2.6.4 Verificación
+
+```bash
+pytest recomendacion/ -q
+```
