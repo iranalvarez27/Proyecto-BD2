@@ -1,5 +1,8 @@
+import hashlib
 import json
 import re
+from functools import lru_cache
+from pathlib import Path
 
 from . import config
 
@@ -37,3 +40,69 @@ def describir(n, info):
                 canciones=info.get('canciones'), completa=completa,
                 propia=propia, unificada=unificada,
                 fuentes=info.get('fuentes', []))
+
+
+def normalizar_ruta(ruta):
+    ruta = str(ruta).replace('\\', '/')
+    return ruta[5:] if ruta.startswith('/app/') else ruta
+
+
+def ruta_local(ruta, raiz=None):
+    p = Path(normalizar_ruta(ruta))
+    return p if p.is_absolute() else Path(raiz or config.RAIZ) / p
+
+
+_BLOQUE_HUELLA = 65536
+
+
+@lru_cache(maxsize=4096)
+def _huella_contenido(ruta, mtime_ns, tamano):
+    h = hashlib.sha1(str(tamano).encode())
+    with open(ruta, 'rb') as f:
+        h.update(f.read(_BLOQUE_HUELLA))
+        if tamano > 2 * _BLOQUE_HUELLA:
+            f.seek(tamano - _BLOQUE_HUELLA)
+            h.update(f.read(_BLOQUE_HUELLA))
+    return h.hexdigest()
+
+
+def clave_relativa(ruta):
+    p = Path(normalizar_ruta(ruta))
+    if not p.is_absolute():
+        return p.as_posix()
+    try:
+        return p.resolve().relative_to(Path(config.RAIZ).resolve()).as_posix()
+    except ValueError:
+        return p.name
+
+
+def archivos_huellas():
+    modelo = config.directorio_modelo('audio')
+    return [p for p in [modelo / 'huellas.json', *sorted((modelo / 'huellas').glob('*.json'))] if p.is_file()]
+
+
+@lru_cache(maxsize=4)
+def _leer_huellas(firma):
+    registro = {}
+    for ruta, _mtime in firma:
+        try:
+            registro.update(json.loads(Path(ruta).read_text(encoding='utf-8')))
+        except (OSError, ValueError):
+            pass
+    return registro
+
+
+def huella_archivo(ruta):
+    p = Path(ruta)
+    try:
+        info = p.stat()
+    except FileNotFoundError:
+        try:
+            firma = tuple((str(r), r.stat().st_mtime_ns) for r in archivos_huellas())
+        except OSError:
+            firma = ()
+        huella = _leer_huellas(firma).get(clave_relativa(p))
+        if huella is None:
+            raise
+        return huella
+    return _huella_contenido(str(p), info.st_mtime_ns, info.st_size)

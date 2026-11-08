@@ -68,6 +68,19 @@ def extraer_mfcc(y, sr: int = SR, n_fft: int = N_FFT, hop: int = HOP,
     return np.ascontiguousarray(m[1:].T, dtype=np.float32)
 
 
+def extraer_mfcc_lote(ventanas, sr: int = SR, n_fft: int = N_FFT, hop: int = HOP,
+                      n_mfcc: int = N_MFCC) -> np.ndarray:
+    if n_mfcc < 2:
+        raise ValueError("n_mfcc debe ser al menos 2 (se descarta c0)")
+    y = np.asarray(ventanas, dtype=np.float32)
+    if y.ndim != 2:
+        raise ValueError("ventanas debe ser una matriz (n_ventanas, muestras)")
+    if y.size == 0:
+        return np.empty((len(y), 0, n_mfcc - 1), np.float32)
+    m = librosa.feature.mfcc(y=y, sr=sr, n_mfcc=n_mfcc, n_fft=n_fft, hop_length=hop)
+    return np.ascontiguousarray(m[:, 1:, :].transpose(0, 2, 1), dtype=np.float32)
+
+
 def reducir_ruido_estacionario(y, n_fft: int = N_FFT, hop: int = HOP):
 
 

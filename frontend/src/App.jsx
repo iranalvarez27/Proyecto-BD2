@@ -13,7 +13,8 @@ import {
   Layers,
   Activity,
   Box,
-  ShoppingBag
+  ShoppingBag,
+  Music
 } from 'lucide-react';
 
 import FilePanel from './components/FilePanel';
@@ -66,6 +67,7 @@ export default function App() {
   const [textMounted, setTextMounted] = useState(false);
   const [vectorMounted, setVectorMounted] = useState(false);
   const [audioMounted, setAudioMounted] = useState(false);
+  const pantallaCompleta = activeBottomTab === 'ecommerce' || activeBottomTab === 'audio';
   const [ecommerceMounted, setEcommerceMounted] = useState(false);
 
   useEffect(() => {
@@ -409,7 +411,7 @@ export default function App() {
         {/* Center / Right Section */}
         <main ref={workspaceRef} className="app-workspace flex-1 flex flex-col h-full min-w-0 overflow-hidden">
           {/* Panel 2: Panel de Consultas (altura arrastrable) */}
-          <div style={{ height: queryPanelHeight, display: activeBottomTab === 'ecommerce' ? 'none' : undefined }} className="workspace-query shrink-0 min-h-0 overflow-hidden">
+          <div style={{ height: queryPanelHeight, display: pantallaCompleta ? 'none' : undefined }} className="workspace-query shrink-0 min-h-0 overflow-hidden">
             <QueryPanel
               query={query}
               setQuery={setQuery}
@@ -421,7 +423,7 @@ export default function App() {
           </div>
 
           <div
-            style={{ display: activeBottomTab === 'ecommerce' ? 'none' : undefined }}
+            style={{ display: pantallaCompleta ? 'none' : undefined }}
             onMouseDown={handleResizeStart}
             title="Arrastra para redimensionar"
             className={`h-1.5 shrink-0 cursor-row-resize flex items-center justify-center group ${
@@ -437,6 +439,9 @@ export default function App() {
             <div className="workspace-tabs shrink-0">
               <button onClick={() => setActiveBottomTab('ecommerce')} className={`workspace-tab tone-blue ${activeBottomTab === 'ecommerce' ? 'is-active' : ''}`}>
                 <ShoppingBag className="w-3.5 h-3.5" /><span>Tienda</span>
+              </button>
+              <button onClick={() => setActiveBottomTab('audio')} className={`workspace-tab tone-blue ${activeBottomTab === 'audio' ? 'is-active' : ''}`}>
+                <Music className="w-3.5 h-3.5" /><span>Copyright audio</span>
               </button>
               <button
                 onClick={() => setActiveBottomTab('results')}
@@ -510,9 +515,6 @@ export default function App() {
                     {queryResult.vector.resultados.length}
                   </span>
                 )}
-              </button>
-              <button onClick={() => setActiveBottomTab('audio')} className={`workspace-tab tone-blue ${activeBottomTab === 'audio' ? 'is-active' : ''}`}>
-                <Activity className="w-3.5 h-3.5" /><span>Copyright audio</span>
               </button>
             </div>
 

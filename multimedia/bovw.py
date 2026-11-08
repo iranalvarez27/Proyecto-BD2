@@ -7,9 +7,10 @@ from pathlib import Path
 import numpy as np
 
 from index.tfidf import idf, vector_tfidf
+from index.vector.metricas import euclidiana
 
 from . import cache, codebook, config, histogramas
-from .mfcc import cargar_audio, extraer_mfcc, segmentos_de_senal
+from .mfcc import cargar_audio, extraer_mfcc, extraer_mfcc_lote, segmentos_de_senal
 from .sift import extraer_sift
 
 
@@ -277,6 +278,9 @@ def n_coleccion_vigente(tipo: str, base=None, directorio=None) -> int:
     return _resolver_n(config.validar_tipo(tipo), None, base, directorio)
 
 
+BLOQUE_VENTANAS = 64
+
+
 def _mtime_ns(ruta) -> int | None:
     try:
         return os.stat(ruta).st_mtime_ns
@@ -393,11 +397,33 @@ class Extractor:
             inicios = np.append(inicios, len(y) - largo)
         if len(inicios) == 0:
             return inicios / sr, np.empty((0, len(self.idf)), dtype=np.float32)
-        V = np.stack([
-            tfidf_denso(codebook.histograma(self._descriptores_audio(y[i:i + largo]), self.codebook), self.idf)
-            for i in inicios
+        V = np.concatenate([
+            self._vectores_lote(np.stack([y[i:i + largo] for i in inicios[b:b + BLOQUE_VENTANAS]]))
+            for b in range(0, len(inicios), BLOQUE_VENTANAS)
         ])
         return inicios / sr, V
+
+    def _descriptores_lote(self, ventanas):
+        m = extraer_mfcc_lote(
+            ventanas,
+            sr=int(self.meta["sr"]),
+            n_fft=int(self.meta["n_fft"]),
+            hop=int(self.meta["hop"]),
+            n_mfcc=int(self.meta["n_mfcc"]),
+        )
+        return codebook.aplicar_estandarizacion(m, self.estandarizacion)
+
+    def _vectores_lote(self, ventanas) -> np.ndarray:
+        desc = self._descriptores_lote(ventanas)
+        n, t, d = desc.shape
+        k = len(self.codebook)
+        if t == 0:
+            return np.zeros((n, k), dtype=np.float32)
+        palabras = euclidiana(desc.reshape(n * t, d), self.codebook).argmin(axis=1).reshape(n, t)
+        conteos = np.bincount((palabras + k * np.arange(n)[:, None]).ravel(), minlength=n * k).reshape(n, k)
+        total = conteos.sum(axis=1, keepdims=True)
+        tf = np.divide(conteos, total, out=np.zeros((n, k)), where=total > 0)
+        return (tf * np.asarray(self.idf, dtype=np.float64)).astype(np.float32)
 
     def __call__(self, ruta, segmento: int | None = None) -> np.ndarray:
         conteos = codebook.histograma(self.descriptores(ruta, segmento), self.codebook)
