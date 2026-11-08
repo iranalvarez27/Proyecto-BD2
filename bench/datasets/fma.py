@@ -4,6 +4,7 @@ import json
 import math
 import os
 import random
+import re
 import ssl
 import sys
 import urllib.request
@@ -27,13 +28,12 @@ URLS_AUDIO = {
     "small": "https://os.unil.cloud.switch.ch/fma/fma_small.zip",
 }
 
-# El largo del segmento sale de multimedia/config.py: una sola fuente de verdad para la
-# extraccion (cache, ExtractFeatures) y para estas tablas.
-from multimedia.config import SEG_S  # noqa: E402
+
+from multimedia.config import SEG_S
 
 DURACION_PISTA_S = 30.0
-# Muchas pistas de FMA duran ~29.97 s y el ultimo trozo incompleto se descarta: se cuentan
-# solo los segmentos completos con la duracion util
+
+
 DURACION_UTIL_S = 29.9
 SEGMENTOS_POR_PISTA = int(DURACION_UTIL_S // SEG_S)
 
@@ -271,14 +271,18 @@ def guardar_pistas_csv(ruta: Path, pistas: list[dict]) -> None:
 
 def _ruta_relativa(ruta: str) -> str:
     try:
-        return str(Path(ruta).resolve().relative_to(PROJECT_ROOT.resolve())).replace("\\", "/")
+        return str(Path(ruta).resolve().relative_to(PROJECT_ROOT)).replace("\\", "/")
     except ValueError:
         return str(ruta).replace("\\", "/")
 
 
 def ingestar_tablas_audio(pistas_base: list[dict], tamanos: list[int], data_dir: str,
-                          metodo_indice: str = "HNSW", tabla_prefijo: str = "audios") -> None:
+                          metodo_indice: str = "HNSW", tabla_prefijo: str = "audios",
+                          track_id_texto: bool = False, nombre_tabla: str | None = None,
+                          con_procedencia: bool = False, carga_masiva: bool = False) -> None:
+    from common.page import SlottedPage
     from common.record import Record
+    from common.types import RID
     from engine.buffer_pool import BufferPool
     from engine.file_manager import FileManager
     from index.vector.registro import CONSTRUCTORES
@@ -289,6 +293,8 @@ def ingestar_tablas_audio(pistas_base: list[dict], tamanos: list[int], data_dir:
     from text.ingesta import recortar_utf8
     from transaction.manager import TransactionManager
 
+    if nombre_tabla and (len(tamanos) != 1 or not re.fullmatch(r'[A-Za-z_][A-Za-z_0-9]*', nombre_tabla)):
+        raise ValueError('nombre_tabla requiere un identificador SQL y un unico tamano')
     os.makedirs(data_dir, exist_ok=True)
     pool = BufferPool(FileManager())
     catalog = Catalog()
@@ -301,15 +307,17 @@ def ingestar_tablas_audio(pistas_base: list[dict], tamanos: list[int], data_dir:
     constructor = CONSTRUCTORES[metodo_indice]
 
     for n in tamanos:
-        tabla = f"{tabla_prefijo}_{etiqueta_tamano(n)}"
+        tabla = nombre_tabla or f"{tabla_prefijo}_{etiqueta_tamano(n)}"
         if catalog.existe_tabla(tabla):
             conexion.execute(f"DROP TABLE {tabla}")
 
+        tipo_track = 'VARCHAR(64)' if track_id_texto else 'INT'
+        columnas_origen = ', fuente VARCHAR(80), id_origen VARCHAR(64)' if con_procedencia else ''
         res_ct = conexion.execute(
             f"CREATE TABLE {tabla} ("
-            "id INT PRIMARY KEY, track_id INT, segmento INT, "
+            f"id INT PRIMARY KEY, track_id {tipo_track}, segmento INT, "
             "seg_inicio DOUBLE, seg_fin DOUBLE, genero VARCHAR(60), "
-            "titulo VARCHAR(120), artista VARCHAR(100), ruta VARCHAR(220))"
+            f"titulo VARCHAR(120), artista VARCHAR(100), ruta VARCHAR(220){columnas_origen})"
         )
         if not res_ct.ok:
             raise RuntimeError(f"Error creando {tabla}: {res_ct.error}")
@@ -319,6 +327,9 @@ def ingestar_tablas_audio(pistas_base: list[dict], tamanos: list[int], data_dir:
         claves_pk = []
         rids = []
         rutas_rel = []
+        rutas_por_track = {}
+        pagina = SlottedPage() if carga_masiva else None
+        page_id = info.storage.page_count()
 
         for fila_idx, oid in enumerate(ids_col, start=1):
             if isinstance(oid, (tuple, list)) and len(oid) >= 2:
@@ -334,10 +345,12 @@ def ingestar_tablas_audio(pistas_base: list[dict], tamanos: list[int], data_dir:
             })
             inicio = round(seg_idx * SEG_S, 2)
             fin = round((seg_idx + 1) * SEG_S, 2)
-            ruta_rel = recortar_utf8(_ruta_relativa(p["ruta"]), 220)
+            if tid_str not in rutas_por_track:
+                rutas_por_track[tid_str] = recortar_utf8(_ruta_relativa(p["ruta"]), 220)
+            ruta_rel = rutas_por_track[tid_str]
             registro = [
                 fila_idx,
-                int(p["track_id"]),
+                str(p["track_id"]) if track_id_texto else int(p["track_id"]),
                 seg_idx,
                 float(inicio),
                 float(fin),
@@ -346,16 +359,36 @@ def ingestar_tablas_audio(pistas_base: list[dict], tamanos: list[int], data_dir:
                 recortar_utf8(str(p.get("artista", "")), 100),
                 ruta_rel,
             ]
-            rid = info.storage.insert(Record(registro), info.schema)
+            if con_procedencia:
+                registro.extend([recortar_utf8(str(p.get('fuente', '')), 80),
+                                 recortar_utf8(str(p.get('id_origen', p['track_id'])), 64)])
+            if carga_masiva:
+                datos = Record(registro).pack(info.schema)
+                try:
+                    slot = pagina.insert(datos)
+                except ValueError:
+                    if not pagina.slot_count:
+                        raise
+                    info.storage.append_page(pagina)
+                    page_id = info.storage.page_count()
+                    pagina = SlottedPage()
+                    slot = pagina.insert(datos)
+                rid = RID(page_id, slot)
+            else:
+                rid = info.storage.insert(Record(registro), info.schema)
             claves_pk.append((fila_idx, rid))
             rids.append(rid)
-            rutas_rel.append((ruta_rel, seg_idx))   # clave (ruta, segmento) del indice vectorial
+            rutas_rel.append((ruta_rel, seg_idx))
+            if carga_masiva and fila_idx % 20000 == 0:
+                print(f'[audio] {tabla}: {fila_idx:,}/{len(ids_col):,} segmentos', flush=True)
 
+        if carga_masiva and pagina.slot_count:
+            info.storage.append_page(pagina)
         indice_pk, _ = catalog.get_indice(tabla, "id")
         claves_pk.sort(key=lambda p: (p[0], p[1].page_id, p[1].slot_id))
         indice_pk.bulk_load(claves_pk)
 
-        indice_vec = constructor(rids, vectores, rutas=rutas_rel, n_coleccion=n)   # IDF de la coleccion de n
+        indice_vec = constructor(rids, vectores, rutas=rutas_rel, n_coleccion=n)
         ruta_npz = os.path.join(data_dir, f"{tabla}_ruta_{metodo_indice.lower()}_vector.npz")
         indice_vec.guardar(ruta_npz)
         catalog.register_index(tabla, "ruta", indice_vec, INDEX_VECTOR)
@@ -432,8 +465,8 @@ def main(argv=None):
 
     tamanos = parsear_tamanos(args.tamanos)
     max_segmentos = max(tamanos)
-    # SEGMENTOS_POR_PISTA ya cuenta solo segmentos completos; el margen del 12% (minimo 15
-    # pistas) cubre MP3 danados y pistas mas cortas.
+
+
     pistas_teoricas = math.ceil(max_segmentos / SEGMENTOS_POR_PISTA)
     margen_pistas = max(15, math.ceil(pistas_teoricas * 0.12))
     pistas_para_base = min(len(pistas) - 1, pistas_teoricas + margen_pistas)
@@ -444,7 +477,7 @@ def main(argv=None):
 
     from multimedia.mfcc import segmentar
 
-    # 1 segmento al azar por pista de consulta, entre los que salen al decodificarla
+
     consultas = []
     for p in pistas_consulta[: args.consultas]:
         try:
@@ -504,7 +537,7 @@ def main(argv=None):
             "--n", ",".join(str(t) for t in tamanos_validos),
             "--workers", str(max(1, args.procesos)),
         ])
-        # se reescriben con los segmentos que de verdad quedaron en cada coleccion
+
         por_track = {str(p["track_id"]): p for p in pistas_base}
         for t in tamanos_validos:
             reales = segmentos_de_coleccion(bovw.cargar_coleccion("audio", t)[1], por_track)
