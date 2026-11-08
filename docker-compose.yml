@@ -67,6 +67,9 @@ services:
       - ./bench/data:/app/bench/data       # fotos y MP3 (los lee SIMILAR_TO y /api/media)
     environment:
       MULTIMEDIA_DATA: /app/data/multimedia
+      BIBLIOTECA_URL: ${BIBLIOTECA_URL:-}        # paquete de la biblioteca de audio (deteccion.biblioteca); vacío = no instala
+      BIBLIOTECA_SHA256: ${BIBLIOTECA_SHA256:-}
+      MEDIA_BASE_URL: ${MEDIA_BASE_URL:-}        # opcional: dónde se escuchan los MP3 originales
     depends_on:
       seed:
         condition: service_completed_successfully

@@ -22,8 +22,7 @@ COPY . .
 RUN mkdir -p data bench/data bench/results
 
 EXPOSE 8000
-# 0.0.0.0 para que sea accesible desde fuera del contenedor
-CMD ["python", "-m", "uvicorn", "backend.main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["bash", "docker/arrancar.sh"]
 
 # ---------- Variante para datasets y experimentos ----------
 FROM app AS bench
