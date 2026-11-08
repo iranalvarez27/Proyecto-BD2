@@ -13,9 +13,6 @@ from .mfcc import cargar_audio, extraer_mfcc, segmentos_de_senal
 from .sift import extraer_sift
 
 
-# ---------------------------------------------------------------------------
-# TF-IDF
-# ---------------------------------------------------------------------------
 def calcular_idf(C) -> np.ndarray:
     C = np.asarray(C)
     if C.ndim != 2:
@@ -49,9 +46,6 @@ def tfidf_denso(conteos, idf_vec) -> np.ndarray:
     return v
 
 
-# ---------------------------------------------------------------------------
-# Rutas de una coleccion
-# ---------------------------------------------------------------------------
 def carpeta_coleccion(modelo_dir, N: int) -> Path:
     return Path(modelo_dir) / "colecciones" / str(int(N))
 
@@ -80,9 +74,6 @@ def _huella_coleccion(huella_codebook: str, ids, huellas) -> str:
     return h.hexdigest()
 
 
-# ---------------------------------------------------------------------------
-# Construccion de una coleccion
-# ---------------------------------------------------------------------------
 def construir_coleccion(tipo: str, N: int, base=None, *, ids=None,
                         K: int | None = None, directorio=None, cache_dir=None,
                         objetos=None, workers: int | None = None,
@@ -212,7 +203,7 @@ def construir_coleccion(tipo: str, N: int, base=None, *, ids=None,
 
     _guardar_npy(ruta_idf, np.asarray(idf_vec, dtype=np.float32))
     _guardar_npy(ruta_vec, vectores)
-    # Los ids pueden ser cadenas o tuplas (audio): arreglo de objetos.
+
     _guardar_npy(ruta_ids, cache.crear_array_ids(ids), allow_pickle=True)
 
     info = {
@@ -259,9 +250,6 @@ def cargar_coleccion(tipo: str, N: int, base=None, directorio=None) -> tuple[np.
     return vectores, ids
 
 
-# ---------------------------------------------------------------------------
-# Consulta
-# ---------------------------------------------------------------------------
 def _n_mas_grande(modelo_dir: Path) -> int:
     carpeta = Path(modelo_dir) / "colecciones"
     tamanos = []
@@ -375,6 +363,9 @@ class Extractor:
                 )
             y = segmentos[indice]
 
+        return self._descriptores_audio(y)
+
+    def _descriptores_audio(self, y):
         m = extraer_mfcc(
             y,
             sr=int(self.meta["sr"]),
@@ -383,6 +374,30 @@ class Extractor:
             n_mfcc=int(self.meta["n_mfcc"]),
         )
         return codebook.aplicar_estandarizacion(m, self.estandarizacion)
+
+    def vectores_senal(self, y, paso_s: float = 0.5) -> tuple[np.ndarray, np.ndarray]:
+
+
+        if self.tipo != "audio":
+            raise ValueError("vectores_senal solo aplica a audio")
+        sr = int(self.meta["sr"])
+        largo = int(float(self.meta.get("seg_s", config.SEG_S)) * sr)
+        if not np.isfinite(paso_s) or paso_s <= 0:
+            raise ValueError("paso_s debe ser positivo y finito")
+        salto = max(1, int(paso_s * sr))
+        y = np.asarray(y, dtype=np.float32)
+        if y.ndim != 1 or not np.isfinite(y).all():
+            raise ValueError("y debe ser una senal mono con muestras finitas")
+        inicios = np.arange(0, max(0, len(y) - largo + 1), salto)
+        if len(y) >= largo and (len(inicios) == 0 or inicios[-1] != len(y) - largo):
+            inicios = np.append(inicios, len(y) - largo)
+        if len(inicios) == 0:
+            return inicios / sr, np.empty((0, len(self.idf)), dtype=np.float32)
+        V = np.stack([
+            tfidf_denso(codebook.histograma(self._descriptores_audio(y[i:i + largo]), self.codebook), self.idf)
+            for i in inicios
+        ])
+        return inicios / sr, V
 
     def __call__(self, ruta, segmento: int | None = None) -> np.ndarray:
         conteos = codebook.histograma(self.descriptores(ruta, segmento), self.codebook)
@@ -403,8 +418,8 @@ def _clave(tipo: str, n_coleccion: int, base, directorio) -> tuple:
 def _extractor(tipo: str, n_coleccion: int, base=None, directorio=None) -> Extractor:
     clave = _clave(tipo, n_coleccion, base, directorio)
     actual = _EXTRACTORES.get(clave)
-    # N3: otro proceso pudo reentrenar o reconstruir la coleccion. Un stat()
-    # por consulta es despreciable y evita mezclar modelos.
+
+
     if actual is not None and actual.obsoleto():
         _EXTRACTORES.pop(clave, None)
         actual = None
