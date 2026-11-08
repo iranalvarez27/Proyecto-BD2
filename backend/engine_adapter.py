@@ -1,4 +1,5 @@
 import os
+import json
 import re
 import sys
 import time
@@ -67,11 +68,12 @@ EXTENSIONES_AUDIO = (".mp3", ".wav", ".ogg", ".flac", ".m4a")
 class EngineAdapter:
     def __init__(self, data_dir: str = "data"):
         self.data_dir = data_dir
+        self.data_revision = 0
         os.makedirs(data_dir, exist_ok=True)
         self.catalog = Catalog()
         self.pool = BufferPool(FileManager())
         self.txn_manager = TransactionManager(pool=self.pool)
-        # /tmp suele ser tmpfs (RAM): los runs externos van a disco de verdad
+
         tmp_dir = os.path.join(data_dir, "tmp")
         os.makedirs(tmp_dir, exist_ok=True)
         try:
@@ -85,7 +87,7 @@ class EngineAdapter:
         self.init_database()
 
     def init_database(self):
-        # 1. Table 'estudiantes' -> HeapFile
+
         schema_estudiantes = Schema(
             table_name="estudiantes",
             columns=[
@@ -105,17 +107,17 @@ class EngineAdapter:
             key_column="id",
         )
 
-        # Register B+ Tree Index on 'id'
+
         bplus_path = os.path.join(self.data_dir, "estudiantes_id_bplus.idx")
         bplus_idx = BPlusTree(self.pool, bplus_path, DataType.INT)
         self.catalog.register_index("estudiantes", "id", bplus_idx, INDEX_BPLUS)
 
-        # Register Extendible Hash Index on 'carrera'
+
         hash_path = os.path.join(self.data_dir, "estudiantes_carrera_hash.idx")
         hash_idx = ExtendibleHash(self.pool, hash_path)
         self.catalog.register_index("estudiantes", "carrera", hash_idx, INDEX_HASH)
 
-        # 2. Table 'cursos' -> SequentialFile
+
         schema_cursos = Schema(
             table_name="cursos",
             columns=[
@@ -136,19 +138,19 @@ class EngineAdapter:
             key_column="codigo",
         )
 
-        # Seed initial data if files are empty & synchronize indexes
+
         self.seed_data_if_empty()
 
-        # Clustered B+ Tree on cursos
+
         clustered_path = os.path.join(self.data_dir, "cursos_clustered.idx")
         clustered_tree = ClusteredBPlusTree(self.pool, seq_file, clustered_path)
         self.clustered_trees["cursos"] = clustered_tree
         self.catalog.register_index("cursos", "codigo", clustered_tree, INDEX_CLUSTERED)
 
-        # 3. Tablas e indices creados por SQL en ejecuciones anteriores (data/catalog.json)
+
         catalog_store.cargar(self.catalog, self.pool, self.data_dir)
 
-        # 4. Tabla espacial de demostracion para el panel de mapa
+
         self.seed_tiendas_if_missing()
 
     def seed_tiendas_if_missing(self, n: int = 500):
@@ -185,11 +187,11 @@ class EngineAdapter:
                 rid = heap.insert(rec, info_est.schema)
                 self.conexion.actualizar_indices_insert("estudiantes", info_est, rec, rid)
         else:
-            # Check if indexes need synchronization
+
             bplus_idx, _ = self.catalog.get_indice("estudiantes", "id")
             hash_idx, _ = self.catalog.get_indice("estudiantes", "carrera")
 
-            # Check if BPlus index is empty
+
             if bplus_idx.is_empty():
                 for rid, rec in heap.scan_con_rid(info_est.schema):
                     try:
@@ -197,7 +199,7 @@ class EngineAdapter:
                     except Exception:
                         pass
 
-            # Check if Hash index is empty
+
             if hash_idx.is_empty():
                 for rid, rec in heap.scan_con_rid(info_est.schema):
                     try:
@@ -247,6 +249,13 @@ class EngineAdapter:
         return vectorial
 
     def get_tables_metadata(self) -> List[Dict[str, Any]]:
+        from multimedia import colecciones_audio, config
+        datasets_audio = {}
+        for ruta in config.directorio_colecciones('audio').glob('*/coleccion.json'):
+            if ruta.parent.name.isdigit():
+                meta = json.loads(ruta.read_text(encoding='utf-8'))
+                descripcion = colecciones_audio.describir(int(ruta.parent.name), meta)
+                datasets_audio[descripcion['tabla']] = descripcion
         result = []
         for table_name in self.catalog.listar_tablas():
             info = self.catalog.get_table(table_name)
@@ -305,6 +314,7 @@ class EngineAdapter:
                 "columns": cols,
                 "indexes": idx_list,
                 "stats": stats,
+                "dataset_audio": datasets_audio.get(info.nombre),
             })
         return result
 
@@ -400,10 +410,11 @@ class EngineAdapter:
             before_view = snapshot_table(self.catalog, table_guess)
             begin_traces(self.catalog, table_guess)
 
-        # Ejecuta via Conexion real (Lexer -> Parser -> Semantico -> Ejecucion),
-        # incluidos BEGIN TRANSACTION / END TRANSACTION / ROLLBACK, que ahora
-        # pasan por TransactionManager/LockManager en vez de ser un mock.
+
         res = self.conexion.execute(sql_clean, session_id)
+        if res.ok and res.filas is None:
+
+            self.data_revision += 1
         duration_ms = (time.time() - start_time) * 1000
         if res.rtree is not None and res.espacial and res.espacial.get("rtree"):
             res.espacial["rtree"]["tree"] = res.rtree.snapshot()
@@ -427,17 +438,17 @@ class EngineAdapter:
                 "transaction": transaction_info,
             }
 
-        # Calculate actual row count to estimate rows accurately in execution plan
+
         actual_count = None
         if res.filas is not None:
             actual_count = len(res.filas)
         elif res.resumen is not None:
             actual_count = res.resumen.get("filas_afectadas", 1)
 
-        # Format plan steps into visual hierarchy for PlanPanel
+
         plan_tree = self._build_plan_tree(res.plan, sql_clean, actual_rows=actual_count)
 
-        # Handle SELECT result (list of dicts)
+
         if res.filas is not None:
             if len(res.filas) > 0:
                 cols = list(res.filas[0].keys())
@@ -463,7 +474,7 @@ class EngineAdapter:
                 "rows": rows,
                 "error": None,
                 "plan": plan_tree,
-                # consulta espacial detectada (radio / knn / poligono) y el punto de cada fila
+
                 "spatial": res.espacial,
                 "text": getattr(res, "texto", None),
                 "vector": self._formatear_vectorial(getattr(res, "vectorial", None)),
@@ -471,7 +482,7 @@ class EngineAdapter:
                 "transaction": transaction_info,
             }
 
-        # Handle BEGIN / COMMIT / ROLLBACK (mensaje) y INSERT / DELETE (resumen)
+
         if res.resumen is not None:
             if "mensaje" in res.resumen:
                 return {
@@ -531,7 +542,7 @@ class EngineAdapter:
                 return None
         espacial = getattr(res, "espacial", None)
         if espacial and espacial.get("rtree"):
-            # geometria de la consulta para dibujarla junto a los MBR
+
             rtree_query = dict(espacial["rtree"])
             rtree_query["query"] = {
                 clave: espacial.get(clave)
@@ -659,7 +670,7 @@ class EngineAdapter:
                     "rows_estimated": actual_rows if actual_rows is not None else 5,
                     "children": [],
                 })
-            # antes que los indices: "external hash" contiene "hash"
+
             elif "order by" in step_lower:
                 nodes.append({
                     "node_type": "Sort (ORDER BY)",
@@ -761,7 +772,7 @@ class EngineAdapter:
                     "children": [],
                 })
 
-        # Nest nodes into an execution tree: leaf (bottom) to root (top)
+
         curr = nodes[0]
         curr["estimated_time_ms"] = curr["cost"]
         for next_node in nodes[1:]:
@@ -770,7 +781,7 @@ class EngineAdapter:
             next_node["estimated_time_ms"] = next_node["cost"]
             curr = next_node
 
-        # Wrap with a Projection root node
+
         total_time = round(curr["cost"] + 0.1, 2)
         root = {
             "node_type": "Projection",

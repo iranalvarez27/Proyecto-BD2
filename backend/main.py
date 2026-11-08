@@ -12,6 +12,8 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
+from backend.audio_detection import crear_router
+
 try:
     from backend.engine_adapter import EngineAdapter
 except ModuleNotFoundError:
@@ -27,7 +29,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-engine = EngineAdapter()
+engine = EngineAdapter(data_dir=os.environ.get("BD2_DATA_DIR", "data"))
+app.include_router(crear_router(engine, PROJECT_ROOT))
 
 class QueryRequest(BaseModel):
     query: str
@@ -94,14 +97,18 @@ def upload_media(req: MediaUploadRequest):
     try:
         data_dir = os.path.join(PROJECT_ROOT, "data", "uploads")
         os.makedirs(data_dir, exist_ok=True)
-        safe_name = os.path.basename(req.filename)
+        safe_name = uuid.uuid4().hex + "_" + os.path.basename(req.filename.replace("\\", "/"))
         extension = os.path.splitext(safe_name)[1].lower()
         if extension not in EXTENSIONES_MEDIA:
             raise ValueError(f"tipo de archivo no permitido '{extension}' (permitidos: {', '.join(sorted(EXTENSIONES_MEDIA))})")
         raw_b64 = req.content_base64
         if "," in raw_b64:
             raw_b64 = raw_b64.split(",", 1)[1]
-        decoded = base64.b64decode(raw_b64)
+        if len(raw_b64) > 4 * ((TAMANO_MAX_MEDIA + 2) // 3):
+            raise ValueError("el archivo supera el limite permitido")
+        decoded = base64.b64decode(raw_b64, validate=True)
+        if not decoded:
+            raise ValueError("el archivo esta vacio")
         if len(decoded) > TAMANO_MAX_MEDIA:
             raise ValueError(f"el archivo pesa mas de {TAMANO_MAX_MEDIA // (1024 * 1024)} MB")
         file_path = os.path.join(data_dir, safe_name)
