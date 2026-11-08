@@ -24,6 +24,7 @@ import VisualizePanel from './components/VisualizePanel';
 import TextSearchPanel from './components/TextSearchPanel';
 import VectorLabPanel from './components/VectorLabPanel';
 import CsvImportModal from './components/CsvImportModal';
+import AudioCopyrightPanel from './components/AudioCopyrightPanel';
 
 function obtenerOCrearSessionId() {
   try {
@@ -62,11 +63,13 @@ export default function App() {
   const [mapMounted, setMapMounted] = useState(false);
   const [textMounted, setTextMounted] = useState(false);
   const [vectorMounted, setVectorMounted] = useState(false);
+  const [audioMounted, setAudioMounted] = useState(false);
 
   useEffect(() => {
     if (activeBottomTab === 'map') setMapMounted(true);
     if (activeBottomTab === 'text') setTextMounted(true);
     if (activeBottomTab === 'vector') setVectorMounted(true);
+    if (activeBottomTab === 'audio') setAudioMounted(true);
   }, [activeBottomTab]);
 
   const [loadingTables, setLoadingTables] = useState(false);
@@ -493,10 +496,14 @@ export default function App() {
                   </span>
                 )}
               </button>
+              <button onClick={() => setActiveBottomTab('audio')} className={`workspace-tab tone-blue ${activeBottomTab === 'audio' ? 'is-active' : ''}`}>
+                <Activity className="w-3.5 h-3.5" /><span>Copyright audio</span>
+              </button>
             </div>
 
             {/* Tab Content */}
             <div className="flex-1 min-h-0 overflow-hidden">
+              {audioMounted && <div className={activeBottomTab === 'audio' ? 'h-full' : 'hidden'}><AudioCopyrightPanel /></div>}
               {activeBottomTab === 'results' && (
                 <ResultsPanel
                   result={queryResult}

@@ -196,7 +196,7 @@ export default function TextSearchPanel({
             >
               {tables.map(t => (
                 <option key={t.name} value={t.name}>
-                  {t.name} {t.indexes?.some(i => i.type === 'INVERTED') ? '⚡' : ''}
+                  {t.dataset_audio ? `${t.dataset_audio.nombre} (${t.name})` : t.name} {t.indexes?.some(i => i.type === 'INVERTED') ? '⚡' : ''}
                 </option>
               ))}
             </select>

@@ -177,6 +177,8 @@ export default function VectorLabPanel({
       setMetric('cosine');
     } else {
       setMetric('euclidean');
+      const biblioteca = tables.find(t => t.dataset_audio?.unificada);
+      if (biblioteca) setSelectedTable(biblioteca.name);
     }
   };
 
@@ -323,7 +325,7 @@ export default function VectorLabPanel({
               className="w-full text-xs bg-slate-100 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded px-2 py-1.5 focus:outline-hidden"
             >
               {tables.map(t => (
-                <option key={t.name} value={t.name}>{t.name}</option>
+                <option key={t.name} value={t.name}>{t.dataset_audio ? `${t.dataset_audio.nombre} (${t.name})` : t.name}</option>
               ))}
             </select>
           </div>

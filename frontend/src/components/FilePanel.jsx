@@ -119,9 +119,16 @@ export default function FilePanel({
                 >
                   <div className="flex items-center gap-2 min-w-0">
                     <Table className={`w-4 h-4 shrink-0 ${isSequential ? 'text-violet-500 dark:text-violet-400' : 'text-sky-500 dark:text-sky-400'}`} />
-                    <span className="font-medium text-sm text-slate-800 dark:text-slate-100 truncate">
-                      {table.name}
-                    </span>
+                    <div className="min-w-0">
+                      <span className="block truncate font-medium text-sm text-slate-800 dark:text-slate-100">
+                        {table.dataset_audio?.nombre || table.name}
+                      </span>
+                      {table.dataset_audio && (
+                        <span className="block truncate font-mono text-[10px] text-slate-500 dark:text-slate-400">
+                          {table.name}{table.dataset_audio.canciones ? ' · ' + table.dataset_audio.canciones.toLocaleString() + ' canciones' : ''}
+                        </span>
+                      )}
+                    </div>
                   </div>
 
                   <div className="flex items-center gap-1.5 shrink-0">
