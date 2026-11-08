@@ -74,12 +74,15 @@ class Lexer:
         comilla = self.actual()
         self.avanzar()
         contenido = []
-        while self.actual() != comilla:
+        while True:
             if self.actual() == "":
                 raise LexerError(f"string sin cerrar en posicion {inicio}")
+            if self.actual() == comilla:
+                self.avanzar()
+                if self.actual() != comilla:
+                    break
             contenido.append(self.actual())
             self.avanzar()
-        self.avanzar()
         return Token(TokenType.STRING, "".join(contenido), inicio)
 
     def leer_simbolo(self) -> Token:
