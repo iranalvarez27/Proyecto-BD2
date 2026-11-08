@@ -61,24 +61,23 @@ class TFIDF:
         if k <= 0 or not terminos or n == 0:
             return []
 
-        pesos_q = {}
+        consulta = []
         for termino, veces in Counter(terminos).items():
-            df = self._indice.df(termino)
-            if df == 0:
-                continue
-            w = peso_tfidf(veces, df, n)
-            if w > 0:
-                pesos_q[termino] = w
+            postings = self._indice.postings(termino)
+            idf_t = idf(n, len(postings))
+            if idf_t > 0:
+                consulta.append((tf_log(veces) * idf_t, idf_t, postings))
 
-        norma_q = math.sqrt(sum(w * w for w in pesos_q.values()))
+        norma_q = math.sqrt(sum(wq * wq for wq, _, _ in consulta))
         if norma_q == 0:
             return []
 
         productos = {}
-        for termino, wq in pesos_q.items():
-            df = self._indice.df(termino)
-            for doc_id, tf in self._indice.postings(termino):
-                productos[doc_id] = productos.get(doc_id, 0.0) + wq * peso_tfidf(tf, df, n)
+        log10 = math.log10
+        for wq, idf_t, postings in consulta:
+            factor = wq * idf_t
+            for doc_id, tf in postings:
+                productos[doc_id] = productos.get(doc_id, 0.0) + factor * log10(1 + tf)
 
         scores = {}
         for doc_id, producto in productos.items():

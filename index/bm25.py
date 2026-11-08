@@ -29,11 +29,11 @@ class BM25:
 
         scores = {}
         for termino in dict.fromkeys(terminos):
-            df = self._indice.df(termino)
-            if df == 0:
+            postings = self._indice.postings(termino)
+            if not postings:
                 continue
-            idf = self.idf(df)
-            for doc_id, tf in self._indice.postings(termino):
+            idf = self.idf(len(postings))
+            for doc_id, tf in postings:
                 largo = self._indice.longitud_doc(doc_id)
                 norma = self._k1 * (1 - self._b + self._b * largo / avgdl)
                 parcial = idf * tf * (self._k1 + 1) / (tf + norma)
