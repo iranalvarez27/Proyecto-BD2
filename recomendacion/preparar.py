@@ -82,6 +82,7 @@ def seleccionar(productos_csv, imagenes_dir, n, anteriores=()):
                          'USD', float(p['rating'] or 0)],
             'texto': [pid, recortar_utf8(contenido, 3500)], 'imagen': [pid, p['ruta']],
             'texto_recortado': len(contenido.encode('utf-8')) > 3500,
+            'huella_imagen': hashlib.sha256((RAIZ / p['ruta']).read_bytes()).hexdigest(),
         })
     return filas
 
@@ -129,6 +130,8 @@ def main():
     parser.add_argument('--productos', default='data/amazon/productos.csv')
     parser.add_argument('--imagenes', default='bench/data/amazon_img/imgs')
     parser.add_argument('--size', type=int, default=1000)
+    parser.add_argument('--solo-catalogo', action='store_true')
+    parser.add_argument('--modelo', type=int, default=100000)
     args = parser.parse_args()
     if args.size < 1:
         parser.error('--size debe ser positivo')
@@ -136,7 +139,11 @@ def main():
     conexion = abrir_motor(args.data_dir)
     try:
         resultado = preparar_catalogo(conexion, args.productos, args.imagenes, args.size)
-        print(json.dumps({'productos': len(resultado['asins']), 'catalogo_listo': True}))
+        if not args.solo_catalogo:
+            from recomendacion.indices import preparar_indices
+            resultado = preparar_indices(conexion, args.modelo)
+        print(json.dumps({'productos': len(resultado['asins']), 'catalogo_listo': True,
+                          'indices_listos': resultado.get('indices_listos', False)}))
     finally:
         conexion.pool.close_all()
 
