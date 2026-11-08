@@ -144,6 +144,8 @@ def main():
             resultado = preparar_indices(conexion, args.modelo)
             from recomendacion.compras import preparar_compras
             preparar_compras(conexion)
+            from recomendacion.disponibilidad import preparar_inventario
+            preparar_inventario(conexion)
         print(json.dumps({'productos': len(resultado['asins']), 'catalogo_listo': True,
                           'indices_listos': resultado.get('indices_listos', False)}))
     finally:

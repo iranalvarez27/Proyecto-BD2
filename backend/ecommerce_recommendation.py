@@ -87,6 +87,19 @@ def crear_router(engine):
         pid = datos.pop('product_id')
         return ejecutar(servicio.recomendar, pid, **datos)
 
+    @router.get('/products/{product_id}/stores')
+    def stores(product_id: int, lat: float | None = Query(default=None, ge=-90, le=90),
+               lon: float | None = Query(default=None, ge=-180, le=180)):
+        if (lat is None) != (lon is None):
+            raise HTTPException(422, 'Indique latitud y longitud juntas')
+        from recomendacion.disponibilidad import tiendas_con_stock
+        from recomendacion.repositorio import Repositorio
+        def consultar():
+            servicio.detalle(product_id)
+            repo = Repositorio(engine.conexion)
+            return {'tiendas': tiendas_con_stock(repo, product_id, lat, lon), 'trazas': repo.trazas}
+        return ejecutar(consultar)
+
     @router.post('/interactions')
     def interaction(req: Interaccion):
         from recomendacion.compras import registrar_interaccion

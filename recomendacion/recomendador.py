@@ -143,6 +143,9 @@ class Servicio:
         base = productos.get(pid)
         if base is None:
             raise LookupError('Producto inexistente')
+        disponibles = None
+        if solo_stock:
+            disponibles = {r['producto_id'] for r in repo.ejecutar('SELECT producto_id FROM ecommerce_inventario WHERE stock > 0')}
         limites = min(len(productos), max(100, 10 * k))
         errores = {}
         listas = {m: [] for m in MODALIDADES}
@@ -174,6 +177,7 @@ class Servicio:
             filtradas = {}
             for modalidad, candidatos in listas.items():
                 filtradas[modalidad] = [(i, s) for i, s in candidatos if i in productos and i != pid
+                                       and (disponibles is None or i in disponibles)
                                        and (not categoria or productos[i]['categoria'] == categoria)
                                        and (min_price is None or productos[i]['precio_centavos'] >= min_price)
                                        and (max_price is None or productos[i]['precio_centavos'] <= max_price)]
@@ -182,6 +186,9 @@ class Servicio:
                 break
             limites = min(len(productos), limites * 2)
         recomendaciones = [{**productos[r['id']], **r} for r in fusion[:k]]
+        from recomendacion.disponibilidad import tiendas_con_stock
+        for producto in [base, *recomendaciones]:
+            producto['tiendas'] = tiendas_con_stock(repo, producto['id'], lat, lon) if self.conexion.catalog.existe_tabla('ecommerce_tiendas') else []
         return {'producto_base': base, 'recomendaciones': recomendaciones,
                 'modalidades': {m: ('error' if m in errores else 'desactivada' if pesos[m] == 0 else 'activa' if filtradas[m] else 'sin_datos') for m in MODALIDADES},
                 'errores_modalidades': errores, 'trazas': repo.trazas, 'candidatos_por_busqueda': limites,
