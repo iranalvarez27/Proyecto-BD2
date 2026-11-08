@@ -13,6 +13,7 @@ if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
 from backend.audio_detection import crear_router
+from backend.ecommerce_recommendation import crear_router as crear_router_ecommerce
 
 try:
     from backend.engine_adapter import EngineAdapter
@@ -31,6 +32,7 @@ app.add_middleware(
 
 engine = EngineAdapter(data_dir=os.environ.get("BD2_DATA_DIR", "data"))
 app.include_router(crear_router(engine, PROJECT_ROOT))
+app.include_router(crear_router_ecommerce(engine))
 
 class QueryRequest(BaseModel):
     query: str
