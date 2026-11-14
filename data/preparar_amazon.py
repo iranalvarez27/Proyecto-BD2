@@ -6,14 +6,18 @@ import json
 import os
 import random
 import re
-import sys
+import ssl
 import time
+import urllib.request
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DIR_RAW = os.path.join(PROJECT_ROOT, "data", "raw")
 DIR_SALIDA = os.path.join(PROJECT_ROOT, "data", "amazon")
 META = os.path.join(DIR_RAW, "meta_Electronics.jsonl.gz")
 RESENAS = os.path.join(DIR_RAW, "Electronics.jsonl.gz")
+URL_BASE = "https://mcauleylab.ucsd.edu/public_datasets/data/amazon_2023/raw/"
+URL_META = URL_BASE + "meta_categories/meta_Electronics.jsonl.gz"
+URL_RESENAS = URL_BASE + "review_categories/Electronics.jsonl.gz"
 
 N_PRODUCTOS = 100_000
 MIN_RESENAS = 20
@@ -141,6 +145,44 @@ def extraer_compras(ruta_resenas: str, id_por_asin: dict, ruta_salida: str, prog
     return compras, leidas, len(usuarios)
 
 
+def _contexto_ssl() -> ssl.SSLContext:
+    try:
+        import certifi
+        return ssl.create_default_context(cafile=certifi.where())
+    except ImportError:
+        return ssl.create_default_context()
+
+
+def descargar(url: str, destino: str, bloque: int = 1 << 20) -> None:
+    """Descarga reanudable: lo bajado queda en destino.part hasta completar."""
+    if os.path.exists(destino):
+        return
+    os.makedirs(os.path.dirname(destino), exist_ok=True)
+    parcial = destino + ".part"
+    hecho = os.path.getsize(parcial) if os.path.exists(parcial) else 0
+    cabeceras = {"User-Agent": "Proyecto-BD2"}
+    if hecho:
+        cabeceras["Range"] = f"bytes={hecho}-"
+    print(f"descargando {url} -> {destino}", flush=True)
+    with urllib.request.urlopen(urllib.request.Request(url, headers=cabeceras), timeout=60,
+                                context=_contexto_ssl()) as resp:
+        if resp.status != 206:
+            hecho = 0
+        total = hecho + int(resp.headers.get("Content-Length") or 0)
+        ultimo = -1
+        with open(parcial, "ab" if hecho else "wb") as f:
+            while trozo := resp.read(bloque):
+                f.write(trozo)
+                hecho += len(trozo)
+                pct = 100 * hecho // total if total else -1
+                if pct != ultimo:
+                    ultimo = pct
+                    print(f"  {hecho / 2**30:.2f} / {total / 2**30:.2f} GiB ({pct}%)", flush=True)
+    if total and hecho != total:
+        raise OSError(f"descarga incompleta de {url}: {hecho} de {total} bytes; reintentar la reanuda")
+    os.replace(parcial, destino)
+
+
 def _escribir(ruta: str, columnas: list, filas) -> None:
     with open(ruta, "w", encoding="utf-8", newline="") as f:
         escritor = csv.writer(f)
@@ -185,9 +227,9 @@ def main(argv=None) -> None:
     parser.add_argument("--min-resenas", type=int, default=MIN_RESENAS)
     parser.add_argument("--semilla", type=int, default=SEMILLA)
     args = parser.parse_args(argv)
-    for ruta in [args.meta] + ([] if args.sin_resenas else [args.resenas]):
-        if not os.path.exists(ruta):
-            sys.exit(f"no existe '{ruta}': descargalo de https://amazon-reviews-2023.github.io/")
+    descargar(URL_META, args.meta)
+    if not args.sin_resenas:
+        descargar(URL_RESENAS, args.resenas)
     preparar(args.meta, None if args.sin_resenas else args.resenas, args.salida, args.n, args.min_resenas, args.semilla)
 
 
