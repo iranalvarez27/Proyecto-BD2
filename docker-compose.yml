@@ -8,6 +8,7 @@
 #   FMA_VARIANTE=medium     variante de FMA (por defecto small, ~7,2 GB)
 #   CORRER_EXPERIMENTOS=1   además corre los experimentos y genera las gráficas
 #   SEED=0                  no generar datasets (solo levantar la app)
+#   TIENDA=0                no preparar la tienda de e-commerce (la primera vez baja ~8 GB y tarda ~40 min)
 
 name: minigestor-bd2
 
@@ -44,6 +45,7 @@ services:
       TAMANOS: ${TAMANOS:-1k}
       FMA_VARIANTE: ${FMA_VARIANTE:-small}
       CORRER_EXPERIMENTOS: ${CORRER_EXPERIMENTOS:-0}
+      TIENDA: ${TIENDA:-1}
       PG_HOST: postgres
       PG_PORT: "5432"
       PG_USER: bench

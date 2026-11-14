@@ -15,6 +15,18 @@ if [ "$SEED" = "0" ]; then
   exit 0
 fi
 
+# Tienda de la app de e-commerce: va antes de la marca de los benchmarks porque se verifica
+# siempre. Es idempotente; la primera vez baja ~8 GB de Amazon Reviews 2023 y tarda ~40 min.
+if [ "${TIENDA:-1}" = "1" ]; then
+  echo ""
+  echo "[seed] ===== Tienda (e-commerce) ====="
+  if python -m recomendacion.preparar; then
+    echo "[seed] OK: Tienda (e-commerce)"
+  else
+    echo "[seed] FALLÓ: Tienda (e-commerce); la app arranca sin ella. Reintentar con 'docker compose up'."
+  fi
+fi
+
 ETIQUETA="$(echo "$TAMANOS" | tr ' ,' '__')"
 MARCA="data/.seed_${ETIQUETA}_${FMA_VARIANTE}"
 mkdir -p data bench/data bench/results
