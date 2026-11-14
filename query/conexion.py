@@ -45,10 +45,20 @@ FUNCIONES_DISTANCIA = ("distancia", "distancia_geo", "distancia_haversine", "dis
 
 # extractores adicionales al de la conexion ("bovw"), por nombre; cada indice vectorial guarda el suyo
 EXTRACTORES: dict = {}
+# los textuales reciben el texto mismo (consulta o valor de la columna), no la ruta de un archivo
+EXTRACTORES_TEXTO: set = set()
 
 
-def registrar_extractor(nombre: str, funcion) -> None:
+def _recortar(texto: str, largo: int = 60) -> str:
+    return texto if len(texto) <= largo else texto[:largo - 3] + "..."
+
+
+def registrar_extractor(nombre: str, funcion, texto: bool = False) -> None:
     EXTRACTORES[nombre] = funcion
+    if texto:
+        EXTRACTORES_TEXTO.add(nombre)
+    else:
+        EXTRACTORES_TEXTO.discard(nombre)
 
 
 def _metrica_de(nombre_funcion: str) -> str:
@@ -926,8 +936,14 @@ class Conexion:
             raise ExecutionError(f"el extractor de caracteristicas '{nombre}' no esta registrado")
         return EXTRACTORES[nombre]
 
+    def _es_textual(self, indice) -> bool:
+        return getattr(indice, "extractor_nombre", "bovw") in EXTRACTORES_TEXTO
+
+    def _resolver_de(self, indice):
+        return (lambda texto: texto) if self._es_textual(indice) else self._resolver_archivo_multimedia
+
     def _configurar_vectorial(self, info: TableInfo, columna: str, indice) -> None:
-        indice.configurar(self._extractor_de(indice), self._resolver_archivo_multimedia)
+        indice.configurar(self._extractor_de(indice), self._resolver_de(indice))
         if indice.sincronizado:
             return
         idx = info.schema.column_index(columna)
@@ -983,7 +999,7 @@ class Conexion:
             return None
         columna, indice, es_respaldo = self._elegir_indice_vectorial(info, similar.metodo)
         metrica = similar.metrica or "cosine"
-        ruta = self._resolver_archivo_multimedia(similar.archivo)
+        ruta = similar.archivo if self._es_textual(indice) else self._resolver_archivo_multimedia(similar.archivo)
 
         t0 = time.perf_counter()
         try:
@@ -1026,7 +1042,7 @@ class Conexion:
         usado = "k-NN exacto" if usar_exacto else similar.metodo
         aviso = f" (no hay indice {similar.metodo}: se uso el k-NN exacto)" if es_respaldo else ""
         filtro = " + filtro WHERE" if con_filtros else ""
-        self.plan.append(f"busqueda por similitud ({usado}) sobre '{info.nombre}.{columna}' (k {similar.k}; metrica {metrica}; archivo '{similar.archivo}'; {len(filas)} fila(s)){aviso}{filtro}")
+        self.plan.append(f"busqueda por similitud ({usado}) sobre '{info.nombre}.{columna}' (k {similar.k}; metrica {metrica}; archivo '{_recortar(similar.archivo)}'; {len(filas)} fila(s)){aviso}{filtro}")
         vistas = filas if nodo.limit is None or not orden_ya_resuelto else filas[:nodo.limit]
         self._local.vectorial = {
             "tabla": info.nombre,
@@ -1705,7 +1721,7 @@ class Conexion:
             if tipo_indice == "bplus":
                 pares.sort(key=lambda p: (p[0], p[1].page_id, p[1].slot_id))
             if tipo_indice == INDEX_VECTOR:
-                indice.configurar(self._extractor_de(indice), self._resolver_archivo_multimedia)
+                indice.configurar(self._extractor_de(indice), self._resolver_de(indice))
             indice.bulk_load(pares)
             if tipo_indice == INDEX_VECTOR and indice.archivo is not None:
                 indice.guardar()

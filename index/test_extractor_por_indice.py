@@ -40,3 +40,32 @@ def test_la_conexion_entrega_el_extractor_de_cada_indice():
     assert conexion._extractor_de(_indice('prueba')) == 'extractor de prueba'
     with pytest.raises(ExecutionError):
         conexion._extractor_de(_indice('inexistente'))
+
+
+def test_similar_to_con_extractor_textual(tmp_path):
+    from query.catalog import INDEX_VECTOR
+    from text.ingesta import abrir_motor
+
+    def letras(texto, **_):
+        return np.array([texto.count(ch) for ch in 'abc'], dtype=np.float32) + 1e-3
+
+    registrar_extractor('letras', letras, texto=True)
+    c = abrir_motor(str(tmp_path))
+    try:
+        for sql in ("CREATE TABLE frases (id INT PRIMARY KEY, texto VARCHAR(40))",
+                    "INSERT INTO frases VALUES (1, 'aaa')", "INSERT INTO frases VALUES (2, 'bbb')",
+                    "INSERT INTO frases VALUES (3, 'aab')"):
+            assert c.execute(sql).ok
+        info = c.catalog.get_table('frases')
+        registros = list(info.storage.scan_con_rid(info.schema))
+        indice = IndiceHNSW([rid for rid, _ in registros], [letras(r.values[1]) for _, r in registros],
+                            rutas=[r.values[1] for _, r in registros], extractor_nombre='letras')
+        c.catalog.register_index('frases', 'texto', indice, INDEX_VECTOR)
+        resultado = c.execute("SELECT id FROM frases WHERE SIMILAR_TO('aaaa', k=2) USING HNSW WITH METRIC=cosine")
+        assert resultado.ok, resultado.error
+        assert [f[0] if isinstance(f, (list, tuple)) else f['id'] for f in resultado.filas] == [1, 3]
+        assert c.execute("INSERT INTO frases VALUES (4, 'cccc')").ok
+        resultado = c.execute("SELECT id FROM frases WHERE SIMILAR_TO('cc', k=1) USING HNSW WITH METRIC=cosine")
+        assert [f[0] if isinstance(f, (list, tuple)) else f['id'] for f in resultado.filas] == [4]
+    finally:
+        c.pool.close_all()
