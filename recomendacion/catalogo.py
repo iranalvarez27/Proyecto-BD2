@@ -1,7 +1,9 @@
 """Catalogo curado de la tienda a partir de Amazon Reviews 2023 Electronics."""
 import csv
 import gzip
+import hashlib
 import json
+import re
 from collections import defaultdict
 from pathlib import Path
 
@@ -10,7 +12,9 @@ from data import preparar_amazon as amazon
 RAIZ = Path(__file__).resolve().parents[1]
 DIR_TIENDA = RAIZ / 'data' / 'tienda'
 DIR_IMAGENES = RAIZ / 'bench' / 'data' / 'amazon_img' / 'imgs'
-N_PRODUCTOS = 10_000
+N_PRODUCTOS = 30_000
+# sube cuando cambia el criterio de seleccion, para que construir() rehaga el catalogo
+VERSION = 3
 PRECIO_MINIMO = 1.0
 MIN_RESENAS = 20
 
@@ -96,10 +100,28 @@ def candidatos(ruta_meta) -> dict:
             vistos.add(p['asin'])
             p['categoria'], p['subcategoria'] = destino
             grupos[p['categoria']][p['subcategoria']].append(p)
-    for subcategorias in grupos.values():
-        for lista in subcategorias.values():
-            lista.sort(key=lambda p: (-p['num_resenas'], p['asin']))
-    return grupos
+    # mismo titulo = mismo producto listado dos veces: queda el de mas resenas
+    todos = sorted((p for subs in grupos.values() for lista in subs.values() for p in lista),
+                   key=lambda p: (-p['num_resenas'], p['asin']))
+    titulos, unicos = set(), defaultdict(lambda: defaultdict(list))
+    for p in todos:
+        titulo = titulo_normalizado(p['nombre'])
+        if titulo not in titulos:
+            titulos.add(titulo)
+            unicos[p['categoria']][p['subcategoria']].append(p)
+    return unicos
+
+
+def titulo_normalizado(nombre: str) -> str:
+    return re.sub(r'\W+', ' ', nombre.casefold()).strip()
+
+
+def cupos(disponibles: dict, n: int) -> dict:
+    """Tope comun por categoria para llegar a n: las categorias chicas entran enteras."""
+    tope = 0
+    while sum(min(d, tope + 1) for d in disponibles.values()) <= n and tope < max(disponibles.values()):
+        tope += 1
+    return {c: min(d, tope) for c, d in disponibles.items()}
 
 
 def intercalar(subcategorias: dict) -> list:
@@ -108,7 +130,8 @@ def intercalar(subcategorias: dict) -> list:
     return [l[i] for i in range(max(map(len, listas))) for l in listas if i < len(l)]
 
 
-def con_imagen(orden: list, cupo: int, dir_imagenes: Path) -> list:
+def con_imagen(orden: list, cupo: int, dir_imagenes: Path, huellas: set) -> list:
+    """Los primeros cupo productos con foto valida y distinta de las ya elegidas (huellas)."""
     import cv2
     from bench.datasets.amazon_img import descargar_imagenes
 
@@ -117,8 +140,15 @@ def con_imagen(orden: list, cupo: int, dir_imagenes: Path) -> list:
         lote = orden[inicio:inicio + int((cupo - len(elegidos)) * 1.1) + 10]
         inicio += len(lote)
         bajados, _ = descargar_imagenes([{**p, 'id': p['asin']} for p in lote], dir_imagenes)
-        validos = {p['asin'] for p in bajados if cv2.imread(p['ruta']) is not None}
-        elegidos += [p for p in lote if p['asin'] in validos][:cupo - len(elegidos)]
+        rutas = {p['asin']: p['ruta'] for p in bajados if cv2.imread(p['ruta']) is not None}
+        for p in lote:
+            if len(elegidos) == cupo or p['asin'] not in rutas:
+                continue
+            # la misma foto byte a byte con otro titulo tambien es un duplicado
+            huella = hashlib.sha256(Path(rutas[p['asin']]).read_bytes()).hexdigest()
+            if huella not in huellas:
+                huellas.add(huella)
+                elegidos.append(p)
     return elegidos
 
 
@@ -138,17 +168,17 @@ def construir(n=N_PRODUCTOS, salida=DIR_TIENDA, dir_imagenes=DIR_IMAGENES,
     ruta_resumen = salida / 'resumen.json'
     if ruta_resumen.exists():
         resumen = json.loads(ruta_resumen.read_text())
-        if resumen.get('n_pedido') == n:
+        if resumen.get('n_pedido') == n and resumen.get('version') == VERSION:
             return resumen
     salida.mkdir(parents=True, exist_ok=True)
     amazon.descargar(amazon.URL_META, meta)
     amazon.descargar(amazon.URL_RESENAS, resenas)
 
     grupos = candidatos(meta)
-    cupo, sobra = divmod(n, len(CATEGORIAS))
-    productos = []
-    for i, categoria in enumerate(CATEGORIAS):
-        productos += con_imagen(intercalar(grupos[categoria]), cupo + (i < sobra), Path(dir_imagenes))
+    por_categoria = cupos({c: sum(map(len, grupos[c].values())) for c in CATEGORIAS}, n)
+    productos, huellas = [], set()
+    for categoria in CATEGORIAS:
+        productos += con_imagen(intercalar(grupos[categoria]), por_categoria[categoria], Path(dir_imagenes), huellas)
     for pid, p in enumerate(productos, 1):
         p['id'] = pid
     _escribir(salida / 'productos.csv', COLUMNAS, ([p[c] for c in COLUMNAS] for p in productos))
@@ -156,7 +186,7 @@ def construir(n=N_PRODUCTOS, salida=DIR_TIENDA, dir_imagenes=DIR_IMAGENES,
     temporal = salida / 'compras.tmp'
     compras, leidas, usuarios = amazon.extraer_compras(resenas, {p['asin']: p['id'] for p in productos}, temporal)
     temporal.replace(salida / 'compras.csv')
-    resumen = {'n_pedido': n, 'productos': len(productos), 'compras': compras, 'usuarios': usuarios,
+    resumen = {'n_pedido': n, 'version': VERSION, 'productos': len(productos), 'compras': compras, 'usuarios': usuarios,
                'resenas_leidas': leidas,
                'por_categoria': {c: sum(p['categoria'] == c for p in productos) for c in CATEGORIAS}}
     ruta_resumen.write_text(json.dumps(resumen, indent=2))

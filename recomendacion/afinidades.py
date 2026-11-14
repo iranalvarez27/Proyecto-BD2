@@ -6,7 +6,7 @@ import math
 
 from recomendacion.repositorio import literal
 
-MAX_VECINOS = 30
+MAX_VECINOS = 20
 # los usuarios con muchisimas compras no aportan co-compras informativas y disparan los pares
 MAX_POR_USUARIO = 50
 # shrinkage de Koren (KDD 2008): con LAMBDA usuarios en comun el par conserva la mitad del coseno
@@ -125,3 +125,15 @@ def registrar_compra(repo, previos, nuevos):
             score = puntaje(fila['soporte'], _compradores(repo, pid), _compradores(repo, fila['producto_destino']))
             repo.ejecutar(f'UPDATE ecommerce_afinidades SET score = {literal(score)} WHERE id = {fila["id"]}')
     return tocados
+
+
+PERCENTIL_ESCALA = 99
+
+
+def escala_global(scores, percentil=PERCENTIL_ESCALA):
+    """Percentil alto de los scores: escala de normalizacion que no depende de un solo par extremo."""
+    if not scores:
+        return None
+    ordenados = sorted(scores)
+    valor = ordenados[min(len(ordenados) - 1, int(len(ordenados) * percentil / 100))]
+    return valor if valor > 0 else None

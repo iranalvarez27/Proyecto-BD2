@@ -127,13 +127,17 @@ def registrar() -> None:
 
 
 def vectores_catalogo(claves, rutas, cache: Path) -> dict:
-    """Vector de cada imagen por clave; se reutiliza la cache si es del mismo catalogo."""
+    """Vector de cada imagen por clave; de la cache se reutilizan las claves que ya estaban."""
+    previos = {}
     if cache.exists():
         with np.load(cache) as f:
-            if f['claves'].tolist() == list(claves) and str(f['firma']) == FIRMA:
-                return dict(zip(claves, f['vectores']))
-    vectores = extractor().lote(list(rutas))
+            if str(f['firma']) == FIRMA:
+                previos = dict(zip(f['claves'].tolist(), f['vectores']))
+    faltan = [(c, r) for c, r in zip(claves, rutas) if c not in previos]
+    if faltan:
+        previos.update(zip([c for c, _ in faltan], extractor().lote([r for _, r in faltan])))
+    vectores = {c: previos[c] for c in claves}
     temporal = cache.with_name(cache.stem + '.tmp.npz')
-    np.savez(temporal, claves=np.array(claves), vectores=vectores, firma=np.array(FIRMA))
+    np.savez(temporal, claves=np.array(list(vectores)), vectores=np.stack(list(vectores.values())), firma=np.array(FIRMA))
     temporal.replace(cache)
-    return dict(zip(claves, vectores))
+    return vectores

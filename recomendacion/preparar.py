@@ -106,7 +106,7 @@ def preparar_catalogo(conexion, productos_csv, imagenes_dir):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--data-dir', default='data')
-    parser.add_argument('--size', type=int, default=None, help='productos del catalogo curado (por defecto 10000)')
+    parser.add_argument('--size', type=int, default=None, help='productos del catalogo curado (por defecto 30000)')
     parser.add_argument('--solo-catalogo', action='store_true')
     args = parser.parse_args()
     from recomendacion import catalogo
@@ -124,7 +124,7 @@ def main():
             from recomendacion.compras import preparar_compras
             preparar_compras(conexion, catalogo.DIR_TIENDA / 'compras.csv')
             from recomendacion.disponibilidad import preparar_inventario
-            preparar_inventario(conexion)
+            preparar_inventario(conexion, catalogo.DIR_TIENDA / 'productos.csv')
         print(json.dumps({'productos': len(resultado['asins']), 'catalogo_listo': True,
                           'indices_listos': resultado.get('indices_listos', False)}))
     finally:

@@ -1,10 +1,11 @@
 """Eventos y compras idempotentes con inventario protegido por transacciones."""
 import hashlib
 import json
+from pathlib import Path
 import time
 
-from recomendacion.afinidades import cargar_base, leer_compras, registrar_compra
-from recomendacion.preparar import asegurar_tabla
+from recomendacion.afinidades import cargar_base, escala_global, leer_compras, registrar_compra
+from recomendacion.preparar import asegurar_tabla, guardar_json, manifiesto
 from recomendacion.repositorio import Repositorio, literal
 
 ESQUEMAS = {
@@ -37,11 +38,15 @@ def preparar_compras(conexion, ruta_compras=None):
                            ('ecommerce_inventario', 'producto_id'), ('ecommerce_operaciones', 'solicitud')]:
         if not conexion.catalog.tiene_indice(tabla, columna):
             repo.ejecutar(f'CREATE INDEX ON {tabla} ({columna}) USING HASH')
-    if repo.ejecutar('SELECT * FROM ecommerce_estado WHERE id = 1'):
-        return
-    if ruta_compras is not None:
-        cargar_base(repo, leer_compras(ruta_compras))
-    repo.insertar('ecommerce_estado', [1, 0])
+    if not repo.ejecutar('SELECT * FROM ecommerce_estado WHERE id = 1'):
+        if ruta_compras is not None:
+            cargar_base(repo, leer_compras(ruta_compras))
+        repo.insertar('ecommerce_estado', [1, 0])
+    # escala global de la senal compras para la fusion; se guarda una vez en el manifiesto
+    estado = manifiesto(conexion.data_dir)
+    if estado is not None and 'escala_compras' not in estado:
+        estado['escala_compras'] = escala_global([r['score'] for r in repo.ejecutar('SELECT score FROM ecommerce_afinidades')])
+        guardar_json(Path(conexion.data_dir) / 'ecommerce_manifest.json', estado)
 
 
 def registrar_interaccion(conexion, usuario_id, producto_id, tipo):

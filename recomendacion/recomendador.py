@@ -14,7 +14,7 @@ from recomendacion.repositorio import Repositorio, literal
 from recomendacion.metadata import gower, rango_log_precio
 from recomendacion.texto import terminos_relevantes
 
-PESOS = {'visual': .3, 'texto': .3, 'metadata': .2, 'compras': .2}
+PESOS = {'visual': .25, 'texto': .25, 'metadata': .25, 'compras': .25}
 
 
 class Servicio:
@@ -42,6 +42,24 @@ class Servicio:
             raise ValueError('El modelo visual cambió. Reconstruya los índices de e-commerce antes de consultar.')
         visual.registrar()
         return estado
+
+    def escala_compras(self, repo, estado):
+        """Percentil 99 de los scores de compras: la escala global con que se normaliza esa senal."""
+        if 'escala_compras' in estado:
+            return estado['escala_compras']
+        if getattr(self, '_escala', (None,))[0] != estado['firma_catalogo']:
+            from recomendacion.afinidades import escala_global
+            scores = [r['score'] for r in repo.ejecutar('SELECT score FROM ecommerce_afinidades')]
+            self._escala = (estado['firma_catalogo'], escala_global(scores))
+        return self._escala[1]
+
+    def rango_precio(self, repo, firma):
+        """Rango de ln(precio) del catalogo para Gower; se calcula una vez por catalogo."""
+        if getattr(self, '_rango', (None,))[0] != firma:
+            extremos = [repo.ejecutar(f'SELECT precio_centavos FROM ecommerce_productos ORDER BY precio_centavos {orden} LIMIT 1')
+                        for orden in ('ASC', 'DESC')]
+            self._rango = (firma, rango_log_precio([fila[0] for fila in extremos]))
+        return self._rango[1]
 
     def productos(self, repo, ids=None):
         condicion = ''
@@ -131,14 +149,14 @@ class Servicio:
         if metodo not in ('HNSW', 'IVF', 'EXACT') or metrica not in ('cosine', 'euclidean', 'dot') or texto not in ('BM25', 'TF_IDF'):
             raise ValueError('Método o métrica no admitido')
         repo = Repositorio(self.conexion)
-        productos = self.productos(repo)
-        base = productos.get(pid)
+        base = self.productos(repo, [pid]).get(pid)
         if base is None:
             raise LookupError('Producto inexistente')
+        total = len(estado['asins'])
         disponibles = None
         if solo_stock:
             disponibles = {r['producto_id'] for r in repo.ejecutar('SELECT producto_id FROM ecommerce_inventario WHERE stock > 0')}
-        limites = min(len(productos), max(100, 10 * k))
+        limites = min(total, max(100, 10 * k))
         errores = {}
         listas = {m: [] for m in MODALIDADES}
         if self.conexion.catalog.existe_tabla('ecommerce_afinidades') and pesos['compras'] > 0:
@@ -148,12 +166,12 @@ class Servicio:
         contenido = repo.ejecutar(f'SELECT contenido FROM ecommerce_textos WHERE id = {int(pid)}')
         indice_texto = self.conexion.catalog.get_table('ecommerce_textos').indices['contenido'][0]
         palabras = terminos_relevantes(indice_texto, contenido[0]['contenido'] if contenido else base['nombre'])
-        misma_categoria = repo.ejecutar(f'SELECT id FROM ecommerce_productos WHERE categoria = {literal(base["categoria"])}')
-        rango = rango_log_precio(productos.values())
-        for fila in misma_categoria:
-            p = productos[fila['id']]
-            listas['metadata'].append((p['id'], gower(base, p, rango)))
-        listas['metadata'].sort(key=lambda par: (-par[1], par[0]))
+        misma_categoria = repo.ejecutar('SELECT id, subcategoria, marca, precio_centavos FROM ecommerce_productos '
+                                        f'WHERE categoria = {literal(base["categoria"])}')
+        rango = self.rango_precio(repo, estado['firma_catalogo'])
+        listas['metadata'] = sorted(((p['id'], gower(base, p, rango)) for p in misma_categoria), key=lambda par: (-par[1], par[0]))
+        # categoria y precio de cada candidato, para los filtros
+        datos = {p['id']: {'categoria': base['categoria'], 'precio_centavos': p['precio_centavos']} for p in misma_categoria}
         while True:
             if pesos['visual'] > 0 and base['ruta'] and 'visual' not in errores:
                 tabla = 'ecommerce_imagenes_ivf' if metodo == 'IVF' else 'ecommerce_imagenes_hnsw'
@@ -165,18 +183,24 @@ class Servicio:
             if pesos['texto'] > 0 and palabras:
                 filas = repo.ejecutar(f'SELECT id, SCORE() AS score FROM ecommerce_textos WHERE MATCH(contenido, {literal(" ".join(palabras))}) USING {texto} LIMIT {limites}')
                 listas['texto'] = [(r['id'], r['score']) for r in filas]
+            faltan = {i for candidatos in listas.values() for i, _ in candidatos} - datos.keys()
+            if faltan:
+                for p in repo.ejecutar('SELECT id, categoria, precio_centavos FROM ecommerce_productos WHERE id IN ('
+                                       + ','.join(str(int(i)) for i in sorted(faltan)) + ')'):
+                    datos[p['id']] = p
             filtradas = {}
             for modalidad, candidatos in listas.items():
-                filtradas[modalidad] = [(i, s) for i, s in candidatos if i in productos and i != pid
+                filtradas[modalidad] = [(i, s) for i, s in candidatos if i in datos and i != pid
                                        and (disponibles is None or i in disponibles)
-                                       and (not categoria or productos[i]['categoria'] == categoria)
-                                       and (min_price is None or productos[i]['precio_centavos'] >= min_price)
-                                       and (max_price is None or productos[i]['precio_centavos'] <= max_price)]
-            fusion = fusionar(filtradas, pesos)
-            if len(fusion) >= k or limites >= len(productos):
+                                       and (not categoria or datos[i]['categoria'] == categoria)
+                                       and (min_price is None or datos[i]['precio_centavos'] >= min_price)
+                                       and (max_price is None or datos[i]['precio_centavos'] <= max_price)]
+            fusion = fusionar(filtradas, pesos, {'compras': self.escala_compras(repo, estado)})
+            if len(fusion) >= k or limites >= total:
                 break
-            limites = min(len(productos), limites * 2)
-        recomendaciones = [{**productos[r['id']], **r} for r in fusion[:k]]
+            limites = min(total, limites * 2)
+        completos = self.productos(repo, [r['id'] for r in fusion[:k]])
+        recomendaciones = [{**completos[r['id']], **r} for r in fusion[:k]]
         from recomendacion.disponibilidad import tiendas_con_stock
         for producto in [base, *recomendaciones]:
             producto['tiendas'] = tiendas_con_stock(repo, producto['id'], lat, lon) if self.conexion.catalog.existe_tabla('ecommerce_tiendas') else []
