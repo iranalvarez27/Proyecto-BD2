@@ -10,12 +10,27 @@ from recomendacion.preparar import RAIZ, guardar_json, manifiesto
 from recomendacion.repositorio import Repositorio
 
 
+PARAMETROS = Path(__file__).resolve().parent / 'parametros.yaml'
+
+
+def parametros_vectoriales() -> dict:
+    """efSearch y nprobe calibrados por bench/experiments/tienda_vectores.py; sin archivo, los del motor."""
+    if not PARAMETROS.exists():
+        return {}
+    import yaml
+    datos = yaml.safe_load(PARAMETROS.read_text())
+    return {metodo: {clave: datos[metodo][clave]} for metodo, clave in (('HNSW', 'efSearch'), ('IVF', 'nprobe'))
+            if metodo in datos}
+
+
 def preparar_indices(conexion):
     estado = manifiesto(conexion.data_dir)
     if not estado or not estado['catalogo_listo']:
         raise ValueError('Prepare primero el catálogo')
     visual.registrar()
-    if estado.get('indices_listos') and estado.get('firma_visual') == visual.FIRMA:
+    parametros = parametros_vectoriales()
+    if (estado.get('indices_listos') and estado.get('firma_visual') == visual.FIRMA
+            and estado.get('parametros_vectoriales', {}) == parametros):
         tablas = ('ecommerce_textos', 'ecommerce_imagenes_hnsw', 'ecommerce_imagenes_ivf')
         if all(conexion.catalog.tiene_indice(t, 'contenido' if t.endswith('textos') else 'ruta') for t in tablas):
             return estado
@@ -40,11 +55,12 @@ def preparar_indices(conexion):
         registros = list(info.storage.scan_con_rid(info.schema))
         indice = CONSTRUCTORES[metodo](
             [rid for rid, _ in registros], [vectores[r.values[1]] for _, r in registros],
-            rutas=[r.values[1] for _, r in registros], extractor_nombre='cnn')
+            rutas=[r.values[1] for _, r in registros], extractor_nombre='cnn', **parametros.get(metodo, {}))
         indice.guardar(str(Path(conexion.data_dir) / f'{info.nombre}_ruta_{metodo.lower()}_vector.npz'))
         conexion.catalog.register_index(info.nombre, 'ruta', indice, INDEX_VECTOR)
         catalog_store.guardar_tabla(conexion.data_dir, info)
-    estado.update(indices_listos=True, firma_visual=visual.FIRMA, dimension=visual.DIMENSION)
+    estado.update(indices_listos=True, firma_visual=visual.FIRMA, dimension=visual.DIMENSION,
+                  parametros_vectoriales=parametros)
     for viejo in ('n_modelo', 'firma_modelo', 'vectores_sin_patrones'):
         estado.pop(viejo, None)
     guardar_json(Path(conexion.data_dir) / 'ecommerce_manifest.json', estado)

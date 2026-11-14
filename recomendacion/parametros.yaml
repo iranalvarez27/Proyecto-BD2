@@ -1,0 +1,13 @@
+# lo escribe bench/experiments/tienda_vectores.py --guardar
+n: 29938
+k: 100
+objetivo_recall: 0.95
+exacto_ms: 16.55
+HNSW:
+  efSearch: 100
+  recall: 0.9842
+  tiempo_ms: 0.488
+IVF:
+  nprobe: 16
+  recall: 0.9563
+  tiempo_ms: 0.811
