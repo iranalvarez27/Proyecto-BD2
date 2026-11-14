@@ -1,3 +1,4 @@
+import contextlib
 import heapq
 import os
 from common.page import PAGE_SIZE
@@ -165,7 +166,9 @@ def _read_run(path, schema):
             while (record := Record.read_from(f, schema)) is not None:
                 yield dict(zip(columns, record.values))
     finally:
-        os.remove(path)
+        # con LIMIT la mezcla se corta antes y el directorio temporal puede haberse borrado ya
+        with contextlib.suppress(FileNotFoundError):
+            os.remove(path)
 
 
 def _merge(paths, key, schema, reverse):
