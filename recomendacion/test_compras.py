@@ -49,3 +49,22 @@ def test_dos_compras_concurrentes_del_ultimo_producto(motor):
         resultados = list(pool.map(intento, [1, 2]))
     assert sum(r is not None for r in resultados) == 1
     assert Repositorio(motor).ejecutar('SELECT stock FROM ecommerce_inventario WHERE id = 1')[0]['stock'] == 0
+
+
+def test_compra_en_vivo_equivale_a_recalcular(tmp_path):
+    from recomendacion.afinidades import cargar_base, contar, puntaje
+    c = abrir_motor(str(tmp_path))
+    asegurar_tabla(c, 'ecommerce_productos', 'id INT PRIMARY KEY, subcategoria VARCHAR(30), precio_centavos INT')
+    preparar_compras(c)
+    r = Repositorio(c)
+    base = [{1, 2}, {1, 3}, {2, 3, 4}]
+    cargar_base(r, base)
+    from recomendacion.afinidades import registrar_compra
+    registrar_compra(r, set(), [2, 3])
+    compradores, soportes = contar(base + [{2, 3}])
+    for (a, b), soporte in soportes.items():
+        fila = r.ejecutar(f'SELECT score, soporte FROM ecommerce_afinidades WHERE producto_origen = {a} AND producto_destino = {b}')
+        assert fila[0]['soporte'] == soporte
+        if 1 not in (a, b):
+            assert abs(fila[0]['score'] - puntaje(soporte, compradores[a], compradores[b])) < 1e-9
+    c.pool.close_all()

@@ -1,17 +1,16 @@
 """Eventos y compras idempotentes con inventario protegido por transacciones."""
-from collections import defaultdict
 import hashlib
 import json
-import random
 import time
 
-from recomendacion.afinidades import refrescar
+from recomendacion.afinidades import cargar_base, leer_compras, registrar_compra
 from recomendacion.preparar import asegurar_tabla
 from recomendacion.repositorio import Repositorio, literal
 
 ESQUEMAS = {
     'ecommerce_interacciones': 'id BIGINT PRIMARY KEY, usuario_id INT, producto_id INT, tipo VARCHAR(16), fecha BIGINT, origen VARCHAR(24)',
     'ecommerce_afinidades': 'id BIGINT PRIMARY KEY, producto_origen INT, producto_destino INT, score DOUBLE, soporte INT',
+    'ecommerce_compradores': 'id INT PRIMARY KEY, compradores INT',
     'ecommerce_inventario': 'id BIGINT PRIMARY KEY, producto_id INT, tienda_id INT, stock INT',
     'ecommerce_operaciones': 'id BIGINT PRIMARY KEY, solicitud VARCHAR(64), usuario_id INT, firma VARCHAR(64), respuesta VARCHAR(3000)',
     'ecommerce_estado': 'id INT PRIMARY KEY, revision BIGINT',
@@ -24,34 +23,25 @@ def siguiente_id(repo, tabla):
     return filas[0]['id'] + 1 if filas else 1
 
 
-def preparar_compras(conexion):
+def preparar_compras(conexion, ruta_compras=None):
+    """Tablas de compras; la base de afinidades sale de las compras reales de ruta_compras."""
     repo = Repositorio(conexion)
+    if not conexion.catalog.existe_tabla('ecommerce_estado') or not repo.ejecutar('SELECT * FROM ecommerce_estado WHERE id = 1'):
+        # carga interrumpida o primera vez: la base se rehace entera
+        for tabla in ('ecommerce_afinidades', 'ecommerce_compradores'):
+            if conexion.catalog.existe_tabla(tabla):
+                repo.ejecutar(f'DROP TABLE {tabla}')
     for tabla, esquema in ESQUEMAS.items():
         asegurar_tabla(conexion, tabla, esquema)
     for tabla, columna in [('ecommerce_interacciones', 'usuario_id'), ('ecommerce_afinidades', 'producto_origen'),
                            ('ecommerce_inventario', 'producto_id'), ('ecommerce_operaciones', 'solicitud')]:
         if not conexion.catalog.tiene_indice(tabla, columna):
             repo.ejecutar(f'CREATE INDEX ON {tabla} ({columna}) USING HASH')
-    with repo.transaccion(TABLAS_COMPRA):
-        if not repo.ejecutar('SELECT * FROM ecommerce_estado WHERE id = 1'):
-            repo.insertar('ecommerce_estado', [1, 0])
-        eventos = repo.ejecutar("SELECT id FROM ecommerce_interacciones WHERE origen = 'simulado_semilla'")
-        if not eventos:
-            productos = repo.ejecutar('SELECT id, subcategoria FROM ecommerce_productos ORDER BY id')
-            grupos = defaultdict(list)
-            for p in productos:
-                grupos[p['subcategoria']].append(p['id'])
-            grupos = list(grupos.values())
-            azar = random.Random(42)
-            nuevo = siguiente_id(repo, 'ecommerce_interacciones')
-            for usuario in range(1, 201):
-                grupo = grupos[(usuario - 1) % len(grupos)]
-                cesta = set(azar.sample(grupo, min(3, len(grupo))))
-                cesta.add(azar.choice(productos)['id'])
-                for pid in sorted(cesta):
-                    repo.insertar('ecommerce_interacciones', [nuevo, usuario, pid, 'compra', 1700000000000 + nuevo, 'simulado_semilla'])
-                    nuevo += 1
-        refrescar(repo)
+    if repo.ejecutar('SELECT * FROM ecommerce_estado WHERE id = 1'):
+        return
+    if ruta_compras is not None:
+        cargar_base(repo, leer_compras(ruta_compras))
+    repo.insertar('ecommerce_estado', [1, 0])
 
 
 def registrar_interaccion(conexion, usuario_id, producto_id, tipo):
@@ -80,6 +70,8 @@ def comprar(conexion, usuario_id, solicitud, items):
             if previa['usuario_id'] != usuario_id or previa['firma'] != firma:
                 raise ValueError('La clave de solicitud ya pertenece a otra compra')
             return json.loads(previa['respuesta'])
+        previos = {r['producto_id'] for r in repo.ejecutar(
+            f"SELECT producto_id, tipo FROM ecommerce_interacciones WHERE usuario_id = {int(usuario_id)}") if r['tipo'] == 'compra'}
         nuevo_evento = siguiente_id(repo, 'ecommerce_interacciones')
         total = 0
         for item in items:
@@ -97,7 +89,9 @@ def comprar(conexion, usuario_id, solicitud, items):
             repo.insertar('ecommerce_interacciones', [nuevo_evento, usuario_id, pid, 'compra', int(time.time() * 1000), 'demo_usuario'])
             nuevo_evento += 1
             total += cantidad * producto[0]['precio_centavos']
-        version = refrescar(repo)
+        registrar_compra(repo, previos, [item['producto_id'] for item in items])
+        version = nuevo_evento - 1
+        repo.ejecutar(f'UPDATE ecommerce_estado SET revision = {version} WHERE id = 1')
         resultado = {'solicitud': solicitud, 'items': items, 'total_centavos': total, 'moneda': 'USD',
                      'version_afinidades': version, 'simulada': True}
         repo.insertar('ecommerce_operaciones', [siguiente_id(repo, 'ecommerce_operaciones'), solicitud, usuario_id, firma,

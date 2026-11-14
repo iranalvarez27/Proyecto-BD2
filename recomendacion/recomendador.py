@@ -12,6 +12,8 @@ from recomendacion.fusion import MODALIDADES, fusionar
 from recomendacion.indices import firma_modelo
 from recomendacion.preparar import manifiesto
 from recomendacion.repositorio import Repositorio, literal
+from recomendacion.metadata import gower, rango_log_precio
+from recomendacion.texto import terminos_relevantes
 
 PESOS = {'visual': .3, 'texto': .3, 'metadata': .2, 'compras': .2}
 
@@ -130,7 +132,7 @@ class Servicio:
         return {'productos': filas, 'categorias': sorted(r['categoria'] for r in categorias),
                 'next_cursor': siguiente, 'busqueda_acotada': truncada, 'trazas': repo.trazas}
 
-    def recomendar(self, pid, k=10, pesos=None, metodo='HNSW', metrica='cosine', texto='BM25',
+    def recomendar(self, pid, k=10, pesos=None, metodo='HNSW', metrica='cosine', texto='TF_IDF',
                    categoria='', min_price=None, max_price=None, lat=None, lon=None, solo_stock=False):
         inicio = time.perf_counter()
         estado = self.verificar()
@@ -154,14 +156,13 @@ class Servicio:
             afines.sort(key=lambda r: (-r['score'], -r['soporte'], r['producto_destino']))
             listas['compras'] = [(r['producto_destino'], r['score']) for r in afines]
         contenido = repo.ejecutar(f'SELECT contenido FROM ecommerce_textos WHERE id = {int(pid)}')
-        import re
-        palabras = list(dict.fromkeys(re.findall(r'\w+', base['nombre'] + ' ' + (contenido[0]['contenido'] if contenido else ''))))[:40]
+        indice_texto = self.conexion.catalog.get_table('ecommerce_textos').indices['contenido'][0]
+        palabras = terminos_relevantes(indice_texto, contenido[0]['contenido'] if contenido else base['nombre'])
         misma_categoria = repo.ejecutar(f'SELECT id FROM ecommerce_productos WHERE categoria = {literal(base["categoria"])}')
+        rango = rango_log_precio(productos.values())
         for fila in misma_categoria:
             p = productos[fila['id']]
-            cercania = 1 / (1 + abs(p['precio_centavos'] - base['precio_centavos']) / max(base['precio_centavos'], 1))
-            score = 2 * (p['subcategoria'] == base['subcategoria']) + (bool(p['marca']) and p['marca'] == base['marca']) + cercania
-            listas['metadata'].append((p['id'], score))
+            listas['metadata'].append((p['id'], gower(base, p, rango)))
         listas['metadata'].sort(key=lambda par: (-par[1], par[0]))
         while True:
             if pesos['visual'] > 0 and base['ruta'] and 'visual' not in errores:
