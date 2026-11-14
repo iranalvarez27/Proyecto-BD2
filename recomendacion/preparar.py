@@ -108,7 +108,6 @@ def main():
     parser.add_argument('--data-dir', default='data')
     parser.add_argument('--size', type=int, default=None, help='productos del catalogo curado (por defecto 10000)')
     parser.add_argument('--solo-catalogo', action='store_true')
-    parser.add_argument('--modelo', type=int, default=100000)
     args = parser.parse_args()
     from recomendacion import catalogo
     n = args.size or catalogo.N_PRODUCTOS
@@ -121,7 +120,7 @@ def main():
         resultado = preparar_catalogo(conexion, catalogo.DIR_TIENDA / 'productos.csv', catalogo.DIR_IMAGENES)
         if not args.solo_catalogo:
             from recomendacion.indices import preparar_indices
-            resultado = preparar_indices(conexion, args.modelo)
+            resultado = preparar_indices(conexion)
             from recomendacion.compras import preparar_compras
             preparar_compras(conexion, catalogo.DIR_TIENDA / 'compras.csv')
             from recomendacion.disponibilidad import preparar_inventario

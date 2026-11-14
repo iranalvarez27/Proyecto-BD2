@@ -14,7 +14,7 @@ class SolicitudRecomendacion(BaseModel):
     pesos: dict[str, float] = Field(default_factory=lambda: dict(PESOS))
     metodo: Literal['HNSW', 'IVF', 'EXACT'] = 'HNSW'
     metrica: Literal['cosine', 'euclidean', 'dot'] = 'cosine'
-    texto: Literal['BM25', 'TF_IDF'] = 'BM25'
+    texto: Literal['BM25', 'TF_IDF'] = 'TF_IDF'
     categoria: str = Field(default='', max_length=120)
     min_price: int | None = Field(default=None, ge=0)
     max_price: int | None = Field(default=None, ge=0)

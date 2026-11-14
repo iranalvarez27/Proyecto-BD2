@@ -7,9 +7,8 @@ import time
 from urllib.parse import quote
 import uuid
 
-from multimedia.bovw import Extractor
 from recomendacion.fusion import MODALIDADES, fusionar
-from recomendacion.indices import firma_modelo
+from recomendacion import visual
 from recomendacion.preparar import manifiesto
 from recomendacion.repositorio import Repositorio, literal
 from recomendacion.metadata import gower, rango_log_precio
@@ -23,8 +22,6 @@ class Servicio:
         self.conexion = conexion
         self.lock = threading.RLock()
         self.busquedas = OrderedDict()
-        self.modelo = None
-        self.firma_archivos = None
 
     def estado(self):
         meta = manifiesto(self.conexion.data_dir) or {}
@@ -35,22 +32,15 @@ class Servicio:
                 indices[tabla] = {col: getattr(idx, 'metodo', tipo) for col, (idx, tipo) in info.indices.items()}
         return {**meta, 'productos': len(meta.get('asins', [])), 'indices': indices,
                 'listo': bool(meta.get('catalogo_listo') and meta.get('indices_listos')),
-                'datos_comerciales': 'Inventario y compras de demostración simulados'}
+                'datos_comerciales': 'Compras reales de Amazon Reviews 2023; inventario y sucursales simulados'}
 
     def verificar(self):
         estado = self.estado()
         if not estado['listo']:
             raise ValueError('Prepare el catálogo con python3 -m recomendacion.preparar y reinicie el backend')
-        from multimedia import config
-        directorio = config.directorio_modelo('imagen')
-        archivos = [directorio / 'meta.json', directorio / 'codebook.npy',
-                    directorio / 'colecciones' / str(estado['n_modelo']) / 'idf.npy']
-        firma = (estado['firma_modelo'], tuple(p.stat().st_mtime_ns for p in archivos))
-        if self.firma_archivos != firma:
-            modelo = Extractor('imagen', n_coleccion=estado['n_modelo'])
-            if firma_modelo(modelo) != estado['firma_modelo']:
-                raise ValueError('El modelo visual cambió. Reconstruya los índices de e-commerce antes de consultar.')
-            self.modelo, self.firma_archivos = modelo, firma
+        if estado.get('firma_visual') != visual.FIRMA:
+            raise ValueError('El modelo visual cambió. Reconstruya los índices de e-commerce antes de consultar.')
+        visual.registrar()
         return estado
 
     def productos(self, repo, ids=None):

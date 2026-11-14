@@ -50,7 +50,7 @@ def ruta_modelo() -> Path:
     return destino
 
 
-def preprocesar(imagen_bgr: np.ndarray, modo: str = 'relleno') -> np.ndarray:
+def preprocesar(imagen_bgr: np.ndarray, modo: str = 'estirar') -> np.ndarray:
     """BGR de OpenCV a tensor 3 x H x W normalizado como en ImageNet."""
     import cv2
 
@@ -77,7 +77,7 @@ def preprocesar(imagen_bgr: np.ndarray, modo: str = 'relleno') -> np.ndarray:
 
 
 class ExtractorCNN:
-    def __init__(self, modo: str = 'relleno'):
+    def __init__(self, modo: str = 'estirar'):
         import onnxruntime as ort
 
         if modo not in MODOS:
@@ -106,3 +106,34 @@ class ExtractorCNN:
                 tensores.append(preprocesar(imagen, self.modo))
             vectores[i:i + len(tensores)] = self._correr(np.stack(tensores))
         return vectores
+
+
+MODO = 'estirar'
+FIRMA = f'{SHA256_MODELO[:16]}-{MODO}'
+_extractor = None
+
+
+def extractor() -> ExtractorCNN:
+    global _extractor
+    if _extractor is None:
+        _extractor = ExtractorCNN(MODO)
+    return _extractor
+
+
+def registrar() -> None:
+    """Registra 'cnn' en el motor para vectorizar consultas e inserciones de los indices de la tienda."""
+    from query.conexion import registrar_extractor
+    registrar_extractor('cnn', lambda ruta, **_: extractor()(ruta))
+
+
+def vectores_catalogo(claves, rutas, cache: Path) -> dict:
+    """Vector de cada imagen por clave; se reutiliza la cache si es del mismo catalogo."""
+    if cache.exists():
+        with np.load(cache) as f:
+            if f['claves'].tolist() == list(claves) and str(f['firma']) == FIRMA:
+                return dict(zip(claves, f['vectores']))
+    vectores = extractor().lote(list(rutas))
+    temporal = cache.with_name(cache.stem + '.tmp.npz')
+    np.savez(temporal, claves=np.array(claves), vectores=vectores, firma=np.array(FIRMA))
+    temporal.replace(cache)
+    return dict(zip(claves, vectores))

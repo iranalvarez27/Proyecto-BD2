@@ -7,7 +7,12 @@ import uuid
 def literal(valor):
     if isinstance(valor, str):
         return "'" + valor.replace("'", "''") + "'"
-    if isinstance(valor, (int, float)):
+    if isinstance(valor, float):
+        if valor != valor or valor in (float('inf'), float('-inf')):
+            raise ValueError('Valor numérico no finito')
+        # el lexer no lee notacion cientifica (1e-05): se escribe en decimal fijo
+        return format(valor, '.17f').rstrip('0').rstrip('.') or '0'
+    if isinstance(valor, int):
         return str(valor)
     raise ValueError('Tipo de literal SQL no admitido')
 

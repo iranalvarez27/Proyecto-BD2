@@ -4,6 +4,8 @@ import csv
 from itertools import combinations
 import math
 
+from recomendacion.repositorio import literal
+
 MAX_VECINOS = 30
 # los usuarios con muchisimas compras no aportan co-compras informativas y disparan los pares
 MAX_POR_USUARIO = 50
@@ -87,7 +89,7 @@ def _soporte(repo, a, b):
 
 def _guardar(repo, a, b, score, soporte):
     if repo.ejecutar(f'SELECT id FROM ecommerce_afinidades WHERE id = {clave(a, b)}'):
-        repo.ejecutar(f'UPDATE ecommerce_afinidades SET score = {score}, soporte = {soporte} WHERE id = {clave(a, b)}')
+        repo.ejecutar(f'UPDATE ecommerce_afinidades SET score = {literal(score)}, soporte = {soporte} WHERE id = {clave(a, b)}')
     else:
         repo.insertar('ecommerce_afinidades', [clave(a, b), a, b, score, soporte])
 
@@ -121,5 +123,5 @@ def registrar_compra(repo, previos, nuevos):
             if tuple(sorted((pid, fila['producto_destino']))) in pares:
                 continue
             score = puntaje(fila['soporte'], _compradores(repo, pid), _compradores(repo, fila['producto_destino']))
-            repo.ejecutar(f'UPDATE ecommerce_afinidades SET score = {score} WHERE id = {fila["id"]}')
+            repo.ejecutar(f'UPDATE ecommerce_afinidades SET score = {literal(score)} WHERE id = {fila["id"]}')
     return tocados
