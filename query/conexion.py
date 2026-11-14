@@ -43,6 +43,14 @@ DEFAULT_SESSION = "__autocommit__"
 FUNCIONES_DISTANCIA = ("distancia", "distancia_geo", "distancia_haversine", "distancia_euclidiana")
 
 
+# extractores adicionales al de la conexion ("bovw"), por nombre; cada indice vectorial guarda el suyo
+EXTRACTORES: dict = {}
+
+
+def registrar_extractor(nombre: str, funcion) -> None:
+    EXTRACTORES[nombre] = funcion
+
+
 def _metrica_de(nombre_funcion: str) -> str:
     return EUCLIDEAN if nombre_funcion == "distancia_euclidiana" else HAVERSINE
 
@@ -910,8 +918,16 @@ class Conexion:
         except Exception:
             return None
 
+    def _extractor_de(self, indice):
+        nombre = getattr(indice, "extractor_nombre", "bovw")
+        if nombre == "bovw":
+            return self.extractor
+        if nombre not in EXTRACTORES:
+            raise ExecutionError(f"el extractor de caracteristicas '{nombre}' no esta registrado")
+        return EXTRACTORES[nombre]
+
     def _configurar_vectorial(self, info: TableInfo, columna: str, indice) -> None:
-        indice.configurar(self.extractor, self._resolver_archivo_multimedia)
+        indice.configurar(self._extractor_de(indice), self._resolver_archivo_multimedia)
         if indice.sincronizado:
             return
         idx = info.schema.column_index(columna)
@@ -1689,7 +1705,7 @@ class Conexion:
             if tipo_indice == "bplus":
                 pares.sort(key=lambda p: (p[0], p[1].page_id, p[1].slot_id))
             if tipo_indice == INDEX_VECTOR:
-                indice.configurar(self.extractor, self._resolver_archivo_multimedia)
+                indice.configurar(self._extractor_de(indice), self._resolver_archivo_multimedia)
             indice.bulk_load(pares)
             if tipo_indice == INDEX_VECTOR and indice.archivo is not None:
                 indice.guardar()

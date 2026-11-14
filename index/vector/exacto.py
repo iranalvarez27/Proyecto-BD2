@@ -40,8 +40,11 @@ def separar_clave(clave):
 class IndiceExacto(IndiceVectorial):
     metodo = "EXACTO"
 
-    def __init__(self, rids, vectores, extractor=None, resolver=None, rutas=None, n_coleccion=None):
+    def __init__(self, rids, vectores, extractor=None, resolver=None, rutas=None, n_coleccion=None,
+                 extractor_nombre: str = "bovw"):
         self._extractor = extractor
+        # con que extractor registrado en la conexion se vectorizan consultas e inserciones
+        self.extractor_nombre = extractor_nombre
         self.n_coleccion = None if n_coleccion is None else int(n_coleccion)
         self._resolver = resolver
         self.archivo = None
@@ -126,7 +129,7 @@ class IndiceExacto(IndiceVectorial):
             raise ValueError("el indice no tiene una ruta de archivo")
         rids = np.array([(r.page_id, r.slot_id) for r in self._rids], dtype=np.int64).reshape(-1, 2)
         meta = {"metodo": self.metodo, "parametros": self._parametros_guardables(),
-                "n_coleccion": self.n_coleccion}
+                "n_coleccion": self.n_coleccion, "extractor": self.extractor_nombre}
         rutas = [separar_clave(c)[0] for c in self._rutas]
         segmentos = np.array([-1 if separar_clave(c)[1] is None else separar_clave(c)[1] for c in self._rutas],
                              dtype=np.int64)
@@ -146,7 +149,8 @@ class IndiceExacto(IndiceVectorial):
             raise ValueError(f"{ruta} es un indice {meta['metodo']}, no {cls.metodo}")
         claves = [r if s < 0 else (r, int(s)) for r, s in zip(rutas, segmentos)]
         indice = cls([RID(int(p), int(s)) for p, s in rids], vectores, rutas=claves,
-                     n_coleccion=meta.get("n_coleccion"), **meta["parametros"])
+                     n_coleccion=meta.get("n_coleccion"), extractor_nombre=meta.get("extractor", "bovw"),
+                     **meta["parametros"])
         indice.archivo = ruta
         indice.sincronizado = False
         return indice

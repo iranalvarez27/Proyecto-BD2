@@ -17,12 +17,12 @@ class IndiceVectorialFaiss(IndiceExacto):
     parametros_por_defecto: dict = {}
 
     def __init__(self, rids, vectores, extractor=None, resolver=None, rutas=None, n_coleccion=None,
-                 **parametros):
+                 extractor_nombre: str = "bovw", **parametros):
         self._parametros = {**self.parametros_por_defecto, **parametros}
         self._faiss = {}
         # True si los vectores en memoria son los del .npz en disco
         self._en_disco = False
-        super().__init__(rids, vectores, extractor, resolver, rutas, n_coleccion)
+        super().__init__(rids, vectores, extractor, resolver, rutas, n_coleccion, extractor_nombre)
 
     def _cargar(self, rids, vectores, rutas=None) -> None:
         super()._cargar(rids, vectores, rutas)
