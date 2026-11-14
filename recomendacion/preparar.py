@@ -3,7 +3,6 @@
 Ejecutar con el backend detenido para compartir los archivos del motor.
 """
 import argparse
-from collections import defaultdict
 import csv
 from decimal import Decimal, ROUND_HALF_UP
 import hashlib
@@ -32,47 +31,18 @@ def manifiesto(data_dir):
     return json.loads(ruta.read_text()) if ruta.exists() else None
 
 
-def seleccionar(productos_csv, imagenes_dir, n, anteriores=()):
-    import cv2
+def seleccionar(productos_csv, imagenes_dir):
     from text.ingesta import recortar_utf8
 
-    grupos = defaultdict(list)
-    por_asin = {}
-    with open(productos_csv, encoding='utf-8', newline='') as archivo:
-        for producto in csv.DictReader(archivo):
-            asin = producto['asin']
-            ruta = Path(imagenes_dir) / f'{asin}.jpg'
-            if asin in por_asin or not ruta.is_file():
-                continue
-            precio = Decimal(producto['precio'])
-            if not precio.is_finite() or precio <= 0:
-                continue
-            producto['ruta'] = ruta.resolve().relative_to(RAIZ).as_posix()
-            por_asin[asin] = producto
-            grupos[producto['subcategoria']].append(asin)
-    elegidos = list(anteriores)
-    if any(asin not in por_asin for asin in elegidos):
-        raise ValueError('El origen perdió productos ya preparados. Restaure la fuente antes de ampliar.')
-    vistos = set(elegidos)
-    listas = [sorted(grupos[c]) for c in sorted(grupos)]
-    posicion = 0
-    while len(elegidos) < n and any(posicion < len(g) for g in listas):
-        for grupo in listas:
-            if posicion >= len(grupo) or len(elegidos) >= n:
-                continue
-            asin = grupo[posicion]
-            if asin in vistos:
-                continue
-            if cv2.imread(str(RAIZ / por_asin[asin]['ruta'])) is None:
-                continue
-            elegidos.append(asin)
-            vistos.add(asin)
-        posicion += 1
-    if len(elegidos) < n:
-        raise ValueError(f'Solo hay {len(elegidos)} productos con imagen válida, se solicitaron {n}')
     filas = []
-    for pid, asin in enumerate(elegidos, 1):
-        p = por_asin[asin]
+    with open(productos_csv, encoding='utf-8', newline='') as archivo:
+        productos = list(csv.DictReader(archivo))
+    for p in productos:
+        pid, asin = int(p['id']), p['asin']
+        ruta = Path(imagenes_dir) / f'{asin}.jpg'
+        if not ruta.is_file():
+            raise ValueError(f'Falta la imagen de {asin} en {imagenes_dir}')
+        p['ruta'] = ruta.resolve().relative_to(RAIZ).as_posix()
         contenido = ' '.join(p[c] for c in ('nombre', 'descripcion', 'caracteristicas') if p[c])
         filas.append({
             'id': pid, 'asin': asin,
@@ -92,16 +62,25 @@ def asegurar_tabla(conexion, nombre, esquema):
         Repositorio(conexion).ejecutar(f'CREATE TABLE {nombre} ({esquema})')
 
 
-def preparar_catalogo(conexion, productos_csv, imagenes_dir, n):
+def borrar_tienda(conexion):
+    repo = Repositorio(conexion)
+    for tabla in conexion.catalog.listar_tablas():
+        if tabla.startswith('ecommerce_'):
+            repo.ejecutar(f'DROP TABLE {tabla}')
+    (Path(conexion.data_dir) / 'ecommerce_manifest.json').unlink(missing_ok=True)
+
+
+def preparar_catalogo(conexion, productos_csv, imagenes_dir):
     anterior = manifiesto(conexion.data_dir)
-    if anterior and n < len(anterior['asins']):
-        raise ValueError('La ampliación debe conservar todos los productos existentes')
-    filas = seleccionar(productos_csv, imagenes_dir, n, anterior['asins'] if anterior else ())
+    filas = seleccionar(productos_csv, imagenes_dir)
     firma = hashlib.sha256(json.dumps(filas, sort_keys=True).encode()).hexdigest()
     if anterior and anterior.get('firma_catalogo') == firma and anterior.get('catalogo_listo'):
         return anterior
+    # otro catalogo: la tienda vieja se rearma desde cero
+    if anterior and anterior.get('firma_catalogo') != firma:
+        borrar_tienda(conexion)
     # Una preparación interrumpida queda explícitamente fuera de servicio hasta reanudarla.
-    estado = {'version': 1, 'asins': [f['asin'] for f in filas], 'firma_catalogo': firma,
+    estado = {'version': 2, 'asins': [f['asin'] for f in filas], 'firma_catalogo': firma,
               'catalogo_listo': False, 'indices_listos': False, 'idioma': 'english',
               'moneda': 'USD', 'origen': 'Amazon Reviews 2023 Electronics',
               'textos_recortados': sum(f['texto_recortado'] for f in filas)}
@@ -127,18 +106,19 @@ def preparar_catalogo(conexion, productos_csv, imagenes_dir, n):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--data-dir', default='data')
-    parser.add_argument('--productos', default='data/amazon/productos.csv')
-    parser.add_argument('--imagenes', default='bench/data/amazon_img/imgs')
-    parser.add_argument('--size', type=int, default=1000)
+    parser.add_argument('--size', type=int, default=None, help='productos del catalogo curado (por defecto 10000)')
     parser.add_argument('--solo-catalogo', action='store_true')
     parser.add_argument('--modelo', type=int, default=100000)
     args = parser.parse_args()
-    if args.size < 1:
-        parser.error('--size debe ser positivo')
+    from recomendacion import catalogo
+    n = args.size or catalogo.N_PRODUCTOS
+    if n < len(catalogo.CATEGORIAS):
+        parser.error(f'--size debe ser al menos {len(catalogo.CATEGORIAS)}')
+    print(json.dumps(catalogo.construir(n), indent=2), flush=True)
     from text.ingesta import abrir_motor
     conexion = abrir_motor(args.data_dir)
     try:
-        resultado = preparar_catalogo(conexion, args.productos, args.imagenes, args.size)
+        resultado = preparar_catalogo(conexion, catalogo.DIR_TIENDA / 'productos.csv', catalogo.DIR_IMAGENES)
         if not args.solo_catalogo:
             from recomendacion.indices import preparar_indices
             resultado = preparar_indices(conexion, args.modelo)
