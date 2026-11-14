@@ -53,6 +53,32 @@ class Servicio:
             self._escala = (estado['firma_catalogo'], escala_global(scores))
         return self._escala[1]
 
+    def categorias(self, repo, firma):
+        # son las del catalogo curado; contarlas con GROUP BY recorre la tabla entera
+        from recomendacion.catalogo import CATEGORIAS
+        return list(CATEGORIAS)
+
+    def mas_vendidos(self, categoria='', limite=12):
+        """Productos con mas compradores reales, en todo el catalogo o en una categoria."""
+        self.verificar()
+        repo = Repositorio(self.conexion)
+        revision = repo.ejecutar('SELECT revision FROM ecommerce_estado WHERE id = 1')[0]['revision']
+        clave = (categoria, revision)
+        # el ranking solo cambia con una compra nueva (revision): se guarda hasta entonces
+        if clave not in getattr(self, '_vendidos', {}):
+            if categoria:
+                ids = [r['id'] for r in repo.ejecutar(f'SELECT id FROM ecommerce_productos WHERE categoria = {literal(categoria)}')]
+                filas = repo.ejecutar('SELECT id, compradores FROM ecommerce_compradores WHERE id IN ('
+                                      + ','.join(str(i) for i in ids) + ')') if ids else []
+            else:
+                filas = repo.ejecutar('SELECT id, compradores FROM ecommerce_compradores')
+            self._vendidos = {k: v for k, v in getattr(self, '_vendidos', {}).items() if k[1] == revision}
+            self._vendidos[clave] = sorted(filas, key=lambda r: (-r['compradores'], r['id']))[:50]
+        top = self._vendidos[clave][:limite]
+        productos = self.productos(repo, [r['id'] for r in top])
+        return {'productos': [{**productos[r['id']], 'compradores': r['compradores']} for r in top if r['id'] in productos],
+                'trazas': repo.trazas}
+
     def rango_precio(self, repo, firma):
         """Rango de ln(precio) del catalogo para Gower; se calcula una vez por catalogo."""
         if getattr(self, '_rango', (None,))[0] != firma:
@@ -94,7 +120,7 @@ class Servicio:
             filtros.append(f'precio_centavos >= {int(min_price)}')
         if max_price is not None:
             filtros.append(f'precio_centavos <= {int(max_price)}')
-        categorias = repo.ejecutar('SELECT categoria FROM ecommerce_productos GROUP BY categoria')
+        categorias = self.categorias(repo, estado['firma_catalogo'])
         siguiente = None
         truncada = False
         if search.strip():
@@ -130,14 +156,19 @@ class Servicio:
                 siguiente = f'{token}.{inicio + limit}'
             truncada = consulta['truncada']
         else:
+            # los ids del catalogo son consecutivos: sin filtros la pagina es un rango del B+ de id;
+            # con filtros, el indice de categoria o de precio trae los ids y se ordenan aca
+            # (ORDER BY id LIMIT haria un external sort de toda la tabla)
             filtros.append(f'id > {int(after_id)}')
-            filas_id = repo.ejecutar('SELECT id FROM ecommerce_productos WHERE ' + ' AND '.join(filtros) + f' ORDER BY id LIMIT {limit + 1}')
-            ids = [p['id'] for p in filas_id[:limit]]
+            if len(filtros) == 1:
+                filtros.append(f'id <= {int(after_id) + limit + 1}')
+            ordenados = sorted(p['id'] for p in repo.ejecutar('SELECT id FROM ecommerce_productos WHERE ' + ' AND '.join(filtros)))
+            ids = ordenados[:limit]
             productos = self.productos(repo, ids)
             filas = [productos[i] for i in ids]
-            if len(filas_id) > limit:
+            if len(ordenados) > limit:
                 siguiente = str(ids[-1])
-        return {'productos': filas, 'categorias': sorted(r['categoria'] for r in categorias),
+        return {'productos': filas, 'categorias': categorias,
                 'next_cursor': siguiente, 'busqueda_acotada': truncada, 'trazas': repo.trazas}
 
     def recomendar(self, pid, k=10, pesos=None, metodo='HNSW', metrica='cosine', texto='TF_IDF',

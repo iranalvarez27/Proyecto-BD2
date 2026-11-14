@@ -100,6 +100,29 @@ def crear_router(engine):
             return {'tiendas': tiendas_con_stock(repo, product_id, lat, lon), 'trazas': repo.trazas}
         return ejecutar(consultar)
 
+    @router.get('/best-sellers')
+    def best_sellers(category: str = Query(default='', max_length=120), limit: int = Query(default=12, ge=1, le=50)):
+        return ejecutar(servicio.mas_vendidos, category, limit)
+
+    @router.get('/stores')
+    def all_stores():
+        from recomendacion.disponibilidad import todas_las_tiendas
+        from recomendacion.repositorio import Repositorio
+        def consultar():
+            repo = Repositorio(engine.conexion)
+            return {'tiendas': todas_las_tiendas(repo), 'trazas': repo.trazas}
+        return ejecutar(consultar)
+
+    @router.get('/stores/nearby')
+    def nearby_stores(lat: float = Query(ge=-90, le=90), lon: float = Query(ge=-180, le=180),
+                      k: int = Query(default=5, ge=1, le=50)):
+        from recomendacion.disponibilidad import tiendas_cercanas
+        from recomendacion.repositorio import Repositorio
+        def consultar():
+            repo = Repositorio(engine.conexion)
+            return {'tiendas': tiendas_cercanas(repo, lat, lon, k), 'trazas': repo.trazas}
+        return ejecutar(consultar)
+
     @router.post('/interactions')
     def interaction(req: Interaccion):
         from recomendacion.compras import registrar_interaccion
