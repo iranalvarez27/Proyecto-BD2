@@ -51,3 +51,12 @@ def test_escala_global_ignora_extremos():
     assert escala_global(scores) == pytest.approx(.99, abs=.002)
     assert escala_global([]) is None
     assert escala_global([0.0, 0.0]) is None
+
+
+def test_combinar_busqueda_por_dos_campos():
+    from recomendacion.fusion import combinar
+    # 1 gana en nombre y queda segundo en contenido; 2 solo esta en contenido
+    r = combinar({'nombre': [(1, 8.0), (3, 2.0)], 'contenido': [(2, 9.0), (1, 6.0), (3, 1.0)]},
+                 {'nombre': .5, 'contenido': .5})
+    assert [pid for pid, _ in r] == [1, 2, 3]
+    assert r[0][1] == pytest.approx(.5 + .5 * 5 / 8)

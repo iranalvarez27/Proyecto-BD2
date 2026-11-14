@@ -1,20 +1,25 @@
 """Consultas de contenido y catálogo ejecutadas mediante el motor SQL."""
 from collections import OrderedDict
 import json
+import math
 from pathlib import Path
 import threading
 import time
 from urllib.parse import quote
 import uuid
 
-from recomendacion.fusion import MODALIDADES, fusionar
-from recomendacion import visual
+from recomendacion.fusion import MODALIDADES, combinar, fusionar
+from recomendacion import semantico, visual
+from recomendacion.indices import TABLA_SEMANTICA
 from recomendacion.preparar import manifiesto
 from recomendacion.repositorio import Repositorio, literal
 from recomendacion.metadata import gower, rango_log_precio
 from recomendacion.texto import terminos_relevantes
 
 PESOS = {'visual': .25, 'texto': .25, 'metadata': .25, 'compras': .25}
+PESOS_BUSQUEDA = {'bm25': .4, 'semantico': .4, 'popularidad': .2}
+# senal de texto del recomendador: More Like This (TF-IDF) y vecinos MiniLM, por partes iguales
+PESOS_TEXTO = {'lexico': .5, 'semantico': .5}
 
 
 class Servicio:
@@ -38,9 +43,10 @@ class Servicio:
         estado = self.estado()
         if not estado['listo']:
             raise ValueError('Prepare el catálogo con python3 -m recomendacion.preparar y reinicie el backend')
-        if estado.get('firma_visual') != visual.FIRMA:
-            raise ValueError('El modelo visual cambió. Reconstruya los índices de e-commerce antes de consultar.')
+        if estado.get('firma_visual') != visual.FIRMA or estado.get('firma_semantica') != semantico.FIRMA:
+            raise ValueError('Cambió un modelo de embeddings. Reconstruya los índices de e-commerce antes de consultar.')
         visual.registrar()
+        semantico.registrar()
         return estado
 
     def escala_compras(self, repo, estado):
@@ -52,6 +58,27 @@ class Servicio:
             scores = [r['score'] for r in repo.ejecutar('SELECT score FROM ecommerce_afinidades')]
             self._escala = (estado['firma_catalogo'], escala_global(scores))
         return self._escala[1]
+
+    def buscar(self, repo, texto, pesos=None, k_lexico=500, k_semantico=300):
+        # mas alla de los primeros cientos, min-max deja el score casi en 0: no llegan arriba
+        """Busqueda hibrida: BM25 y vecinos MiniLM sobre el mismo contenido, mas la popularidad
+        (log de compradores reales) para desempatar entre lo que el texto encontro."""
+        pesos = PESOS_BUSQUEDA if pesos is None else pesos
+        listas = {}
+        if pesos.get('bm25', 0) > 0:
+            listas['bm25'] = [(r['id'], r['score']) for r in repo.ejecutar(
+                f'SELECT id, SCORE() AS score FROM ecommerce_textos WHERE MATCH(contenido, {literal(texto)}) USING BM25 '
+                f'LIMIT {int(k_lexico)}')]
+        if pesos.get('semantico', 0) > 0:
+            listas['semantico'] = [(r['id'], r['score']) for r in repo.ejecutar(
+                f'SELECT id, SIMILARITY_SCORE() AS score FROM {TABLA_SEMANTICA} '
+                f'WHERE SIMILAR_TO({literal(texto)}, k={int(k_semantico)}) USING HNSW WITH METRIC=cosine')]
+        candidatos = sorted({i for lista in listas.values() for i, _ in lista})
+        if pesos.get('popularidad', 0) > 0 and candidatos:
+            compradores = {r['id']: r['compradores'] for r in repo.ejecutar(
+                'SELECT id, compradores FROM ecommerce_compradores WHERE id IN (' + ','.join(map(str, candidatos)) + ')')}
+            listas['popularidad'] = [(i, math.log1p(compradores.get(i, 0))) for i in candidatos]
+        return combinar(listas, pesos)
 
     def categorias(self, repo, firma):
         # son las del catalogo curado; contarlas con GROUP BY recorre la tabla entera
@@ -139,7 +166,7 @@ class Servicio:
                     raise ValueError('Cursor inválido')
             else:
                 token, inicio = uuid.uuid4().hex, 0
-                hallados = repo.ejecutar(f'SELECT id, SCORE() AS relevancia FROM ecommerce_textos WHERE MATCH(contenido, {literal(search)}) USING BM25')
+                hallados = [{'id': i, 'relevancia': v} for i, v in self.buscar(repo, search)]
                 permitidos = None
                 if filtros:
                     permitidos = {p['id'] for p in repo.ejecutar('SELECT id FROM ecommerce_productos WHERE ' + ' AND '.join(filtros))}
@@ -196,7 +223,8 @@ class Servicio:
             listas['compras'] = [(r['producto_destino'], r['score']) for r in afines]
         contenido = repo.ejecutar(f'SELECT contenido FROM ecommerce_textos WHERE id = {int(pid)}')
         indice_texto = self.conexion.catalog.get_table('ecommerce_textos').indices['contenido'][0]
-        palabras = terminos_relevantes(indice_texto, contenido[0]['contenido'] if contenido else base['nombre'])
+        texto_base = contenido[0]['contenido'] if contenido else base['nombre']
+        palabras = terminos_relevantes(indice_texto, texto_base)
         misma_categoria = repo.ejecutar('SELECT id, subcategoria, marca, precio_centavos FROM ecommerce_productos '
                                         f'WHERE categoria = {literal(base["categoria"])}')
         rango = self.rango_precio(repo, estado['firma_catalogo'])
@@ -211,9 +239,14 @@ class Servicio:
                     listas['visual'] = [(r['id'], r['score']) for r in filas if r['score'] > 0]
                 except (ValueError, OSError) as error:
                     errores['visual'] = str(error)
-            if pesos['texto'] > 0 and palabras:
-                filas = repo.ejecutar(f'SELECT id, SCORE() AS score FROM ecommerce_textos WHERE MATCH(contenido, {literal(" ".join(palabras))}) USING {texto} LIMIT {limites}')
-                listas['texto'] = [(r['id'], r['score']) for r in filas]
+            if pesos['texto'] > 0:
+                lexico = [(r['id'], r['score']) for r in repo.ejecutar(
+                    f'SELECT id, SCORE() AS score FROM ecommerce_textos WHERE MATCH(contenido, {literal(" ".join(palabras))}) '
+                    f'USING {texto} LIMIT {limites}')] if palabras else []
+                vecinos = [(r['id'], r['score']) for r in repo.ejecutar(
+                    f'SELECT id, SIMILARITY_SCORE() AS score FROM {TABLA_SEMANTICA} '
+                    f'WHERE SIMILAR_TO({literal(texto_base)}, k={limites}) USING HNSW WITH METRIC=cosine')]
+                listas['texto'] = combinar({'lexico': lexico, 'semantico': vecinos}, PESOS_TEXTO)
             faltan = {i for candidatos in listas.values() for i, _ in candidatos} - datos.keys()
             if faltan:
                 for p in repo.ejecutar('SELECT id, categoria, precio_centavos FROM ecommerce_productos WHERE id IN ('

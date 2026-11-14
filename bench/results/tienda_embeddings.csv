@@ -1,0 +1,87 @@
+tarea,configuracion,consulta,valor
+busqueda,bm25 + popularidad,mechanical keyboard,1.0
+busqueda,bm25 + popularidad,wireless mouse,0.7
+busqueda,bm25 + popularidad,gaming headset,0.5
+busqueda,bm25 + popularidad,wireless earbuds,1.0
+busqueda,bm25 + popularidad,noise cancelling headphones,0.9
+busqueda,bm25 + popularidad,bluetooth speaker,1.0
+busqueda,bm25 + popularidad,soundbar,1.0
+busqueda,bm25 + popularidad,mirrorless camera,0.6
+busqueda,bm25 + popularidad,dslr camera,0.6
+busqueda,bm25 + popularidad,action camera,1.0
+busqueda,bm25 + popularidad,camera lens,0.7
+busqueda,bm25 + popularidad,gaming monitor 27,1.0
+busqueda,bm25 + popularidad,graphics card,0.9
+busqueda,bm25 + popularidad,ddr4 ram,0.9
+busqueda,bm25 + popularidad,cpu processor,1.0
+busqueda,bm25 + popularidad,external ssd,0.9
+busqueda,bm25 + popularidad,usb flash drive,0.9
+busqueda,bm25 + popularidad,mesh wifi,0.9
+busqueda,bm25 + popularidad,network switch,0.8
+busqueda,bm25 + popularidad,drawing tablet,1.0
+busqueda,bm25 + popularidad,keyboard,0.4
+busqueda,embeddings,mechanical keyboard,1.0
+busqueda,embeddings,wireless mouse,0.9
+busqueda,embeddings,gaming headset,0.9
+busqueda,embeddings,wireless earbuds,1.0
+busqueda,embeddings,noise cancelling headphones,0.8
+busqueda,embeddings,bluetooth speaker,0.9
+busqueda,embeddings,soundbar,0.9
+busqueda,embeddings,mirrorless camera,1.0
+busqueda,embeddings,dslr camera,0.0
+busqueda,embeddings,action camera,0.8
+busqueda,embeddings,camera lens,0.9
+busqueda,embeddings,gaming monitor 27,1.0
+busqueda,embeddings,graphics card,1.0
+busqueda,embeddings,ddr4 ram,1.0
+busqueda,embeddings,cpu processor,1.0
+busqueda,embeddings,external ssd,0.9
+busqueda,embeddings,usb flash drive,1.0
+busqueda,embeddings,mesh wifi,0.9
+busqueda,embeddings,network switch,1.0
+busqueda,embeddings,drawing tablet,1.0
+busqueda,embeddings,keyboard,1.0
+busqueda,embeddings + popularidad,mechanical keyboard,1.0
+busqueda,embeddings + popularidad,wireless mouse,0.9
+busqueda,embeddings + popularidad,gaming headset,1.0
+busqueda,embeddings + popularidad,wireless earbuds,1.0
+busqueda,embeddings + popularidad,noise cancelling headphones,0.8
+busqueda,embeddings + popularidad,bluetooth speaker,0.9
+busqueda,embeddings + popularidad,soundbar,0.9
+busqueda,embeddings + popularidad,mirrorless camera,1.0
+busqueda,embeddings + popularidad,dslr camera,0.0
+busqueda,embeddings + popularidad,action camera,0.8
+busqueda,embeddings + popularidad,camera lens,0.9
+busqueda,embeddings + popularidad,gaming monitor 27,1.0
+busqueda,embeddings + popularidad,graphics card,1.0
+busqueda,embeddings + popularidad,ddr4 ram,1.0
+busqueda,embeddings + popularidad,cpu processor,1.0
+busqueda,embeddings + popularidad,external ssd,0.7
+busqueda,embeddings + popularidad,usb flash drive,1.0
+busqueda,embeddings + popularidad,mesh wifi,0.9
+busqueda,embeddings + popularidad,network switch,1.0
+busqueda,embeddings + popularidad,drawing tablet,1.0
+busqueda,embeddings + popularidad,keyboard,1.0
+busqueda,bm25 + embeddings + popularidad,mechanical keyboard,1.0
+busqueda,bm25 + embeddings + popularidad,wireless mouse,0.9
+busqueda,bm25 + embeddings + popularidad,gaming headset,0.9
+busqueda,bm25 + embeddings + popularidad,wireless earbuds,1.0
+busqueda,bm25 + embeddings + popularidad,noise cancelling headphones,0.9
+busqueda,bm25 + embeddings + popularidad,bluetooth speaker,1.0
+busqueda,bm25 + embeddings + popularidad,soundbar,0.9
+busqueda,bm25 + embeddings + popularidad,mirrorless camera,1.0
+busqueda,bm25 + embeddings + popularidad,dslr camera,0.5
+busqueda,bm25 + embeddings + popularidad,action camera,0.8
+busqueda,bm25 + embeddings + popularidad,camera lens,0.9
+busqueda,bm25 + embeddings + popularidad,gaming monitor 27,1.0
+busqueda,bm25 + embeddings + popularidad,graphics card,1.0
+busqueda,bm25 + embeddings + popularidad,ddr4 ram,1.0
+busqueda,bm25 + embeddings + popularidad,cpu processor,1.0
+busqueda,bm25 + embeddings + popularidad,external ssd,0.9
+busqueda,bm25 + embeddings + popularidad,usb flash drive,1.0
+busqueda,bm25 + embeddings + popularidad,mesh wifi,1.0
+busqueda,bm25 + embeddings + popularidad,network switch,1.0
+busqueda,bm25 + embeddings + popularidad,drawing tablet,1.0
+busqueda,bm25 + embeddings + popularidad,keyboard,1.0
+recomendacion,more like this (tf-idf),,0.8433
+recomendacion,embeddings nombre + descripcion,,0.9083

@@ -1,0 +1,81 @@
+configuracion,consulta,subcategoria,p_at_10
+bm25,mechanical keyboard,Keyboards,1.0
+bm25,wireless mouse,Mice,0.6
+bm25,gaming headset,Headsets,0.5
+bm25,wireless earbuds,Earbuds,1.0
+bm25,noise cancelling headphones,Headphones,0.9
+bm25,bluetooth speaker,Bluetooth Speakers,1.0
+bm25,soundbar,Sound Bars,1.0
+bm25,mirrorless camera,Mirrorless,0.4
+bm25,dslr camera,DSLR,0.6
+bm25,action camera,Action Cameras,1.0
+bm25,camera lens,Lenses,0.8
+bm25,gaming monitor 27,Monitors,1.0
+bm25,graphics card,Graphics Cards,0.8
+bm25,ddr4 ram,Memory,1.0
+bm25,cpu processor,Processors,1.0
+bm25,external ssd,External SSDs,1.0
+bm25,usb flash drive,USB Flash Drives,0.9
+bm25,mesh wifi,Mesh Wi-Fi,0.6
+bm25,network switch,Switches,1.0
+bm25,drawing tablet,Graphics Tablets,1.0
+bm25 + popularidad,mechanical keyboard,Keyboards,1.0
+bm25 + popularidad,wireless mouse,Mice,0.7
+bm25 + popularidad,gaming headset,Headsets,0.5
+bm25 + popularidad,wireless earbuds,Earbuds,1.0
+bm25 + popularidad,noise cancelling headphones,Headphones,0.9
+bm25 + popularidad,bluetooth speaker,Bluetooth Speakers,1.0
+bm25 + popularidad,soundbar,Sound Bars,1.0
+bm25 + popularidad,mirrorless camera,Mirrorless,0.6
+bm25 + popularidad,dslr camera,DSLR,0.7
+bm25 + popularidad,action camera,Action Cameras,1.0
+bm25 + popularidad,camera lens,Lenses,0.8
+bm25 + popularidad,gaming monitor 27,Monitors,1.0
+bm25 + popularidad,graphics card,Graphics Cards,0.9
+bm25 + popularidad,ddr4 ram,Memory,0.9
+bm25 + popularidad,cpu processor,Processors,1.0
+bm25 + popularidad,external ssd,External SSDs,1.0
+bm25 + popularidad,usb flash drive,USB Flash Drives,0.9
+bm25 + popularidad,mesh wifi,Mesh Wi-Fi,0.9
+bm25 + popularidad,network switch,Switches,1.0
+bm25 + popularidad,drawing tablet,Graphics Tablets,1.0
+semantico (MiniLM),mechanical keyboard,Keyboards,0.8
+semantico (MiniLM),wireless mouse,Mice,1.0
+semantico (MiniLM),gaming headset,Headsets,0.9
+semantico (MiniLM),wireless earbuds,Earbuds,0.9
+semantico (MiniLM),noise cancelling headphones,Headphones,0.9
+semantico (MiniLM),bluetooth speaker,Bluetooth Speakers,1.0
+semantico (MiniLM),soundbar,Sound Bars,0.9
+semantico (MiniLM),mirrorless camera,Mirrorless,1.0
+semantico (MiniLM),dslr camera,DSLR,0.1
+semantico (MiniLM),action camera,Action Cameras,0.9
+semantico (MiniLM),camera lens,Lenses,0.9
+semantico (MiniLM),gaming monitor 27,Monitors,1.0
+semantico (MiniLM),graphics card,Graphics Cards,1.0
+semantico (MiniLM),ddr4 ram,Memory,1.0
+semantico (MiniLM),cpu processor,Processors,1.0
+semantico (MiniLM),external ssd,External SSDs,0.9
+semantico (MiniLM),usb flash drive,USB Flash Drives,1.0
+semantico (MiniLM),mesh wifi,Mesh Wi-Fi,0.9
+semantico (MiniLM),network switch,Switches,1.0
+semantico (MiniLM),drawing tablet,Graphics Tablets,1.0
+bm25 + semantico + popularidad,mechanical keyboard,Keyboards,1.0
+bm25 + semantico + popularidad,wireless mouse,Mice,0.8
+bm25 + semantico + popularidad,gaming headset,Headsets,0.8
+bm25 + semantico + popularidad,wireless earbuds,Earbuds,1.0
+bm25 + semantico + popularidad,noise cancelling headphones,Headphones,0.9
+bm25 + semantico + popularidad,bluetooth speaker,Bluetooth Speakers,1.0
+bm25 + semantico + popularidad,soundbar,Sound Bars,0.9
+bm25 + semantico + popularidad,mirrorless camera,Mirrorless,0.9
+bm25 + semantico + popularidad,dslr camera,DSLR,0.8
+bm25 + semantico + popularidad,action camera,Action Cameras,1.0
+bm25 + semantico + popularidad,camera lens,Lenses,1.0
+bm25 + semantico + popularidad,gaming monitor 27,Monitors,1.0
+bm25 + semantico + popularidad,graphics card,Graphics Cards,1.0
+bm25 + semantico + popularidad,ddr4 ram,Memory,1.0
+bm25 + semantico + popularidad,cpu processor,Processors,1.0
+bm25 + semantico + popularidad,external ssd,External SSDs,1.0
+bm25 + semantico + popularidad,usb flash drive,USB Flash Drives,1.0
+bm25 + semantico + popularidad,mesh wifi,Mesh Wi-Fi,0.9
+bm25 + semantico + popularidad,network switch,Switches,1.0
+bm25 + semantico + popularidad,drawing tablet,Graphics Tablets,1.0

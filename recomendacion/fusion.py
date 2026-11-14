@@ -49,3 +49,15 @@ def fusionar(listas, pesos, escalas=None):
         p['aportes_pct'] = {m: 100 * p['aportes'].get(m, 0) / p['score_total'] if p['score_total'] else 0.0
                             for m in MODALIDADES}
     return sorted(productos.values(), key=lambda p: (-p['score_total'], p['id']))
+
+
+def combinar(listas: dict, pesos: dict) -> list:
+    """Combinacion convexa de listas (id, score) con min-max por lista; para la barra de busqueda."""
+    activas = [n for n in pesos if listas.get(n) and pesos[n] > 0]
+    total = sum(pesos[n] for n in activas)
+    scores = {}
+    for nombre in activas:
+        unicos = dict(reversed(listas[nombre]))
+        for pid, valor in zip(unicos, normalizar(list(unicos.values()))):
+            scores[pid] = scores.get(pid, 0.0) + pesos[nombre] / total * valor
+    return sorted(scores.items(), key=lambda par: (-par[1], par[0]))
