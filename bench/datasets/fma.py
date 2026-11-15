@@ -468,32 +468,41 @@ def main(argv=None):
 
 
     pistas_teoricas = math.ceil(max_segmentos / SEGMENTOS_POR_PISTA)
-    margen_pistas = max(15, math.ceil(pistas_teoricas * 0.12))
-    pistas_para_base = min(len(pistas) - 1, pistas_teoricas + margen_pistas)
-    pistas_para_consultas = min(args.consultas, max(1, len(pistas) - pistas_para_base))
+    margen_consultas = max(args.consultas + 25, 125)
+    reserva_cola = min(max(0, len(pistas) - 2), margen_consultas - 1)
+    pistas_para_base = min(len(pistas) - 1 - reserva_cola, pistas_teoricas + max(15, math.ceil(pistas_teoricas * 0.12)))
 
-    pistas_consulta = pistas[:pistas_para_consultas]
-    pistas_base = pistas[pistas_para_consultas : pistas_para_consultas + pistas_para_base]
+    pistas_consulta = [pistas[0]] + pistas[1 + pistas_para_base :]
+    pistas_base = pistas[1 : 1 + pistas_para_base]
 
     from multimedia.mfcc import segmentar
 
 
     consultas = []
-    for p in pistas_consulta[: args.consultas]:
+    for p in pistas_consulta:
+        if len(consultas) >= args.consultas:
+            break
         try:
-            n_seg = len(segmentar(p["ruta"]))
+            segs = segmentar(p["ruta"])
+            n_seg = len(segs)
         except Exception:
             n_seg = 0
         if n_seg == 0:
             print(f"[fma] Consulta descartada, no se pudo decodificar: {p['ruta']}")
             continue
-        consultas.append(_fila_segmento(p, azar.randrange(n_seg)))
+        seg_idx = azar.randrange(n_seg)
+        if len(segs[seg_idx]) == 0:
+            continue
+        consultas.append(_fila_segmento(p, seg_idx))
 
     segmentos_base = expandir_segmentos(pistas_base)
     guardar_pistas_csv(dir_salida / "objetos.csv", pistas_base)
     guardar_segmentos_csv(dir_salida / "segmentos.csv", segmentos_base[:max_segmentos])
     guardar_segmentos_csv(dir_salida / "consultas.csv", consultas)
 
+    from multimedia import bovw
+
+    por_track = {str(p["track_id"]): p for p in pistas_base}
     for t in tamanos:
         if t > len(segmentos_base):
             print(f"[fma] AVISO: la tabla de {t:,} segmentos no se puede armar: la variante "
@@ -501,7 +510,13 @@ def main(argv=None):
                   f"Use --variante medium para llegar a 100k.")
         if t <= len(segmentos_base):
             etiqueta = f"{t // 1000}k" if t % 1000 == 0 else str(t)
-            guardar_segmentos_csv(dir_salida / f"segmentos_{etiqueta}.csv", segmentos_base[:t])
+            try:
+                reales = segmentos_de_coleccion(bovw.cargar_coleccion("audio", t)[1], por_track)
+            except Exception:
+                reales = segmentos_base[:t]
+            guardar_segmentos_csv(dir_salida / f"segmentos_{etiqueta}.csv", reales)
+            if t == max_segmentos:
+                guardar_segmentos_csv(dir_salida / "segmentos.csv", reales)
             base_t = math.ceil(t / SEGMENTOS_POR_PISTA)
             n_pistas_t = min(len(pistas_base), base_t + max(15, math.ceil(base_t * 0.12)))
             guardar_pistas_csv(dir_salida / f"objetos_{etiqueta}.csv", pistas_base[:n_pistas_t])
