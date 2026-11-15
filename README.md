@@ -156,6 +156,14 @@ Todos los archivos de datos se guardan en `data/` y no se suben al repositorio. 
 
 Si no tienes pnpm, se puede activar con `corepack enable` (viene con Node) o instalar con `npm install -g pnpm`.
 
+### Opción rápida: Docker
+
+```bash
+docker compose up --build
+```
+
+Levanta PostgreSQL, genera los datasets, prepara la tienda y arranca el backend (`http://localhost:8000/docs`) y el frontend (`http://localhost:8080`). Las variables opcionales (`TAMANOS`, `FMA_VARIANTE`, `CORRER_EXPERIMENTOS`, `SEED`, `TIENDA`) están descritas al inicio de `docker-compose.yml`. Para instalar a mano, seguir los pasos 1 a 3.
+
 ### 1. Clonar el repositorio
 
 ```bash
@@ -702,42 +710,66 @@ python tools/smoke_visualizations.py
 
 ## Parte 5: Sistema de Recomendación E-commerce Híbrido (Opción B)
 
-La pestaña **Tienda** integra en una sola experiencia de comercio electrónico las 4 partes del motor: índices relacionales (`B+ Tree`, `Extendible Hash`) y transacciones con control de concurrencia, índice espacial (`R-Tree`), índice invertido de texto (`SPIMI` con `BM25` y `TF-IDF`) e índices vectoriales multimedia (`BoVW` con `HNSW`, `IVF` y `EXACT`).
+Tienda de electrónica ubicada en EE. UU. (interfaz en inglés, precios en USD) que usa las 4 partes del motor: índices relacionales (`B+ Tree`, `Extendible Hash`) y transacciones, índice espacial (`R-Tree`), índice invertido (`SPIMI` con `BM25` y `TF-IDF`) e índices vectoriales (`HNSW`, `IVF`, `EXACT`). El backend vive en este repositorio (`recomendacion/` y `backend/ecommerce_recommendation.py`); el front se construye en un repositorio aparte siguiendo `recomendacion/FRONT.md`.
 
-### 2.5.1 Tablas e índices del subsistema E-commerce
+| Dato | Origen |
+|---|---|
+| ~30 000 productos en 9 categorías, con foto, descripción, marca y precio | Amazon Reviews 2023, categoría Electronics (McAuley Lab) |
+| 6,6 millones de compras de 4,7 millones de usuarios | Reseñas del mismo dataset, agrupadas por `user_id` |
+| 1000 sucursales en 581 ciudades e inventario por sucursal | Simuladas sobre el Gazetteer y la población del Censo de EE. UU. 2023 |
 
-| Tabla | Esquema principal | Índices en el motor | Rol en la aplicación |
-|---|---|---|---|
-| `ecommerce_productos` | `id`, `asin`, `nombre`, `categoria`, `subcategoria`, `marca`, `precio_centavos`, `moneda`, `rating` | `B+ Tree` (`id`), `Hash` (`categoria`, `subcategoria`), `B+ Tree` (`precio_centavos`) | Catálogo maestro, filtros por categoría y rangos de precio. |
-| `ecommerce_textos` | `id`, `contenido` | `B+ Tree` (`id`), `INVERTED` SPIMI en inglés (`contenido`) | Búsqueda y similitud textual con `BM25` y `TF_IDF`. |
-| `ecommerce_imagenes_hnsw` / `ecommerce_imagenes_ivf` | `id`, `ruta` | `B+ Tree` (`id`), `HNSW` / `IVF` (`ruta`) | Similitud visual SIFT + BoVW (dimensión 512) con métricas `cosine`, `euclidean` y `dot`. |
-| `ecommerce_tiendas` | `id`, `nombre`, `ubicacion (POINT)` | `B+ Tree` (`id`), `R-Tree` (`ubicacion`) | Búsqueda espacial k-NN best-first (`distancia_haversine`) de sucursales cercanas con stock. |
-| `ecommerce_inventario`, `ecommerce_interacciones`, `ecommerce_afinidades`, `ecommerce_operaciones`, `ecommerce_estado` | Inventario por sucursal, historial de vistas/compras y matriz item-item | `B+ Tree` (`id`), `Hash` (`producto_id`, `usuario_id`, `producto_origen`, `solicitud`) | Compras transaccionales e idempotentes (`BEGIN` / `COMMIT` / `ROLLBACK` con locks `X`) y recomendación por compras compartidas. |
+### 2.5.1 Preparación
 
-### 2.5.2 Preparación del catálogo y los índices
-
-Con el backend detenido, ejecuta:
+Con el backend detenido, desde la raíz del repositorio:
 
 ```bash
-python3 -m recomendacion.preparar --size 1000
+python3 -m recomendacion.preparar
 ```
 
-Este comando selecciona de forma determinística y reanudable los productos de `data/amazon/productos.csv` con imagen válida en `bench/data/amazon_img/imgs`, construye los índices `B+ Tree`, `Hash`, `R-Tree`, `SPIMI`, `HNSW` e `IVF`, e inicializa el inventario y las interacciones semilla.
+Un solo comando hace todo y es reanudable: si se corta, se vuelve a correr y sigue donde quedó; si ya está todo listo, termina en unos 15 s.
 
-### 2.5.3 Fusión híbrida y API REST
+1. Descarga el dataset (~8 GB en `data/raw/`) y los modelos ONNX (ResNet-50 y all-MiniLM-L6-v2, en `data/modelos/`).
+2. Arma el catálogo curado (`data/tienda/`) y baja las fotos (`bench/data/amazon_img/imgs/`).
+3. Crea las tablas e índices del motor, calcula las co-compras y genera las sucursales y el inventario.
 
-El recomendador combina las 4 señales (`visual`, `texto`, `metadata`, `compras`) mediante **Reciprocal Rank Fusion Ponderado (Weighted RRF, $k=60$)**, devolviendo el porcentaje exacto de aporte de cada modalidad (`aportes_pct`) y las trazas SQL con sus planes de ejecución:
+La primera vez tarda ~45 min en CPU y ocupa ~14 GB en disco. Con `--size N` se prepara un catálogo más chico para probar.
+
+Con Docker, el servicio `seed` corre este mismo comando antes de levantar el backend (`TIENDA=0` lo omite).
+
+### 2.5.2 Tablas e índices
+
+| Tabla | Índices | Uso |
+|---|---|---|
+| `ecommerce_productos` | `B+ Tree` (`id`, `precio_centavos`), `Hash` (`categoria`, `subcategoria`) | Catálogo, filtros por categoría y precio |
+| `ecommerce_textos` | `INVERTED` SPIMI en inglés (`contenido`) | Búsqueda con `BM25` y similitud textual con `TF_IDF` |
+| `ecommerce_textos_semanticos` | `HNSW` de embeddings MiniLM (`contenido`) | Búsqueda semántica y similitud textual |
+| `ecommerce_imagenes_hnsw` / `ecommerce_imagenes_ivf` | `HNSW` / `IVF` de embeddings ResNet-50 de 2048 dimensiones (`ruta`) | Similitud visual |
+| `ecommerce_tiendas` | `R-Tree` (`ubicacion`) | Sucursales cercanas (k-NN) |
+| `ecommerce_inventario`, `ecommerce_afinidades`, `ecommerce_operaciones`, `ecommerce_interacciones`, `ecommerce_estado` | `B+ Tree` y `Hash` | Stock por sucursal, co-compras item-item, compras transaccionales e idempotentes |
+
+### 2.5.3 Recomendación y búsqueda
+
+- **Recomendación** ("You may also like"): combinación convexa de 4 señales (`visual`, `texto`, `metadata`, `compras`), con pesos 0,25 por defecto, y devuelve cuánto aportó cada una (`aportes_pct`). El texto mezcla TF-IDF y embeddings, la metadata usa la distancia de Gower y las compras, similitud coseno item-item con encogimiento.
+- **Búsqueda**: BM25 + MiniLM + popularidad (0,4 / 0,4 / 0,2).
+- Pesos y parámetros en `recomendacion/fusion.py` y `recomendacion/parametros.yaml`; experimentos en `bench/experiments/tienda_*.py`.
+
+### 2.5.4 API REST
+
+Prefijo `/api/ecommerce`. Todas las respuestas traen `trazas` con el SQL, el plan y el tiempo de cada consulta.
 
 | Endpoint | Función |
 |---|---|
-| `GET /api/ecommerce/status` | Estado del manifiesto, conteo de productos e índices activos. |
-| `GET /api/ecommerce/catalog` | Catálogo paginado por cursor con filtros por texto (`BM25`), categoría (`Hash`) y rango de precios (`B+ Tree`). |
-| `GET /api/ecommerce/products/{id}` | Detalle completo del producto y descripción. |
-| `POST /api/ecommerce/recommend` | Recomendación híbrida Top-$K$, sucursales cercanas con stock (`R-Tree`) y trazabilidad SQL. |
-| `POST /api/ecommerce/interactions` | Registra eventos de vista o adición al carrito. |
-| `POST /api/ecommerce/purchases` | Registra compras atómicas e idempotentes, descuenta stock y actualiza `ecommerce_afinidades`. |
+| `GET /status` | Si la tienda está preparada y qué índices hay |
+| `GET /catalog` | Catálogo y búsqueda, con filtros por categoría y precio y paginación por cursor |
+| `GET /products/{id}` | Ficha del producto |
+| `POST /recommend` | Recomendaciones con aporte de cada señal y sucursales cercanas con stock |
+| `GET /products/{id}/stores` | Sucursales cercanas con stock de un producto |
+| `GET /best-sellers` | Más vendidos, global o por categoría |
+| `GET /stores`, `GET /stores/nearby` | Todas las sucursales y las k más cercanas a un punto |
+| `POST /interactions` | Registra vistas y agregados al carrito |
+| `POST /purchases` | Compra atómica e idempotente: descuenta stock y actualiza las co-compras |
 
-### 2.5.4 Verificación
+### 2.5.5 Verificación
 
 ```bash
 pytest recomendacion/ -q
