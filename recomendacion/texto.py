@@ -28,14 +28,10 @@ def terminos_relevantes(indice, texto, max_terminos=MAX_TERMINOS, min_tf=MIN_TF,
         conteo[termino] += 1
         palabra.setdefault(termino, token)
     n = indice.total_docs()
-    for minimo in (min_tf, 1):
-        # un texto corto puede no repetir ningun termino: entonces se acepta tf 1
-        pesos = []
-        for termino, tf in conteo.items():
-            df = indice.df(termino)
-            if tf >= minimo and df >= min_df:
-                pesos.append((tf_log(tf) * idf(n, df), termino))
-        if pesos:
-            break
+    pesos = []
+    for termino, tf in conteo.items():
+        df = indice.df(termino)
+        if tf >= min_tf and df >= min_df:
+            pesos.append((tf_log(tf) * idf(n, df), termino))
     pesos.sort(key=lambda p: (-p[0], p[1]))
     return [palabra[t] for _, t in pesos[:max_terminos]]

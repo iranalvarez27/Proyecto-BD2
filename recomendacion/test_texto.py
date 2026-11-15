@@ -21,9 +21,9 @@ def test_prioriza_terminos_repetidos_y_raros_en_la_coleccion():
     assert terminos_relevantes(indice, texto) == ['waterproof', 'speaker', 'bluetooth']
 
 
-def test_texto_corto_sin_repeticiones_acepta_tf_1():
+def test_texto_sin_terminos_repetidos_no_da_terminos():
     indice = IndiceFalso({'webcam': 20, 'hd': 100})
-    assert terminos_relevantes(indice, 'HD webcam') == ['webcam', 'hd']
+    assert terminos_relevantes(indice, 'HD webcam') == []
 
 
 def test_limite_de_terminos():
