@@ -77,6 +77,13 @@ class BPlusTree(Index):
             return []
         return self._range_raw(k_lo, k_hi)
 
+    def iter_range(self, low: Any, high: Any):
+        """range_search perezoso, en orden de clave: lee las hojas a medida que se piden."""
+        k_lo = encode(low, self._key_type)
+        k_hi = encode(high, self._key_type)
+        if k_lo <= k_hi:
+            yield from self._iter_range_raw(k_lo, k_hi)
+
     def delete(self, key: Any, rid: RID) -> bool:
         return self._delete_raw(encode(key, self._key_type), rid)
 
@@ -470,21 +477,22 @@ class BPlusTree(Index):
         return page_id, node
 
     def _range_raw(self, k_lo: bytes, k_hi: bytes) -> list:
+        return list(self._iter_range_raw(k_lo, k_hi))
+
+    def _iter_range_raw(self, k_lo: bytes, k_hi: bytes):
         _, node = self._descend(k_lo)
         i = bisect_left(node.keys, k_lo)
-        out = []
         while True:
             if i == node.count:
                 if node.next_page == NIL:
-                    break
+                    return
                 node = self._read_node(node.next_page)
                 i = 0
                 continue
             if node.keys[i] > k_hi:
-                break
-            out.append(node.payloads[i])
+                return
+            yield node.payloads[i]
             i += 1
-        return out
 
     def scan(self):
         node = self._read_node(self._leftmost_leaf())

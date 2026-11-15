@@ -1112,13 +1112,11 @@ class Conexion:
 
             if usa_indice_orden and tipo_indice == "bplus":
                 self.plan.append(f"lectura ordenada por indice bplus no agrupado sobre '{nodo.order_by.columna}'")
-                filas = []
-                for clave, rid in indice.scan():
-                    record = info.storage.read(rid, info.schema)
-                    if record is not None:
-                        filas.append(dict(zip(nombres_col, record.values)))
+                rids = (rid for _clave, rid in indice.scan())
                 if nodo.order_by.descendente:
-                    filas.reverse()
+                    # las hojas solo enlazan a la siguiente: el descendente arma la lista
+                    rids = list(rids)[::-1]
+                filas = self._leer_en_orden(info, rids, nombres_col)
                 orden_ya_resuelto = True
             elif nodo.order_by is not None and info.tipo_storage == STORAGE_SEQUENTIAL and nodo.order_by.columna == info.key_column:
                 self.plan.append(f"lectura secuencial ordenada de '{info.nombre}' por clave '{nodo.order_by.columna}'")
@@ -1179,6 +1177,16 @@ class Conexion:
                         fila = dict(zip(nombres_col, r.values))
                         if self.cumple_where(where, fila):
                             filas.append(fila)
+                elif tipo_r == "bplus" and (nodo.order_by is not None and nodo.order_by.funcion is None
+                                            and nodo.order_by.columna == col_r):
+                    self.plan.append(f"busqueda por rango en indice bplus no agrupado sobre '{col_r}' [{low} a {high}] "
+                                     "en el orden del indice")
+                    if nodo.order_by.descendente:
+                        rids = indice_r.range_search(low, high)[::-1]
+                    else:
+                        rids = indice_r.iter_range(low, high)
+                    filas = self._leer_en_orden(info, rids, nombres_col, where)
+                    orden_ya_resuelto = True
                 elif tipo_r == "bplus":
                     self.plan.append(f"busqueda por rango en indice bplus no agrupado sobre '{col_r}' [{low} a {high}]")
                     rids = RidBitmap.from_rids(indice_r.range_search(low, high))
@@ -1203,6 +1211,16 @@ class Conexion:
     # ------------------------------------------------------------------
     # bitmap: AND / OR entre indices y lectura de cada pagina una sola vez
     # ------------------------------------------------------------------
+
+    def _leer_en_orden(self, info: TableInfo, rids, nombres_col, where=None):
+        # perezoso: con LIMIT, _finalizar_select deja de leer al completar las filas
+        for rid in rids:
+            record = info.storage.read(rid, info.schema)
+            if record is None:
+                continue
+            fila = dict(zip(nombres_col, record.values))
+            if where is None or self.cumple_where(where, fila):
+                yield fila
 
     def _leer_bitmap(self, info: TableInfo, bitmap: RidBitmap):
         if info.tipo_storage == STORAGE_HEAP:
