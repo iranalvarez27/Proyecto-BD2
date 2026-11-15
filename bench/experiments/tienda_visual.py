@@ -28,7 +28,7 @@ from recomendacion.visual import MODOS, ExtractorCNN
 DIR_RESULTS = BENCH_DIR / "results"
 CSV_RESULTADOS = DIR_RESULTS / "tienda_visual.csv"
 PNG_GALERIA = DIR_RESULTS / "tienda_visual_galeria.png"
-GALERIA_CATEGORIAS = ("Audio", "Cameras", "Laptops & Computers", "Monitors", "Peripherals", "Smartwatches")
+GALERIA_CATEGORIAS = ("Audio", "Cameras", "Monitors", "Peripherals")
 GALERIA_DESCRIPTORES = {"sift": "SIFT-BoVW", "cnn_estirar": "ResNet-50"}
 DESCRIPTORES = ("sift",) + tuple(f"cnn_{m}" for m in MODOS)
 K = 10

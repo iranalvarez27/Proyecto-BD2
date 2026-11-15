@@ -1,6 +1,6 @@
 descriptor,n,k,misma_subcategoria,misma_categoria
-sift,10000,10,0.3538,0.4627
-cnn_relleno,10000,10,0.741,0.8492
-cnn_recorte,10000,10,0.6956,0.817
-cnn_estirar,10000,10,0.7438,0.8517
-cnn_original,10000,10,0.7436,0.8522
+sift,29938,10,0.3266,0.4537
+cnn_relleno,29938,10,0.7328,0.8417
+cnn_recorte,29938,10,0.6878,0.811
+cnn_estirar,29938,10,0.734,0.8443
+cnn_original,29938,10,0.7336,0.8433
