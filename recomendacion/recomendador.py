@@ -18,7 +18,7 @@ from recomendacion.texto import terminos_relevantes
 
 PESOS = {'visual': .25, 'texto': .25, 'metadata': .25, 'compras': .25}
 PESOS_BUSQUEDA = {'bm25': .4, 'semantico': .4, 'popularidad': .2}
-# senal de texto del recomendador: More Like This (TF-IDF) y vecinos MiniLM, por partes iguales
+# senal de texto del recomendador: More Like This (BM25) y vecinos MiniLM, por partes iguales
 PESOS_TEXTO = {'lexico': .5, 'semantico': .5}
 
 
@@ -198,7 +198,7 @@ class Servicio:
         return {'productos': filas, 'categorias': categorias,
                 'next_cursor': siguiente, 'busqueda_acotada': truncada, 'trazas': repo.trazas}
 
-    def recomendar(self, pid, k=10, pesos=None, metodo='HNSW', metrica='cosine', texto='TF_IDF',
+    def recomendar(self, pid, k=10, pesos=None, metodo='HNSW', metrica='cosine', texto='BM25',
                    categoria='', min_price=None, max_price=None, lat=None, lon=None, solo_stock=False):
         inicio = time.perf_counter()
         estado = self.verificar()
