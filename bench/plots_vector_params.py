@@ -1,6 +1,5 @@
 import argparse
 import csv
-import math
 import os
 from collections import defaultdict
 
@@ -13,35 +12,40 @@ import yaml
 BENCH = os.path.dirname(os.path.abspath(__file__))
 ENTRADA = os.path.join(BENCH, "results", "vector_params.csv")
 
-METRICAS = {"cosine": "coseno", "euclidean": "euclidiana"}
-INDICES = (("HNSW", "efSearch", "#2a78d6", "o"), ("IVF", "nprobe", "#eb6834", "s"))
-INK_PRIMARY = "#0b0b0b"
-INK_SECONDARY = "#52514e"
-INK_MUTED = "#898781"
-GRIDLINE = "#e1e0d9"
-BASELINE = "#c3c2b7"
-SURFACE = "#fcfcfb"
+INDICES = (("HNSW", "efSearch"), ("IVF", "nprobe"))
+# un tono por tamano, del mas claro al mas oscuro
+TAMANOS = {1000: ("#9DB4CC", "o"), 10000: ("#3F6C8F", "s"), 100000: ("#1E3A5F", "D")}
+GRIS = "#6C7480"
 
 plt.rcParams.update({
-    "figure.facecolor": SURFACE,
-    "axes.facecolor": SURFACE,
-    "axes.edgecolor": BASELINE,
-    "axes.labelcolor": INK_SECONDARY,
-    "axes.titlecolor": INK_PRIMARY,
-    "text.color": INK_PRIMARY,
-    "xtick.color": INK_MUTED,
-    "ytick.color": INK_MUTED,
-    "grid.color": GRIDLINE,
-    "font.size": 10,
-    "font.family": "sans-serif",
-    "grid.linewidth": 0.6,
-    "axes.linewidth": 0.8,
+    "font.family": "serif",
+    "font.serif": ["CMU Serif", "Latin Modern Roman", "DejaVu Serif"],
+    "mathtext.fontset": "cm",
+    "font.size": 9,
+    "axes.titlesize": 9,
+    "axes.labelsize": 9,
+    "legend.fontsize": 8,
+    "xtick.labelsize": 8,
+    "ytick.labelsize": 8,
+    "axes.edgecolor": "#2A2F36",
+    "axes.linewidth": 0.6,
+    "axes.grid": True,
+    "grid.color": "#D9DCE0",
+    "grid.linewidth": 0.5,
+    "lines.linewidth": 1.4,
+    "lines.markersize": 4.5,
     "legend.frameon": False,
+    "savefig.dpi": 300,
+    "savefig.bbox": "tight",
 })
 
 
 def _tamano(n: int) -> str:
-    return f"{n // 1000}k" if n % 1000 == 0 else str(n)
+    return f"{n // 1000}K" if n % 1000 == 0 else str(n)
+
+
+def _coma(v, _pos=None) -> str:
+    return f"{v:g}".replace(".", ",")
 
 
 def cargar(ruta):
@@ -62,64 +66,37 @@ def cargar(ruta):
     return tipo, datos
 
 
-def _ms(v, _pos=None) -> str:
-    return f"{v:g}"
-
-
-def _estilo(ax):
-    for lado in ("top", "right"):
-        ax.spines[lado].set_visible(False)
-    ax.tick_params(length=0)
-    ax.grid(True, which="major", alpha=0.7)
-    ax.set_axisbelow(True)
-
-
-def _eje_tiempo(ax, tiempos):
-    decadas = math.log10(max(tiempos) / min(tiempos))
-    subs = (1, 2, 3, 5) if decadas < 1.2 else (1, 2, 5) if decadas < 1.8 else (1, 3)
-    ax.set_xscale("log")
-    ax.xaxis.set_major_locator(mticker.LogLocator(base=10, subs=subs))
-    ax.xaxis.set_major_formatter(mticker.FuncFormatter(_ms))
-    ax.xaxis.set_minor_formatter(mticker.NullFormatter())
-
-
 def graficar(tipo, metrica, por_n, objetivo, salida):
-    tamanos = sorted(por_n)
-    fig, ejes = plt.subplots(1, len(tamanos), figsize=(3.6 * len(tamanos), 3.8), sharey=True, squeeze=False)
-    for ax, n in zip(ejes[0], tamanos):
-        _estilo(ax)
-        _eje_tiempo(ax, [f["tiempo_ms"] for filas in por_n[n].values() for f in filas])
-        ax.set_title(f"N = {_tamano(n)}", fontsize=10)
-        ax.axhline(objetivo, color=INK_MUTED, linewidth=1, linestyle="--", zorder=1,
-                   label=f"objetivo {objetivo}")
-        exacto = por_n[n].get("exacto")
-        if exacto:
-            ax.axvline(exacto[0]["tiempo_ms"], color=INK_MUTED, linewidth=1, linestyle=":", zorder=1,
-                       label="k-NN exacto")
-        for nombre, parametro, color, marcador in INDICES:
+    # recall contra el valor del parametro, una linea por tamano; los valores son potencias de 2
+    # y se ubican equiespaciados
+    fig, ejes = plt.subplots(1, 2, figsize=(6.3, 2.5), sharey=True)
+    for ax, (nombre, parametro) in zip(ejes, INDICES):
+        valores = sorted({f["valor"] for n in por_n for f in por_n[n].get(nombre, [])})
+        posicion = {v: i for i, v in enumerate(valores)}
+        for n in sorted(por_n):
             filas = por_n[n].get(nombre, [])
             if not filas:
                 continue
-            x = [f["tiempo_ms"] for f in filas]
-            y = [f["recall"] for f in filas]
-            ax.plot(x, y, color=color, linewidth=2, marker=marcador, markersize=5,
-                    markeredgecolor=SURFACE, markeredgewidth=1, label=nombre, zorder=3)
+            color, marcador = TAMANOS.get(n, (GRIS, "o"))
+            ax.plot([posicion[f["valor"]] for f in filas], [f["recall"] for f in filas],
+                    color=color, marker=marcador, label=_tamano(n))
             elegido = next((f for f in filas if f["recall"] >= objetivo), None)
             if elegido:
-                abajo = nombre == "HNSW"
-                ax.annotate(f"{parametro} {elegido['valor']}", (elegido["tiempo_ms"], elegido["recall"]),
-                            xytext=(6, -6 if abajo else 6), textcoords="offset points",
-                            ha="left", va="top" if abajo else "bottom",
-                            fontsize=8, color=INK_SECONDARY)
-        ax.set_xlabel("tiempo por consulta (ms)")
-    ejes[0][0].set_ylabel("Recall@10")
-    ejes[0][0].set_ylim(top=1.06)
-    fig.tight_layout(rect=(0, 0, 1, 0.84))
-    fig.suptitle(f"Parámetros óptimos de HNSW e IVF ({tipo}, métrica {METRICAS.get(metrica, metrica)})",
-                 fontsize=12, y=0.985)
-    asas, etiquetas = ejes[0][0].get_legend_handles_labels()
-    fig.legend(asas, etiquetas, loc="upper center", ncol=len(asas), bbox_to_anchor=(0.5, 0.93))
-    fig.savefig(salida, dpi=200)
+                ax.plot([posicion[elegido["valor"]]], [elegido["recall"]], marker="o", markersize=10,
+                        markerfacecolor="none", markeredgecolor=color, markeredgewidth=1.2, linestyle="none")
+        ax.axhline(objetivo, color=GRIS, linewidth=0.9, linestyle="--")
+        ax.set_xticks(range(len(valores)))
+        ax.set_xticklabels([str(v) for v in valores])
+        ax.set_xlabel(f"${parametro}$")
+        ax.set_title(nombre)
+        ax.yaxis.set_major_formatter(mticker.FuncFormatter(_coma))
+    ejes[0].set_ylabel("Recall@10")
+    ejes[0].set_ylim(top=1.02)
+    asas, etiquetas = ejes[0].get_legend_handles_labels()
+    fig.legend(asas, etiquetas, loc="lower center", ncol=len(asas), bbox_to_anchor=(0.5, 1.0),
+               title="Tamaño de la colección", title_fontsize=8)
+    fig.tight_layout()
+    fig.savefig(salida)
     plt.close(fig)
 
 

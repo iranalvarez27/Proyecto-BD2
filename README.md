@@ -646,7 +646,7 @@ python3 -m bench.plots --parte todo
 
 **Salidas generadas en `bench/results/`:**
 * **Parte 3 (Texto):** `texto_construccion.csv`, `texto_consultas.csv`, `texto_resumen.md`, `texto_construccion_disco.png`, `texto_latencia_longitud.png`, `texto_relevancia_pr10.png`.
-* **Parte 4 (Vector/Multimedia):** `vector_compare.csv`, `vector_resumen.md`, `vector_tiempo_vs_tamano.png`, `vector_construccion_memoria.png`, `vector_recall_comparativa.png`.
+* **Parte 4 (Vector/Multimedia):** `vector_compare.csv`, `vector_resumen.md`, `vector_tiempo_vs_tamano.png`, `vector_construccion.png`, `vector_recall_comparativa.png`.
 * **Galería Multimedia:** `galeria.json`, `galeria_imagenes.png`, `galeria_audio.md`.
 
 ---

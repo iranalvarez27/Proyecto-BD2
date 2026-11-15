@@ -416,65 +416,54 @@ def _recortar_texto(texto: str, max_chars: int = 22) -> str:
     return texto if len(texto) <= max_chars else texto[: max_chars - 1] + "…"
 
 
+def _coma(v: float) -> str:
+    return f"{v:.3f}".replace(".", ",")
+
+
 def renderizar_galeria_imagenes(datos_img: dict, ruta_png: Path) -> None:
+    from bench.plots import AZUL_UTEC, ESTILO
+
+    acierto, fallo = "#4A7C6B", "#9A4545"
     filas_casos = [
-        ("ÉXITO — Coseno", datos_img["metricas"]["cosine"]["candidatos_exito"][0]),
-        ("ÉXITO — Euclidiana", datos_img["metricas"]["euclidean"]["candidatos_exito"][0]),
-        ("ERROR — Coseno", datos_img["metricas"]["cosine"]["candidatos_error"][0]),
-        ("ERROR — Euclidiana", datos_img["metricas"]["euclidean"]["candidatos_error"][0]),
+        ("Éxito, distancia coseno", datos_img["metricas"]["cosine"]["candidatos_exito"][0]),
+        ("Éxito, distancia euclidiana", datos_img["metricas"]["euclidean"]["candidatos_exito"][0]),
+        ("Error, distancia coseno", datos_img["metricas"]["cosine"]["candidatos_error"][0]),
+        ("Error, distancia euclidiana", datos_img["metricas"]["euclidean"]["candidatos_error"][0]),
     ]
 
-    fig, axes = plt.subplots(4, 6, figsize=(16, 11), dpi=160)
-    fig.suptitle(
-        "Galería Visual k-NN (Top-5) en Imágenes Amazon — Casos de Éxito y Error (BoVW SIFT)",
-        fontsize=14,
-        fontweight="bold",
-        y=0.98,
-    )
+    with plt.rc_context({**ESTILO, "axes.grid": False}):
+        fig, axes = plt.subplots(4, 6, figsize=(6.3, 5.4))
+        for fila_idx, (etiqueta_fila, caso) in enumerate(filas_casos):
+            q = caso["consulta"]
+            ax_q = axes[fila_idx, 0]
+            ax_q.imshow(_cargar_rgb(q["ruta"]))
+            ax_q.set_xticks([])
+            ax_q.set_yticks([])
+            for spine in ax_q.spines.values():
+                spine.set_edgecolor(AZUL_UTEC)
+                spine.set_linewidth(1.6)
+            ax_q.set_title(f"{etiqueta_fila}\n{_recortar_texto(q['categoria'], 20)}", fontsize=6, color=AZUL_UTEC)
 
-    for fila_idx, (etiqueta_fila, caso) in enumerate(filas_casos):
-        q = caso["consulta"]
-        ax_q = axes[fila_idx, 0]
-        ax_q.imshow(_cargar_rgb(q["ruta"]))
-        ax_q.set_xticks([])
-        ax_q.set_yticks([])
-        for spine in ax_q.spines.values():
-            spine.set_edgecolor("#1d4ed8")
-            spine.set_linewidth(3.0)
-        ax_q.set_title(
-            f"{etiqueta_fila}\nConsulta (ID {q['id']})\n[{_recortar_texto(q['categoria'], 20)}]",
-            fontsize=8.5,
-            fontweight="bold",
-            color="#1e3a8a",
-        )
-        ax_q.set_xlabel(f"Aciertos: {caso['aciertos_top5']}/5", fontsize=8, fontweight="bold")
+            for col_idx in range(1, 6):
+                ax = axes[fila_idx, col_idx]
+                ax.set_xticks([])
+                ax.set_yticks([])
+                if col_idx - 1 < len(caso["vecinos"]):
+                    v = caso["vecinos"][col_idx - 1]
+                    ax.imshow(_cargar_rgb(v["ruta"]))
+                    color = acierto if v["coincide"] else fallo
+                    for spine in ax.spines.values():
+                        spine.set_edgecolor(color)
+                        spine.set_linewidth(1.6)
+                    ax.set_title(f"{v['rank']}.  d = {_coma(v['distancia'])}\n{_recortar_texto(v['categoria'], 20)}",
+                                 fontsize=6, color=color)
+                else:
+                    ax.axis("off")
 
-        for col_idx in range(1, 6):
-            ax = axes[fila_idx, col_idx]
-            ax.set_xticks([])
-            ax.set_yticks([])
-            if col_idx - 1 < len(caso["vecinos"]):
-                v = caso["vecinos"][col_idx - 1]
-                ax.imshow(_cargar_rgb(v["ruta"]))
-                color_borde = "#16a34a" if v["coincide"] else "#dc2626"
-                simbolo = "✓" if v["coincide"] else "✗"
-                for spine in ax.spines.values():
-                    spine.set_edgecolor(color_borde)
-                    spine.set_linewidth(2.5)
-                ax.set_title(
-                    f"#{v['rank']} {simbolo} d={v['distancia']:.3f}\n[{_recortar_texto(v['categoria'], 20)}]",
-                    fontsize=8,
-                    color=color_borde,
-                    fontweight="bold",
-                )
-                ax.set_xlabel(_recortar_texto(v["titulo"], 24), fontsize=7.5, color="#374151")
-            else:
-                ax.axis("off")
-
-    plt.tight_layout(rect=[0, 0, 1, 0.95])
-    ruta_png.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(ruta_png, bbox_inches="tight")
-    plt.close(fig)
+        fig.tight_layout(h_pad=0.6, w_pad=0.4)
+        ruta_png.parent.mkdir(parents=True, exist_ok=True)
+        fig.savefig(ruta_png)
+        plt.close(fig)
 
 
 def generar_reporte_galeria_md(datos_img: dict, datos_aud: dict, ruta_md: Path) -> None:
@@ -494,7 +483,7 @@ def generar_reporte_galeria_md(datos_img: dict, datos_aud: dict, ruta_md: Path) 
         "",
         "## 2. Galería de Imágenes (Amazon Electronics)",
         "",
-        f"La cuadrícula visual completa se encuentra generada en [`galeria_imagenes.png`](file://{PNG_GALERIA_IMG}).",
+        "La cuadrícula visual completa se encuentra generada en [`galeria_imagenes.png`](galeria_imagenes.png).",
         "",
     ]
 
