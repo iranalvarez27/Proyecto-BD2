@@ -13,6 +13,7 @@ from deteccion import letras
 @pytest.fixture(autouse=True)
 def sin_letras(monkeypatch):
     monkeypatch.setattr(letras, 'tabla_lista', lambda conexion: False)
+    monkeypatch.setattr(letras, 'estado_tabla', lambda conexion: 'ausente')
     monkeypatch.setattr(letras, 'desde_melodia', lambda *a: None)
 
 

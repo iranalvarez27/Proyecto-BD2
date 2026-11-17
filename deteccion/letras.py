@@ -92,12 +92,47 @@ def _sql(conexion, sql):
     return res.get('columns') or [], res.get('rows') or []
 
 
-def tabla_lista(conexion):
+TABLAS = (TABLA, TABLA + '_b')
+MENSAJE_ACTUALIZANDO = 'Las letras se están actualizando; vuelve a intentarlo en unos minutos'
+
+
+def _archivo_activa():
+    return acapella.directorio_modelo() / 'letras_activa.txt'
+
+
+def tabla_activa():
     try:
-        _sql(conexion, f'SELECT id FROM {TABLA} WHERE id = 1')
+        nombre = _archivo_activa().read_text(encoding='utf-8').strip()
+    except OSError:
+        return TABLA
+    return nombre if nombre in TABLAS else TABLA
+
+
+def _tabla_inactiva():
+    return TABLAS[1] if tabla_activa() == TABLAS[0] else TABLAS[0]
+
+
+def _existe(conexion, tabla):
+    try:
+        _sql(conexion, f'SELECT id FROM {tabla} WHERE id = 1')
         return True
     except (ValueError, ConnectionError, OSError):
         return False
+
+
+def estado_tabla(conexion):
+    tabla = tabla_activa()
+    if not _existe(conexion, tabla):
+        return 'ausente'
+    try:
+        _sql(conexion, f"SELECT id FROM {tabla} WHERE MATCH(texto, 'a') USING BM25 LIMIT 1")
+        return 'lista'
+    except (ValueError, ConnectionError, OSError) as ex:
+        return 'sin_indice' if 'indice invertido' in str(ex) else 'ausente'
+
+
+def tabla_lista(conexion):
+    return estado_tabla(conexion) == 'lista'
 
 
 def carpeta_letras():
@@ -129,14 +164,20 @@ def _recortar(texto, max_bytes=MAX_BYTES_TEXTO):
 
 
 def cargar_en_motor(conexion, filas):
-    if tabla_lista(conexion):
-        _sql(conexion, f'DROP TABLE {TABLA}')
-    _sql(conexion, f'CREATE TABLE {TABLA} (id INT PRIMARY KEY, track_id VARCHAR(40), inicio_s FLOAT, '
+    destino = _tabla_inactiva()
+    if _existe(conexion, destino):
+        _sql(conexion, f'DROP TABLE {destino}')
+    _sql(conexion, f'CREATE TABLE {destino} (id INT PRIMARY KEY, track_id VARCHAR(40), inicio_s FLOAT, '
                    f'fin_s FLOAT, texto VARCHAR({MAX_BYTES_TEXTO}))')
     for i, (tid, ini, fin, texto) in enumerate(filas, 1):
-        _sql(conexion, f'INSERT INTO {TABLA} VALUES ({i}, {_literal(tid)}, {ini:.3f}, {fin:.3f}, '
+        _sql(conexion, f'INSERT INTO {destino} VALUES ({i}, {_literal(tid)}, {ini:.3f}, {fin:.3f}, '
                        f'{_literal(_recortar(texto))})')
-    _sql(conexion, f'CREATE INDEX ON {TABLA} (texto) USING INVERTED')
+    _sql(conexion, f'CREATE INDEX ON {destino} (texto) USING INVERTED')
+    _sql(conexion, f"SELECT id FROM {destino} WHERE MATCH(texto, 'a') USING BM25 LIMIT 1")
+    archivo = _archivo_activa()
+    temporal = archivo.with_suffix('.tmp')
+    temporal.write_text(destino, encoding='utf-8')
+    os.replace(temporal, archivo)
 
 
 def preparar(conexion, ids=None, forzar=False, progreso=None):
@@ -204,7 +245,7 @@ def iniciar_preparacion(conexion, ids=None, forzar=False):
 
 def _buscar_frase(conexion, texto):
     consulta = _consulta_segura(texto)
-    _cols, filas = _sql(conexion, f"SELECT track_id, inicio_s, fin_s, SCORE() AS s FROM {TABLA} "
+    _cols, filas = _sql(conexion, f"SELECT track_id, inicio_s, fin_s, SCORE() AS s FROM {tabla_activa()} "
                                   f"WHERE MATCH(texto, {_literal(consulta)}) USING BM25 ORDER BY s DESC LIMIT {TOP_FILAS}")
     return [(str(t), float(i), float(f), float(s)) for t, i, f, s in filas]
 
@@ -389,14 +430,16 @@ def complementar(resultado, y, sr, conexion, ruta_url=None, progreso_id=None):
     letra = melodia = None
     try:
         marcar(progreso_id, 'letra', 'activo')
-        if tabla_lista(conexion):
+        estado_letras = estado_tabla(conexion)
+        if estado_letras == 'lista':
             letra = detectar(y, sr, conexion, duracion)
             if ruta_url:
                 for c in letra['coincidencias']:
                     meta = acapella.cargar_catalogo(validar=False).get(c['track_id'], {})
                     c['audio_url'] = ruta_url(meta.get('ruta', ''))
         else:
-            resultado.setdefault('metricas', {})['letra_error'] = 'Falta preparar las letras'
+            resultado.setdefault('metricas', {})['letra_error'] = (MENSAJE_ACTUALIZANDO if estado_letras == 'sin_indice'
+                                                                   else 'Falta preparar las letras')
         marcar(progreso_id, 'letra', 'hecho')
         if not (letra and letra['coincidencias']):
             marcar(progreso_id, 'melodia', 'activo' if duracion >= 10 else 'omitida')
@@ -409,7 +452,8 @@ def complementar(resultado, y, sr, conexion, ruta_url=None, progreso_id=None):
         else:
             marcar(progreso_id, 'melodia', 'omitida')
     except Exception as ex:
-        resultado.setdefault('metricas', {})['letra_error'] = str(ex)
+        mensaje = str(ex)
+        resultado.setdefault('metricas', {})['letra_error'] = MENSAJE_ACTUALIZANDO if 'indice invertido' in mensaje else mensaje
         for etapa in ('letra', 'melodia'):
             marcar(progreso_id, etapa, 'hecho')
     return fusionar(resultado, letra, melodia)

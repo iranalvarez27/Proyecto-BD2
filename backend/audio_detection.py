@@ -284,7 +284,7 @@ def agregar_letras(router, root, conexion):
 
     @router.get('/letras/status')
     def estado_letras():
-        return {**letras.estado(), 'tabla_lista': letras.tabla_lista(conexion)}
+        return {**letras.estado(), 'tabla_lista': letras.tabla_lista(conexion), 'tabla': letras.tabla_activa()}
 
     @router.post('/letras/prepare', status_code=202)
     def preparar_letras(req: PrepararLetrasRequest):

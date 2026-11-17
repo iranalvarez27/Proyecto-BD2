@@ -37,8 +37,9 @@ class MotorFalso:
 
 
 @pytest.fixture(autouse=True)
-def catalogo(monkeypatch):
+def catalogo(monkeypatch, tmp_path):
     monkeypatch.setattr(acapella, 'cargar_catalogo', lambda validar=True: CATALOGO)
+    monkeypatch.setattr(acapella, 'directorio_modelo', lambda: tmp_path)
 
 
 def audio(segundos=20, sr=16000):
@@ -175,3 +176,51 @@ def test_melodia_solo_si_la_letra_no_encontro_nada(monkeypatch):
     con_frases(monkeypatch, [(0.0, 4.0, 'tu mirada tierna la que me entregaba'), (4.0, 8.0, 'la tibia esa dulce de la madrugada')])
     base = {'duracion_s': 20, 'segmentos': [], 'coincidencias': [], 'posible_coincidencia': False, 'conclusion': 'x', 'metricas': {}}
     assert letras.complementar(base, audio(20), 16000, MotorFalso())['coincidencias'][0]['tipo'] == 'cancion_cantada'
+
+
+class MotorSinIndice(MotorFalso):
+
+    def execute_query(self, sql):
+        if 'MATCH' in sql:
+            return {'status': 'error', 'error': "Error [SEMANTICO]: la columna 'texto' de 'letras_acapella' no tiene indice invertido"}
+        return super().execute_query(sql)
+
+
+def test_tabla_sin_indice_se_detecta_y_el_mensaje_es_claro(monkeypatch):
+    assert letras.estado_tabla(MotorSinIndice()) == 'sin_indice'
+    assert not letras.tabla_lista(MotorSinIndice())
+    base = {'duracion_s': 12, 'segmentos': [], 'coincidencias': [], 'posible_coincidencia': False, 'conclusion': 'x', 'metricas': {}}
+    monkeypatch.setattr(letras, 'desde_melodia', lambda *a: None)
+    r = letras.complementar(base, audio(12), 16000, MotorSinIndice())
+    assert r['metricas']['letra_error'] == letras.MENSAJE_ACTUALIZANDO and 'SEMANTICO' not in r['metricas']['letra_error']
+
+
+class MotorRegistrador(MotorFalso):
+    def __init__(self, interrumpir_en=None):
+        super().__init__()
+        self.sql = []
+        self.interrumpir_en = interrumpir_en
+
+    def execute_query(self, sql):
+        self.sql.append(sql)
+        if self.interrumpir_en and self.interrumpir_en in sql:
+            raise ConnectionError('el motor se reinició')
+        return {'status': 'success', 'columns': [], 'rows': []}
+
+
+def test_reconstruir_usa_la_tabla_inactiva_y_cambia_al_final(tmp_path):
+    assert letras.tabla_activa() == letras.TABLA
+    motor = MotorRegistrador()
+    letras.cargar_en_motor(motor, [('a1', 1.0, 2.0, 'hola mundo bonito')])
+    assert any('CREATE TABLE letras_acapella_b' in q for q in motor.sql)
+    assert not any('DROP TABLE letras_acapella ' in q or 'CREATE TABLE letras_acapella (' in q for q in motor.sql)
+    assert letras.tabla_activa() == 'letras_acapella_b'
+    letras.cargar_en_motor(MotorRegistrador(), [('a1', 1.0, 2.0, 'hola mundo bonito')])
+    assert letras.tabla_activa() == letras.TABLA
+
+
+def test_carga_interrumpida_deja_intacta_la_tabla_activa(tmp_path):
+    motor = MotorRegistrador(interrumpir_en='INSERT INTO')
+    with pytest.raises(ConnectionError):
+        letras.cargar_en_motor(motor, [('a1', 1.0, 2.0, 'hola mundo bonito')])
+    assert letras.tabla_activa() == letras.TABLA

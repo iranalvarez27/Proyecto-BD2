@@ -834,7 +834,7 @@ flowchart TD
 | Datos | Contenido |
 |---|---|
 | Biblioteca de grabaciones | FMA (7.994 canciones) y Perú e internacional (500): **8.494 canciones, 170.002 segmentos**. |
-| Repertorio para cantar | 200 canciones peruanas (`REPERTORIO` en `deteccion/acapella.py`). De cada una, Demucs aísla la voz, se guarda su melodía y Whisper transcribe su letra en `letras_acapella(id, track_id, inicio_s, fin_s, texto)`, con índice invertido en español. |
+| Repertorio para cantar | 200 canciones peruanas (`REPERTORIO` en `deteccion/acapella.py`). De cada una, Demucs aísla la voz, se guarda su melodía y Whisper transcribe su letra en `letras_acapella(id, track_id, inicio_s, fin_s, texto)`, con índice invertido en español. Las letras se reconstruyen en una tabla alterna (`letras_acapella_b`) y solo al terminar se activa (`acapella/letras_activa.txt` indica cuál se consulta), de modo que una carga interrumpida no deja la búsqueda rota. |
 
 La búsqueda vectorial usa `EXACTO` por defecto, porque un vecino omitido es una coincidencia no reportada; con 100 000 vectores HNSW responde unas 69 veces más rápido (recall 0.98) e IVF unas 88 veces (recall 0.95), y quedan para bibliotecas mayores.
 
