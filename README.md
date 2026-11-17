@@ -818,6 +818,8 @@ flowchart TD
     B3 --> FUS
     C2 --> FUS
     FUS --> RES["Resultado<br/>tramos, canción, artista, %<br/>y texto reconocido"]
+    classDef carril fill:none,stroke:#9370db,stroke-width:1px,stroke-dasharray:4 3
+    class A,B,C carril
 ```
 
 ### 2.6.1 Funcionamiento
