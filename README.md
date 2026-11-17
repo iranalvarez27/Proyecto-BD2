@@ -799,7 +799,26 @@ El sistema recibe un audio de 5 s a 10 min y detecta si reutiliza material prote
 
 La interfaz y el API `/api/audio` se publican desde [Aplicaciones-BD2](https://github.com/iranalvarez27/Aplicaciones-BD2); este repositorio aporta las librerías (`deteccion/`, `multimedia/`, `backend/audio_detection.py`), los datos y los índices.
 
-![Flujo del detector de copyright](docs/copyright-pipeline.svg)
+```mermaid
+flowchart TD
+    AUD["1 · Audio<br/>5 s a 10 min<br/>archivo o micrófono"]
+    subgraph A["A · Misma grabación"]
+        A1["MFCC → BoAW<br/>ventanas de 2 s"] --> A2["Índice vectorial<br/>EXACTO · HNSW · IVF"] --> A3["Alineación<br/>offset ±1 s, ≥ 2 votos<br/>+ secuencia MFCC y chroma"]
+    end
+    subgraph B["B · Por letra (principal)"]
+        B1["Whisper small<br/>voz → frases con tiempo"] --> B2["BM25 sobre letras<br/>MATCH ... USING BM25"] --> B3["Votos por canción<br/>tramos ±10 s<br/>≥ 2 frases y +30 %"]
+    end
+    subgraph C["C · Por melodía (respaldo)"]
+        C1["Melodía de la voz<br/>CQT · 12 clases de nota"] --> C2["DTW<br/>12 transposiciones"]
+    end
+    AUD --> A1
+    AUD --> B1
+    AUD -->|"solo si la letra falla<br/>y dura ≥ 10 s"| C1
+    A3 --> FUS["Fusión<br/>tipo: grabación o cantada<br/>se conserva la mayor similitud"]
+    B3 --> FUS
+    C2 --> FUS
+    FUS --> RES["Resultado<br/>tramos, canción, artista, %<br/>y texto reconocido"]
+```
 
 ### 2.6.1 Funcionamiento
 
@@ -817,7 +836,16 @@ La interfaz y el API `/api/audio` se publican desde [Aplicaciones-BD2](https://g
 
 La búsqueda vectorial usa `EXACTO` por defecto, porque un vecino omitido es una coincidencia no reportada; con 100 000 vectores HNSW responde unas 69 veces más rápido (recall 0.98) e IVF unas 88 veces (recall 0.95), y quedan para bibliotecas mayores.
 
-![Aceleración de IVF y HNSW frente a la búsqueda exacta](docs/audio-indices.svg)
+```mermaid
+%%{init: {"themeVariables": {"xyChart": {"plotColorPalette": "#6d5cf0"}}}}%%
+xychart-beta
+    title "Búsqueda de segmentos de audio: veces más rápido que recorrerlo todo"
+    x-axis ["EXACTO (3.26 ms)", "IVF (0.037 ms)", "HNSW (0.047 ms)"]
+    y-axis "veces" 0 --> 100
+    bar [1, 88, 69]
+```
+
+100 000 vectores, coseno, 256 dimensiones, k = 10. Recall@10: EXACTO 1.00, IVF 0.95, HNSW 0.98. Fuente: `bench/results/vector_compare.csv`.
 
 ### 2.6.2 API
 
