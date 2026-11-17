@@ -11,6 +11,7 @@ from urllib.parse import quote
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
+from deteccion import acapella, letras
 from deteccion.detector import BusquedaAudio, Detector, Parametros
 from multimedia import bovw, config
 from multimedia import colecciones_audio
@@ -30,6 +31,24 @@ class DetectionRequest(BaseModel):
     representacion: str = 'hibrida'
     umbral_secuencia: float = Field(default=.60, ge=0, le=1)
     reducir_ruido: bool = True
+    progreso_id: str | None = Field(default=None, max_length=64)
+
+
+class AcapellaRequest(BaseModel):
+    path: str
+    top: int = Field(default=5, ge=1, le=20)
+    umbral: float = Field(default=acapella.UMBRAL, ge=0, le=1)
+    margen: float = Field(default=acapella.MARGEN, ge=0, le=1)
+
+
+class PrepararAcapellaRequest(BaseModel):
+    ids: list[str] = Field(default_factory=list, max_length=200)
+    forzar: bool = False
+
+
+class PrepararLetrasRequest(BaseModel):
+    ids: list[str] = Field(default_factory=list, max_length=200)
+    forzar: bool = False
 
 
 def resolver_subida(root, ruta):
@@ -214,7 +233,7 @@ def crear_router(engine, root):
         inicio_total = time.perf_counter()
         try:
             ruta = resolver_subida(root, req.path)
-            params = replace(Parametros(), **req.model_dump(exclude={'path', 'n_coleccion'}))
+            params = replace(Parametros(), **req.model_dump(exclude={'path', 'n_coleccion', 'progreso_id'}))
             params.validar()
             tabla = tabla_audio(req.n_coleccion)
             if not engine.catalog.existe_tabla(tabla):
@@ -238,7 +257,11 @@ def crear_router(engine, root):
             def original(pid):
                 return ruta_local(metas[pid]['ruta'], root)
             detector = Detector(None, None, extractor, params, resolver_original=original, busqueda=busqueda)
+            letras.iniciar_progreso(req.progreso_id)
+            letras.marcar(req.progreso_id, 'grabacion', 'activo')
             resultado = enriquecer(detector.detectar(y), metas, root)
+            letras.marcar(req.progreso_id, 'grabacion', 'hecho')
+            resultado = letras.complementar(resultado, y, int(extractor.meta['sr']), engine, lambda r: url_original(r, root), req.progreso_id)
             resultado['metricas'].update(metadata_ms=round(tiempo_meta, 2), metadata_cache=cache_meta,
                                           metadata_origen=origen_meta,
                                           total_ms=round((time.perf_counter() - inicio_total) * 1000, 2))
@@ -249,4 +272,62 @@ def crear_router(engine, root):
         except (ValueError, OSError, RuntimeError) as ex:
             raise HTTPException(status_code=400, detail=str(ex)) from ex
 
+    agregar_acapella(router, root, root)
+    agregar_letras(router, root, engine)
     return router
+
+
+def agregar_letras(router, root, conexion):
+    @router.get('/detect/progress')
+    def progreso_analisis(id: str):
+        return letras.leer_progreso(id)
+
+    @router.get('/letras/status')
+    def estado_letras():
+        return {**letras.estado(), 'tabla_lista': letras.tabla_lista(conexion)}
+
+    @router.post('/letras/prepare', status_code=202)
+    def preparar_letras(req: PrepararLetrasRequest):
+        if not (acapella.directorio_modelo() / 'voces').is_dir():
+            raise HTTPException(status_code=409, detail='Aún no hay voces separadas; prepare primero el repertorio a cappella.')
+        iniciada = letras.iniciar_preparacion(conexion, req.ids or None, req.forzar)
+        return {'iniciada': iniciada, **letras.estado()}
+
+
+def agregar_acapella(router, root, raiz_medios):
+    @router.get('/acapella/songs')
+    def canciones_acapella():
+        catalogo = acapella.cargar_catalogo(validar=False)
+        canciones = [{'track_id': tid, 'titulo': m['titulo'], 'artista': m['artista'],
+                      'duracion_s': m.get('duracion_s'), 'audio_url': url_original(m['ruta'], raiz_medios)}
+                     for tid, m in catalogo.items()]
+        return {'canciones': sorted(canciones, key=lambda c: (c['artista'], c['titulo']))}
+
+    @router.get('/acapella/status')
+    def estado_acapella():
+        return acapella.estado()
+
+    @router.post('/acapella/prepare', status_code=202)
+    def preparar_acapella(req: PrepararAcapellaRequest):
+        if not acapella.CARPETA_AUDIO.is_dir():
+            raise HTTPException(status_code=409, detail='No están los audios originales (bench/data/musica_propia) '
+                                                        'en el servidor; no se puede preparar el repertorio.')
+        iniciada = acapella.iniciar_preparacion(req.ids or None, req.forzar)
+        return {'iniciada': iniciada, **acapella.estado()}
+
+    @router.post('/acapella/detect')
+    def detectar_acapella(req: AcapellaRequest):
+        inicio = time.perf_counter()
+        try:
+            ruta = resolver_subida(root, req.path)
+            y = cargar_audio(ruta, acapella.SR)
+            resultado = acapella.reconocer(y, top=req.top, umbral=req.umbral, margen=req.margen)
+        except FileNotFoundError as ex:
+            raise HTTPException(status_code=409, detail=str(ex)) from ex
+        except (ValueError, OSError, RuntimeError) as ex:
+            raise HTTPException(status_code=400, detail=str(ex)) from ex
+        for item in resultado['ranking'] + resultado['coincidencias']:
+            item['audio_url'] = url_original(item.pop('ruta', ''), raiz_medios)
+        resultado['metricas']['total_ms'] = round((time.perf_counter() - inicio) * 1000, 2)
+        resultado['audio_url'] = '/api/media/' + quote(req.path, safe='/')
+        return resultado

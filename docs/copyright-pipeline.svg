@@ -1,0 +1,148 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 384" width="960" role="img" aria-label="Flujo del detector de copyright: el audio se analiza como misma grabación (MFCC, índice vectorial, alineación), como canción cantada por letra (Whisper, BM25, votos) y, si hace falta, por melodía (DTW); la fusión une los tramos en un resultado.">
+<title>Detector de copyright: tres rutas, un solo resultado</title>
+<desc>Flujo del detector de copyright: el audio se analiza como misma grabación (MFCC, índice vectorial, alineación), como canción cantada por letra (Whisper, BM25, votos) y, si hace falta, por melodía (DTW); la fusión une los tramos en un resultado.</desc>
+<style>
+  :root { color-scheme: light dark; }
+  .fondo { fill: #fcfcfb; stroke: #e4e2dc; }
+  .titulo { font: 700 17px system-ui, 'Segoe UI', sans-serif; fill: #0b0b0b; }
+  .sub { font: 400 12px system-ui, 'Segoe UI', sans-serif; fill: #52514e; }
+  .caja { fill: #ffffff; stroke: #cfccc4; stroke-width: 1.5; }
+  .caja-t { font: 600 13px system-ui, 'Segoe UI', sans-serif; fill: #0b0b0b; }
+  .caja-s { font: 400 11px system-ui, 'Segoe UI', sans-serif; fill: #52514e; }
+  .num { font: 700 11px system-ui, sans-serif; fill: #ffffff; }
+  .badge { fill: #2a78d6; } .b1 { fill: #2a78d6; } .b2 { fill: #eb6834; } .b3 { fill: #1f9d8a; } .b1 { fill: #2a78d6; } .b2 { fill: #eb6834; } .b3 { fill: #1f9d8a; } .b1 { fill: #2a78d6; } .b2 { fill: #eb6834; } .b3 { fill: #1f9d8a; }
+  .flecha { fill: none; stroke: #2a78d6; stroke-width: 2; stroke-dasharray: 6 6; animation: fluir 1s linear infinite; }
+  .punta { fill: #2a78d6; }
+  .f1 { stroke: #2a78d6; } .f2 { stroke: #eb6834; } .f3 { stroke: #1f9d8a; }
+  .lt { font: 700 12px system-ui, 'Segoe UI', sans-serif; }
+  .f1 { stroke: #2a78d6; } .f2 { stroke: #eb6834; } .f3 { stroke: #1f9d8a; }
+  .lt { font: 700 12px system-ui, 'Segoe UI', sans-serif; }
+  .f1 { stroke: #2a78d6; } .f2 { stroke: #eb6834; } .f3 { stroke: #1f9d8a; }
+  .lt { font: 700 12px system-ui, 'Segoe UI', sans-serif; }
+  .pulso { fill: none; stroke: #2a78d6; stroke-width: 3; opacity: 0; animation: pulso var(--ciclo, 8s) linear infinite; }
+  .eje { stroke: #cfccc4; stroke-width: 1; }
+  .rejilla { stroke: #e9e7e1; stroke-width: 1; }
+  .tick { font: 400 11px system-ui, sans-serif; fill: #52514e; }
+  .valor { font: 600 12px system-ui, sans-serif; fill: #0b0b0b; }
+  .s1 { fill: #2a78d6; } .s2 { fill: #eb6834; } .s3 { fill: #1f9d8a; } .s3 { fill: #1f9d8a; } .s3 { fill: #1f9d8a; }
+  .l1 { stroke: #2a78d6; } .l2 { stroke: #eb6834; } .l3 { stroke: #1f9d8a; } .l3 { stroke: #1f9d8a; } .l3 { stroke: #1f9d8a; }
+  .linea { fill: none; stroke-width: 2; stroke-dasharray: 1200; stroke-dashoffset: 1200; animation: trazar 2.2s ease-out forwards; }
+  .barra { transform-box: fill-box; transform-origin: bottom; animation: crecer 1.1s cubic-bezier(.2,.8,.2,1) both; }
+  .barra-h { transform-box: fill-box; transform-origin: left; animation: crecer-h 1.1s cubic-bezier(.2,.8,.2,1) both; }
+  .aparece { opacity: 0; animation: aparecer .5s ease-out forwards; }
+  .chip { stroke: #fcfcfb; stroke-width: 2; }
+  .chip-t { font: 700 12px system-ui, sans-serif; fill: #ffffff; }
+  @keyframes fluir { to { stroke-dashoffset: -12; } }
+  @keyframes pulso { 0%, 9% { opacity: 1; } 12%, 100% { opacity: 0; } }
+  @keyframes trazar { to { stroke-dashoffset: 0; } }
+  @keyframes crecer { from { transform: scaleY(0); } }
+  @keyframes crecer-h { from { transform: scaleX(0); } }
+  @keyframes aparecer { to { opacity: 1; } }
+  @media (prefers-color-scheme: dark) {
+    .fondo { fill: #1a1a19; stroke: #383835; }
+    .titulo, .caja-t, .valor { fill: #f0efec; }
+    .sub, .caja-s, .tick { fill: #c3c2b7; }
+    .caja { fill: #232322; stroke: #4a4a46; }
+    .badge, .punta, .s1 { fill: #3987e5; } .s2 { fill: #d95926; } .s3 { fill: #2bb7a3; } .s3 { fill: #2bb7a3; } .s3 { fill: #2bb7a3; }
+    .flecha, .pulso, .l1, .f1 { stroke: #3987e5; } .l2, .f2 { stroke: #d95926; } .l3, .f3 { stroke: #2bb7a3; }
+    .eje { stroke: #4a4a46; } .rejilla { stroke: #2c2c2a; }
+    .chip { stroke: #1a1a19; }
+    .b1 { fill: #3987e5; } .b2 { fill: #d95926; } .b3 { fill: #2bb7a3; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .flecha, .pulso, .barra, .barra-h, .linea, .aparece { animation: none; }
+    .linea { stroke-dashoffset: 0; } .aparece { opacity: 1; }
+  }
+  .pulso.f1 { stroke: #2a78d6; } .pulso.f2 { stroke: #eb6834; } .pulso.f3 { stroke: #1f9d8a; }  @media (prefers-color-scheme: dark) { .pulso.f1 { stroke: #3987e5; } .pulso.f2 { stroke: #d95926; } .pulso.f3 { stroke: #2bb7a3; } }  .pulso.f1 { stroke: #2a78d6; } .pulso.f2 { stroke: #eb6834; } .pulso.f3 { stroke: #1f9d8a; }  @media (prefers-color-scheme: dark) { .pulso.f1 { stroke: #3987e5; } .pulso.f2 { stroke: #d95926; } .pulso.f3 { stroke: #2bb7a3; } }</style>
+<rect class="fondo" x="0.5" y="0.5" width="959" height="383" rx="14"/>
+<text class="titulo" x="24" y="34">Detector de copyright: tres rutas, un solo resultado</text>
+<text class="sub" x="24" y="54">La misma consulta se analiza por tres rutas; los tramos que encuentran se unen en una sola línea de tiempo.</text>
+<rect class="caja" x="24" y="150" width="150" height="100" rx="10"/>
+<rect class="pulso f1" x="24" y="150" width="150" height="100" rx="10" style="--ciclo:10s; animation-delay:0.00s"/>
+<circle class="badge b1" cx="44" cy="170" r="10"/><text class="num" x="44" y="174" text-anchor="middle">1</text>
+<text class="caja-t" x="62" y="174">Audio</text>
+<text class="caja-s" x="38" y="196">5 s a 10 min</text>
+<text class="caja-s" x="38" y="211">archivo o micrófono</text>
+<text class="lt" x="214" y="78">A · Misma grabación (timbre)</text>
+<rect class="caja" x="214" y="86" width="164" height="78" rx="10"/>
+<rect class="pulso f1" x="214" y="86" width="164" height="78" rx="10" style="--ciclo:10s; animation-delay:0.35s"/>
+<circle class="badge b1" cx="234" cy="106" r="10"/><text class="num" x="234" y="110" text-anchor="middle">2</text>
+<text class="caja-t" x="252" y="110">MFCC → BoAW</text>
+<text class="caja-s" x="228" y="132">ventanas de 2 s</text>
+<text class="caja-s" x="228" y="147">TF-IDF, K = 256</text>
+<rect class="caja" x="394" y="86" width="164" height="78" rx="10"/>
+<rect class="pulso f1" x="394" y="86" width="164" height="78" rx="10" style="--ciclo:10s; animation-delay:0.70s"/>
+<circle class="badge b1" cx="414" cy="106" r="10"/><text class="num" x="414" y="110" text-anchor="middle">3</text>
+<text class="caja-t" x="432" y="110">Índice vectorial</text>
+<text class="caja-s" x="408" y="132">EXACTO · HNSW · IVF</text>
+<text class="caja-s" x="408" y="147">k vecinos por coseno</text>
+<rect class="caja" x="574" y="86" width="164" height="78" rx="10"/>
+<rect class="pulso f1" x="574" y="86" width="164" height="78" rx="10" style="--ciclo:10s; animation-delay:1.05s"/>
+<circle class="badge b1" cx="594" cy="106" r="10"/><text class="num" x="594" y="110" text-anchor="middle">4</text>
+<text class="caja-t" x="612" y="110">Alineación</text>
+<text class="caja-s" x="588" y="132">offset ±1 s, ≥ 2 votos</text>
+<text class="caja-s" x="588" y="147">+ secuencia MFCC y chroma</text>
+<path class="flecha l1" d="M174 200 C194.0 200 194.0 125 214 125"/><path class="punta s1" d="M214 125 l-8 -4.5 v9 z"/>
+<path class="flecha l1" d="M378 125 L394 125"/><path class="punta s1" d="M394 125 l-8 -4.5 v9 z"/>
+<path class="flecha l1" d="M558 125 L574 125"/><path class="punta s1" d="M574 125 l-8 -4.5 v9 z"/>
+<path class="flecha l1" d="M738 125 C754.0 125 754.0 170 770 170"/><path class="punta s1" d="M770 170 l-8 -4.5 v9 z"/>
+<text class="lt" x="214" y="178">B · Canción cantada por letra (ruta principal)</text>
+<rect class="caja" x="214" y="186" width="164" height="78" rx="10"/>
+<rect class="pulso f2" x="214" y="186" width="164" height="78" rx="10" style="--ciclo:10s; animation-delay:0.35s"/>
+<circle class="badge b2" cx="234" cy="206" r="10"/><text class="num" x="234" y="210" text-anchor="middle">2</text>
+<text class="caja-t" x="252" y="210">Whisper small</text>
+<text class="caja-s" x="228" y="232">voz → frases con tiempo</text>
+<text class="caja-s" x="228" y="247">español, en CPU</text>
+<rect class="caja" x="394" y="186" width="164" height="78" rx="10"/>
+<rect class="pulso f2" x="394" y="186" width="164" height="78" rx="10" style="--ciclo:10s; animation-delay:0.70s"/>
+<circle class="badge b2" cx="414" cy="206" r="10"/><text class="num" x="414" y="210" text-anchor="middle">3</text>
+<text class="caja-t" x="432" y="210">BM25 sobre letras</text>
+<text class="caja-s" x="408" y="232">MATCH … USING BM25</text>
+<text class="caja-s" x="408" y="247">índice invertido en SQL</text>
+<rect class="caja" x="574" y="186" width="164" height="78" rx="10"/>
+<rect class="pulso f2" x="574" y="186" width="164" height="78" rx="10" style="--ciclo:10s; animation-delay:1.05s"/>
+<circle class="badge b2" cx="594" cy="206" r="10"/><text class="num" x="594" y="210" text-anchor="middle">4</text>
+<text class="caja-t" x="612" y="210">Votos por canción</text>
+<text class="caja-s" x="588" y="232">tramos coherentes ±10 s</text>
+<text class="caja-s" x="588" y="247">≥ 2 frases y +30 %</text>
+<path class="flecha l2" d="M174 200 C194.0 200 194.0 225 214 225"/><path class="punta s2" d="M214 225 l-8 -4.5 v9 z"/>
+<path class="flecha l2" d="M378 225 L394 225"/><path class="punta s2" d="M394 225 l-8 -4.5 v9 z"/>
+<path class="flecha l2" d="M558 225 L574 225"/><path class="punta s2" d="M574 225 l-8 -4.5 v9 z"/>
+<path class="flecha l2" d="M738 225 C754.0 225 754.0 200 770 200"/><path class="punta s2" d="M770 200 l-8 -4.5 v9 z"/>
+<text class="lt" x="214" y="278">C · Canción cantada por melodía (respaldo)</text>
+<rect class="caja" x="214" y="286" width="164" height="78" rx="10"/>
+<rect class="pulso f3" x="214" y="286" width="164" height="78" rx="10" style="--ciclo:10s; animation-delay:0.35s"/>
+<circle class="badge b3" cx="234" cy="306" r="10"/><text class="num" x="234" y="310" text-anchor="middle">2</text>
+<text class="caja-t" x="252" y="310">Solo si la letra falla</text>
+<text class="caja-s" x="228" y="332">audio de 10 s o más</text>
+<text class="caja-s" x="228" y="347">es un respaldo</text>
+<rect class="caja" x="394" y="286" width="164" height="78" rx="10"/>
+<rect class="pulso f3" x="394" y="286" width="164" height="78" rx="10" style="--ciclo:10s; animation-delay:0.70s"/>
+<circle class="badge b3" cx="414" cy="306" r="10"/><text class="num" x="414" y="310" text-anchor="middle">3</text>
+<text class="caja-t" x="432" y="310">Melodía de la voz</text>
+<text class="caja-s" x="408" y="332">CQT + suma de armónicos</text>
+<text class="caja-s" x="408" y="347">12 clases de nota</text>
+<rect class="caja" x="574" y="286" width="164" height="78" rx="10"/>
+<rect class="pulso f3" x="574" y="286" width="164" height="78" rx="10" style="--ciclo:10s; animation-delay:1.05s"/>
+<circle class="badge b3" cx="594" cy="306" r="10"/><text class="num" x="594" y="310" text-anchor="middle">4</text>
+<text class="caja-t" x="612" y="310">DTW</text>
+<text class="caja-s" x="588" y="332">12 transposiciones</text>
+<text class="caja-s" x="588" y="347">tono y tempo no importan</text>
+<path class="flecha l3" d="M174 200 C194.0 200 194.0 325 214 325"/><path class="punta s3" d="M214 325 l-8 -4.5 v9 z"/>
+<path class="flecha l3" d="M378 325 L394 325"/><path class="punta s3" d="M394 325 l-8 -4.5 v9 z"/>
+<path class="flecha l3" d="M558 325 L574 325"/><path class="punta s3" d="M574 325 l-8 -4.5 v9 z"/>
+<path class="flecha l3" d="M738 325 C754.0 325 754.0 230 770 230"/><path class="punta s3" d="M770 230 l-8 -4.5 v9 z"/>
+<rect class="caja" x="770" y="150" width="166" height="100" rx="10"/>
+<rect class="pulso f1" x="770" y="150" width="166" height="100" rx="10" style="--ciclo:10s; animation-delay:2.20s"/>
+<circle class="badge b1" cx="790" cy="170" r="10"/><text class="num" x="790" y="174" text-anchor="middle">5</text>
+<text class="caja-t" x="808" y="174">Fusión</text>
+<text class="caja-s" x="784" y="196">tipo: grabación o cantada</text>
+<text class="caja-s" x="784" y="211">se conserva la mayor similitud</text>
+<rect class="caja" x="770" y="280" width="166" height="84" rx="10"/>
+<rect class="pulso f1" x="770" y="280" width="166" height="84" rx="10" style="--ciclo:10s; animation-delay:2.60s"/>
+<circle class="badge b1" cx="790" cy="300" r="10"/><text class="num" x="790" y="304" text-anchor="middle">6</text>
+<text class="caja-t" x="808" y="304">Resultado</text>
+<text class="caja-s" x="784" y="326">tramos, canción, artista, %</text>
+<text class="caja-s" x="784" y="341">y texto reconocido</text>
+<path class="flecha" d="M853 250 C853.0 250 853.0 280 853 280"/><path class="punta" d="M853 280 l-8 -4.5 v9 z"/>
+</svg>

@@ -1,0 +1,6 @@
+modificacion,positivos,negativos,recall_pista,recall_localizacion,tasa_consultas_con_pista_incorrecta,fpr_negativos,latencia_media_ms
+ninguna,20,0,1.0,1.0,0.0,,1503.8265
+ruido,20,0,0.85,0.85,0.0,,1251.4555
+volumen,20,0,1.0,1.0,0.0,,1154.971
+tempo,20,0,1.0,1.0,0.0,,1104.2994999999999
+fuera_de_coleccion,0,10,,,0.0,0.0,1483.005

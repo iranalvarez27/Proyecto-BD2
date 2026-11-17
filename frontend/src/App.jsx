@@ -12,9 +12,7 @@ import {
   FileText,
   Layers,
   Activity,
-  Box,
-  ShoppingBag,
-  Music
+  Box
 } from 'lucide-react';
 
 import FilePanel from './components/FilePanel';
@@ -26,8 +24,6 @@ import VisualizePanel from './components/VisualizePanel';
 import TextSearchPanel from './components/TextSearchPanel';
 import VectorLabPanel from './components/VectorLabPanel';
 import CsvImportModal from './components/CsvImportModal';
-import AudioCopyrightPanel from './components/AudioCopyrightPanel';
-import ECommercePanel from './components/ECommercePanel';
 
 function obtenerOCrearSessionId() {
   try {
@@ -66,16 +62,11 @@ export default function App() {
   const [mapMounted, setMapMounted] = useState(false);
   const [textMounted, setTextMounted] = useState(false);
   const [vectorMounted, setVectorMounted] = useState(false);
-  const [audioMounted, setAudioMounted] = useState(false);
-  const pantallaCompleta = activeBottomTab === 'ecommerce' || activeBottomTab === 'audio';
-  const [ecommerceMounted, setEcommerceMounted] = useState(false);
 
   useEffect(() => {
     if (activeBottomTab === 'map') setMapMounted(true);
     if (activeBottomTab === 'text') setTextMounted(true);
     if (activeBottomTab === 'vector') setVectorMounted(true);
-    if (activeBottomTab === 'audio') setAudioMounted(true);
-    if (activeBottomTab === 'ecommerce') setEcommerceMounted(true);
   }, [activeBottomTab]);
 
   const [loadingTables, setLoadingTables] = useState(false);
@@ -301,13 +292,6 @@ export default function App() {
     handleExecuteQuery(sql, { keepTab: true });
   };
 
-  const handleRunFromEcommerce = (sql) => {
-    const q = sql.trim().endsWith(';') ? sql.trim() : `${sql.trim()};`;
-    setQuery(q);
-    setActiveBottomTab('results');
-    handleExecuteQuery(q, { keepTab: true });
-  };
-
   const handleCsvScriptReady = (script) => {
     setQuery(script);
     setCsvImportOpen(false);
@@ -411,7 +395,7 @@ export default function App() {
         {/* Center / Right Section */}
         <main ref={workspaceRef} className="app-workspace flex-1 flex flex-col h-full min-w-0 overflow-hidden">
           {/* Panel 2: Panel de Consultas (altura arrastrable) */}
-          <div style={{ height: queryPanelHeight, display: pantallaCompleta ? 'none' : undefined }} className="workspace-query shrink-0 min-h-0 overflow-hidden">
+          <div style={{ height: queryPanelHeight }} className="workspace-query shrink-0 min-h-0 overflow-hidden">
             <QueryPanel
               query={query}
               setQuery={setQuery}
@@ -423,7 +407,6 @@ export default function App() {
           </div>
 
           <div
-            style={{ display: pantallaCompleta ? 'none' : undefined }}
             onMouseDown={handleResizeStart}
             title="Arrastra para redimensionar"
             className={`h-1.5 shrink-0 cursor-row-resize flex items-center justify-center group ${
@@ -437,12 +420,6 @@ export default function App() {
           <div className="workspace-output flex-1 flex flex-col min-h-0">
             {/* Tab selector between Resultados and Plan de Ejecución */}
             <div className="workspace-tabs shrink-0">
-              <button onClick={() => setActiveBottomTab('ecommerce')} className={`workspace-tab tone-blue ${activeBottomTab === 'ecommerce' ? 'is-active' : ''}`}>
-                <ShoppingBag className="w-3.5 h-3.5" /><span>Tienda</span>
-              </button>
-              <button onClick={() => setActiveBottomTab('audio')} className={`workspace-tab tone-blue ${activeBottomTab === 'audio' ? 'is-active' : ''}`}>
-                <Music className="w-3.5 h-3.5" /><span>Copyright audio</span>
-              </button>
               <button
                 onClick={() => setActiveBottomTab('results')}
                 className={`workspace-tab tone-blue ${activeBottomTab === 'results' ? 'is-active' : ''}`}
@@ -520,8 +497,6 @@ export default function App() {
 
             {/* Tab Content */}
             <div className="flex-1 min-h-0 overflow-hidden">
-              {ecommerceMounted && <div className={activeBottomTab === 'ecommerce' ? 'h-full' : 'hidden'}><ECommercePanel onUseSQL={handleRunFromEcommerce} /></div>}
-              {audioMounted && <div className={activeBottomTab === 'audio' ? 'h-full' : 'hidden'}><AudioCopyrightPanel /></div>}
               {activeBottomTab === 'results' && (
                 <ResultsPanel
                   result={queryResult}

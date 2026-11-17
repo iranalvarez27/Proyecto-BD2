@@ -7,6 +7,13 @@ import numpy as np
 import pytest
 
 from backend.audio_detection import crear_router, resolver_subida, url_original
+from deteccion import letras
+
+
+@pytest.fixture(autouse=True)
+def sin_letras(monkeypatch):
+    monkeypatch.setattr(letras, 'tabla_lista', lambda conexion: False)
+    monkeypatch.setattr(letras, 'desde_melodia', lambda *a: None)
 
 
 def test_rutas_de_subida_no_permiten_salir_del_directorio(tmp_path):

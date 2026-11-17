@@ -1,6 +1,8 @@
 # Minigestor de Base de Datos Multimodal - BD2 (2026-2)
 
-Sistema gestor de base de datos multimodal desarrollado desde cero. Esta versión cubre la Parte 1 (datos relacionales con almacenamiento paginado, índices, SQL, transacciones y algoritmos externos), la Parte 2 (datos espaciales con R-Tree), la Parte 3 (recuperación de información textual con índice invertido SPIMI), la Parte 4 (búsqueda multimedia con BoVW/BoAW sobre HNSW, IVF y búsqueda exacta) y la Parte 5 (detección de coincidencias de audio con verificación temporal y una biblioteca musical unificada).
+Sistema gestor de base de datos multimodal desarrollado desde cero. Esta versión cubre la Parte 1 (datos relacionales con almacenamiento paginado, índices, SQL, transacciones y algoritmos externos), la Parte 2 (datos espaciales con R-Tree), la Parte 3 (recuperación de información textual con índice invertido SPIMI), la Parte 4 (búsqueda multimedia con BoVW/BoAW sobre HNSW, IVF y búsqueda exacta) y la Parte 5 (recomendación de e-commerce híbrida y detección de copyright en audio, incluido el reconocimiento de canciones cantadas, por su letra y por su melodía).
+
+> **Las aplicaciones de la Parte 5 tienen su propia interfaz.** La Tienda y la detección de copyright se usan desde [Aplicaciones-BD2](https://github.com/iranalvarez27/Aplicaciones-BD2). Este repositorio es el motor: aporta el SQL, los índices, los datos y las librerías (`recomendacion/`, `deteccion/`, `multimedia/`), y expone el API `/api/ecommerce` que consume la Tienda.
 
 ---
 
@@ -26,7 +28,7 @@ flowchart TD
 
 | Capa | Directorio | Responsabilidad |
 |---|---|---|
-| Interfaz | `frontend/` | Paneles de archivos, consultas, resultados, plan de ejecución, mapa, inspector físico, búsqueda multimedia y copyright de audio. |
+| Interfaz | `frontend/` | Paneles de archivos, consultas, resultados, plan de ejecución, mapa, inspector físico, búsqueda textual y laboratorio vectorial. |
 | API | `backend/` | Recibe el SQL por HTTP (FastAPI) y lo pasa al motor a través de `EngineAdapter`, que también arma el plan que se muestra en la interfaz. |
 | SQL | `query/` | El lexer y el parser convierten el texto en un AST, el analizador semántico valida tablas, columnas y tipos, y `conexion.py` elige el plan y lo ejecuta. |
 | Catálogo | `query/catalog.py`, `query/catalog_store.py` | Registra las tablas, su organización física y sus índices, y los persiste en `data/catalog.json`. |
@@ -35,7 +37,8 @@ flowchart TD
 | Archivos | `storage/` | Heap File con reutilización de espacio libre y Sequential File con MAIN, AUX, eliminación lazy y reorganización. |
 | Índices | `index/` | B+ Tree agrupado y no agrupado, hash extendible y R-Tree, todos paginados en disco; índices vectoriales en `index/vector/`. |
 | Multimedia | `multimedia/`, `index/vector/` | Extracción SIFT/MFCC, vocabulario K-Means y vectores TF-IDF (`ExtractFeatures`); índices EXACTO, HNSW e IVF para `SIMILAR_TO`. |
-| Detección de audio | `deteccion/`, `backend/audio_detection.py` | Recupera candidatos, verifica alineación temporal y secuencias MFCC, y devuelve coincidencias con metadatos SQL y procedencia. |
+| Detección de audio | `deteccion/`, `backend/audio_detection.py` | Librería que recupera candidatos, verifica alineación temporal y secuencias MFCC, reconoce canciones cantadas por su letra (Whisper + índice invertido BM25) y, de respaldo, por su melodía, y devuelve coincidencias con metadatos SQL. La sirve `Aplicaciones-BD2`. |
+| Recomendación | `recomendacion/`, `backend/ecommerce_recommendation.py` | Catálogo, señales de recomendación, compras transaccionales y el API `/api/ecommerce` que usa la Tienda de `Aplicaciones-BD2`. |
 | Almacenamiento | `engine/` | Buffer pool de páginas de 4 KB, `Segment` (archivo de páginas con free list y metapágina) y `FileManager` (lectura y escritura en disco). |
 | Común | `common/` | Tipos de datos, slotted page, formato de registros, bitmap de RIDs y funciones geométricas. |
 
@@ -58,7 +61,8 @@ Proyecto-BD2/
 │   ├── main.py                  # Endpoints FastAPI (/api/query, /api/tables, /api/visualize, ...)
 │   ├── engine_adapter.py        # Une catálogo, almacenamiento, índices y transacciones; crea las tablas de demo
 │   ├── visualize.py             # Snapshots y trazas para el inspector físico
-│   └── audio_detection.py       # Colecciones, detección de audio y caché de metadatos
+│   ├── ecommerce_recommendation.py  # API /api/ecommerce (lo consume la Tienda de Aplicaciones-BD2)
+│   └── audio_detection.py       # Router de audio como librería: lo monta Aplicaciones-BD2, no este servidor
 ├── common/                      # Lo que comparten todas las capas
 │   ├── types.py                 # Tipos de datos, columnas y esquemas
 │   ├── page.py                  # Slotted page de 4096 bytes
@@ -85,7 +89,12 @@ Proyecto-BD2/
 │   ├── extendible_hash.py       # Hash extendible
 │   ├── rtree_page.py            # Página de nodo del R-Tree
 │   ├── rtree.py                 # R-Tree: radio, rectángulo, polígono, k-NN y carga masiva STR
+│   ├── inverted_index.py        # Índice invertido: rankeo TF_IDF / BM25 sobre los postings
+│   ├── inverted_store.py        # Archivos .dic / .pst / .doc (diccionario, postings, longitudes y normas)
+│   ├── spimi.py                 # Construcción SPIMI: bloques en memoria y mezcla k-way con heap
+│   ├── tfidf.py, bm25.py        # Puntajes TF-IDF con coseno y BM25
 │   └── vector/                  # Índices vectoriales EXACTO, HNSW e IVF
+│       ├── base.py              # Interfaz de los índices vectoriales
 │       ├── exacto.py            # k-NN exacto; base de los demás (clave ruta/segmento, n_coleccion, .npz)
 │       ├── faiss_base.py, hnsw.py, ivf.py, indices_faiss.py   # HNSW e IVF sobre FAISS
 │       ├── metricas.py          # euclidean, cosine, dot
@@ -118,7 +127,9 @@ Proyecto-BD2/
 │   ├── colecciones_audio.py     # Nombres de datasets y resolución de la tabla de audio
 │   └── barrido_k.py             # Precision@10 por K para elegir el tamaño del vocabulario
 ├── bench/                       # Benchmarks y preparación de datasets reales
-│   ├── datasets/                # Descarga, ingesta y unificación de datasets
+│   ├── datasets/                # Descarga, ingesta y unificación: esci.py, amazon_img.py, fma.py, fma_todas.py, musica_propia.py
+│   ├── experiments/             # Experimentos de las Partes 3 a 5: texto, vector_compare, vector_params, elegir_k, galeria, tienda_*
+│   ├── plots.py                 # Gráficas a partir de los CSV de bench/results/
 │   └── data/                    # Almacenamiento local de descargas (excluido de git)
 ├── data/                        # Datos generados (.bin, .idx, catalog.json) y benchmarks
 │   ├── generate_data.py         # Datasets de 1K, 10K y 100K para las Partes 1 y 2
@@ -127,15 +138,21 @@ Proyecto-BD2/
 │   ├── bench_spatial.py         # Benchmark espacial: secuencial vs R-Tree vs GiST de PostgreSQL
 │   ├── plot_spatial.py          # Gráficas de la Parte 2
 │   └── charts/                  # Gráficas PNG generadas por los benchmarks
-├── deteccion/                   # Detector temporal, experimentos y pruebas de audio
-├── tools/                       # Verificación del inspector físico
+├── deteccion/                   # Detector de copyright (detector.py, chroma.py), modo a cappella (acapella.py), canción cantada por letra (letras.py),
+│                                #   biblioteca portable (biblioteca.py, precalcular.py, dividir.py), evaluación (evaluar.py, evaluar_letras.py) y pruebas
+├── recomendacion/               # Tienda: catálogo, texto/visual/semántico, metadata, afinidades, fusión, compras,
+│                                #   sucursales, disponibilidad, preparación (preparar.py) y pruebas
+├── docs/                        # Diagramas animados (SVG) del README
+├── tools/
 │   └── smoke_visualizations.py  # Snapshots y trazas de las estructuras
 ├── frontend/                    # Interfaz de usuario (React + Vite + Tailwind CSS + Leaflet)
 │   └── src/
 │       ├── App.jsx              # Layout y llamadas a la API
 │       └── components/          # Paneles (archivos, consultas, resultados, plan, mapa, inspector)
+├── docker/, Dockerfile, docker-compose.yml   # Despliegue con un solo comando (PostgreSQL + datasets + motor + interfaz)
 ├── .env.example                 # Conexión a PostgreSQL para el benchmark espacial
-└── requirements.txt             # Dependencias del backend
+├── requirements.txt             # Dependencias del backend
+└── requirements-dev.txt         # Dependencias de datasets, benchmarks y pruebas
 ```
 
 Todos los archivos de datos se guardan en `data/` y no se suben al repositorio. Cada tabla e índice es un archivo de páginas de 4 KB, por ejemplo `data/tiendas.bin` y `data/tiendas_ubicacion_rtree.idx`.
@@ -234,7 +251,7 @@ El usuario de PostgreSQL necesita poder ejecutar `CREATE EXTENSION postgis`. Los
 
 ## 2.1.5 Interfaz de Usuario
 
-Los cuatro paneles base permiten consultar el motor y revisar sus estructuras. Las pestañas adicionales incorporan búsqueda textual, multimedia, datos espaciales y detección de audio.
+Los cuatro paneles base permiten consultar el motor y revisar sus estructuras. Las pestañas adicionales incorporan búsqueda textual, multimedia y datos espaciales. La Tienda y la detección de copyright están en `Aplicaciones-BD2`.
 
 1. **Panel de Archivos (Izquierda):**
    * Inspección de tablas cargadas (`HEAP` y `SEQUENTIAL`).
@@ -260,7 +277,7 @@ Los cuatro paneles base permiten consultar el motor y revisar sus estructuras. L
    * Muestra nodos jerárquicos: `IndexScan (B+ Tree Agrupado)`, `IndexScan (B+ Tree No Agrupado)`, `IndexScan (Extendible Hash)`, `SequentialBinarySearch`, `FullTableScan`, `Sort (ORDER BY)`.
    * Costos estimados de E/S y conteo de filas estimadas.
 
-Las pestañas **Mapa**, **Búsqueda textual**, **Laboratorio vectorial**, **Inspector físico** y **Copyright audio** amplían estas herramientas. La biblioteca musical aparece con su nombre descriptivo junto a las tablas de origen y las muestras de audio.
+Las pestañas **Mapa**, **Búsqueda textual**, **Laboratorio vectorial** e **Inspector físico** amplían estas herramientas. La biblioteca musical aparece con su nombre descriptivo junto a las tablas de origen y las muestras de audio.
 
 ---
 
@@ -645,9 +662,9 @@ python3 -m bench.plots --parte todo
 > **Uso de `--sintetico-faltantes`:** Si aún no has descargado o procesado las colecciones completas de `10k` o `100k` en disco para imágenes o audio, puedes agregar la bandera `--sintetico-faltantes`. Esta opción extrapola automáticamente las escalas ausentes a partir de los vectores BoVW/BoAW reales ya construidos (conservando la dispersidad y clusters del codebook), permitiendo evaluar y generar las gráficas comparativas completas de las tres escalas sin tener que esperar la descarga e indexación de decenas de gigabytes.
 
 **Salidas generadas en `bench/results/`:**
-* **Parte 3 (Texto):** `texto_construccion.csv`, `texto_consultas.csv`, `texto_resumen.md`, `texto_construccion_disco.png`, `texto_latencia_longitud.png`, `texto_relevancia_pr10.png`.
-* **Parte 4 (Vector/Multimedia):** `vector_compare.csv`, `vector_resumen.md`, `vector_tiempo_vs_tamano.png`, `vector_construccion.png`, `vector_recall_comparativa.png`.
-* **Galería Multimedia:** `galeria.json`, `galeria_imagenes.png`, `galeria_audio.md`.
+* **Parte 3 (Texto):** `texto_construccion.csv`, `texto_consultas.csv`, `texto_construccion_disco.png`, `texto_latencia_longitud.png`, `texto_relevancia_pr10.png`.
+* **Parte 4 (Vector/Multimedia):** `vector_compare.csv`, `vector_tiempo_vs_tamano.png`, `vector_construccion.png`, `vector_recall_comparativa.png`.
+* **Galería Multimedia:** `galeria.json`, `galeria_imagenes.png`.
 
 ---
 
@@ -710,7 +727,7 @@ python tools/smoke_visualizations.py
 
 ## Parte 5: Sistema de Recomendación E-commerce Híbrido (Opción B)
 
-Tienda de electrónica ubicada en EE. UU. (interfaz en inglés, precios en USD) que usa las 4 partes del motor: índices relacionales (`B+ Tree`, `Extendible Hash`) y transacciones, índice espacial (`R-Tree`), índice invertido (`SPIMI` con `BM25` y `TF-IDF`) e índices vectoriales (`HNSW`, `IVF`, `EXACT`). El backend vive en este repositorio (`recomendacion/` y `backend/ecommerce_recommendation.py`); el front se construye en un repositorio aparte siguiendo `recomendacion/FRONT.md`.
+Tienda de electrónica ubicada en EE. UU. (interfaz en inglés, precios en USD) que usa las 4 partes del motor: índices relacionales (`B+ Tree`, `Extendible Hash`) y transacciones, índice espacial (`R-Tree`), índice invertido (`SPIMI` con `BM25` y `TF-IDF`) e índices vectoriales (`HNSW`, `IVF`, `EXACT`). El backend vive en este repositorio (`recomendacion/` y `backend/ecommerce_recommendation.py`); la interfaz de la tienda está en [Aplicaciones-BD2](https://github.com/iranalvarez27/Aplicaciones-BD2) (`frontend/src/components/ECommercePanel.jsx`) y consume este API.
 
 | Dato | Origen |
 |---|---|
@@ -751,7 +768,7 @@ Con Docker, el servicio `seed` corre este mismo comando antes de levantar el bac
 
 - **Recomendación** ("You may also like"): combinación convexa de 4 señales (`visual`, `texto`, `metadata`, `compras`), con pesos 0,25 por defecto, y devuelve cuánto aportó cada una (`aportes_pct`). El texto mezcla TF-IDF y embeddings, la metadata usa la distancia de Gower y las compras, similitud coseno item-item con encogimiento.
 - **Búsqueda**: BM25 + MiniLM + popularidad (0,4 / 0,4 / 0,2).
-- Pesos y parámetros en `recomendacion/fusion.py` y `recomendacion/parametros.yaml`; experimentos en `bench/experiments/tienda_*.py`.
+- Pesos en `recomendacion/recomendador.py` (`PESOS` y `PESOS_BUSQUEDA`), combinación en `recomendacion/fusion.py` y parámetros medidos en `recomendacion/parametros.yaml`; experimentos en `bench/experiments/tienda_*.py`.
 
 ### 2.5.4 API REST
 
@@ -778,84 +795,140 @@ pytest recomendacion/ -q
 
 ## Parte 5: Detección de Copyright en Audio (Opción C)
 
-La pestaña **Copyright audio** busca fragmentos coincidentes y muestra la canción de referencia, su artista, la posición y el porcentaje de similitud. Integra audio y metadatos relacionales mediante la API del motor.
+El sistema recibe un audio de 5 s a 10 min y detecta si reutiliza material protegido de dos formas: porque contiene fragmentos de una **grabación original** (la canción, un remix o un cover) o porque alguien **canta una canción del repertorio**, a capela o sobre la pista. Ambos análisis se hacen en una sola llamada, `POST /api/audio/detect`, y se muestran en una misma línea de tiempo. El motor SQL guarda los metadatos en tablas, la similitud acústica en índices vectoriales (EXACTO, HNSW, IVF) y las letras en un índice invertido con BM25.
 
-### 2.6.1 Implementación y datos
+La interfaz y el API `/api/audio` se publican desde [Aplicaciones-BD2](https://github.com/iranalvarez27/Aplicaciones-BD2); este repositorio aporta las librerías (`deteccion/`, `multimedia/`, `backend/audio_detection.py`), los datos y los índices.
 
-| Componente | Implementación |
+![Flujo del detector de copyright](docs/copyright-pipeline.svg)
+
+### 2.6.1 Funcionamiento
+
+| Etapa | Qué hace | Código |
+|---|---|---|
+| Grabación original | Ventanas de 2 s → MFCC → vector BoAW (TF-IDF sobre un vocabulario K-Means) → vecinos en la biblioteca. Una coincidencia exige varios votos por la misma pista con desfase constante (±1 s, velocidades 0.95 / 1.0 / 1.05) y se confirma con correlación MFCC y, desde 10 s, chroma + DTW. | `deteccion/detector.py`, `deteccion/chroma.py`, `multimedia/` |
+| Canción cantada por letra | Whisper `small` transcribe la voz en frases; cada frase se busca con `MATCH ... USING BM25` en `letras_acapella`. Los votos se suman por canción y se reporta con al menos 2 frases (o una de 6 palabras o más con puntaje máximo) y 30 % de ventaja sobre la segunda. | `deteccion/letras.py` |
+| Canción cantada por melodía | Respaldo cuando la letra no encuentra nada y el audio dura 10 s o más: melodía de la voz en 12 clases de nota comparada con DTW en las 12 transposiciones (no importa el tono ni el tempo). | `deteccion/acapella.py` |
+| Fusión | Une las rutas en una lista con `tipo` (`grabacion` o `cancion_cantada`); si una canción sale por dos rutas en el mismo tramo se queda la de mayor similitud. | `letras.complementar` |
+
+| Datos | Contenido |
 |---|---|
-| Características | MFCC, vocabulario K-Means y vectores BoAW con TF-IDF sobre segmentos de 2 s. |
-| Búsqueda | EXACTO, HNSW e IVF para recuperar candidatos por similitud del coseno. |
-| Verificación | Alineación temporal y secuencias MFCC en bloques de 5–10 s. Chroma CQT y DTW complementan las consultas de al menos 10 s. |
-| Metadatos | Tabla `audio_segmentos` con título, artista, género, ruta y procedencia. |
+| Biblioteca de grabaciones | FMA (7.994 canciones) y Perú e internacional (500): **8.494 canciones, 170.002 segmentos**. |
+| Repertorio para cantar | 200 canciones peruanas (`REPERTORIO` en `deteccion/acapella.py`). De cada una, Demucs aísla la voz, se guarda su melodía y Whisper transcribe su letra en `letras_acapella(id, track_id, inicio_s, fin_s, texto)`, con índice invertido en español. |
 
-La **Biblioteca musical** reúne las colecciones locales en una sola búsqueda.
+La búsqueda vectorial usa `EXACTO` por defecto, porque un vecino omitido es una coincidencia no reportada; con 100 000 vectores HNSW responde unas 69 veces más rápido (recall 0.98) e IVF unas 88 veces (recall 0.95), y quedan para bibliotecas mayores.
 
-| Colección | Canciones | Segmentos |
-|---|---:|---:|
-| FMA | 7.994 | 115.266 |
-| Perú e internacional | 500 | 54.736 |
-| **Biblioteca musical** | **8.494** | **170.002** |
+![Aceleración de IVF y HNSW frente a la búsqueda exacta](docs/audio-indices.svg)
 
-Los audios originales, vectores y modelos deben estar disponibles localmente. La preparación de FMA y del vocabulario se describe en la sección 2.3.3.
+### 2.6.2 API
 
-### 2.6.2 Panel de Copyright audio
-
-1. Selecciona la biblioteca y carga un audio de **5 segundos a 10 minutos**, de hasta **50 MB**.
-2. Configura el bloque de **5 o 10 s**, los vecinos, la similitud mínima y el método de búsqueda. Los controles de secuencia y ruido están en **Ajustes avanzados**.
-3. Pulsa **Analizar audio** para consultar las coincidencias en la línea de tiempo y la tabla de resultados.
-4. Reproduce los tramos de consulta y referencia, o usa **Exportar informe** para descargar el JSON.
-
-La detección de covers depende de conservar suficiente similitud musical. Las posiciones tonales son aproximadas y los porcentajes expresan similitud orientativa.
-
-### 2.6.3 API y consulta SQL
+Endpoints que usa la interfaz de [Aplicaciones-BD2](https://github.com/iranalvarez27/Aplicaciones-BD2) (`/api/audio/*` en el puerto 8100 y `/api/media/*` en el motor):
 
 | Endpoint | Función |
 |---|---|
-| `GET /api/audio/collections` | Lista las bibliotecas disponibles. |
-| `POST /api/media/upload` | Sube el archivo de consulta. |
-| `POST /api/audio/detect` | Devuelve coincidencias, segmentos, metadatos y tiempos. |
-| `GET /api/media/{ruta}` | Reproduce los audios por rangos. |
+| `POST /api/media/upload` | Sube el audio. |
+| `POST /api/audio/detect` | Análisis completo: coincidencias, segmentos, `texto_reconocido`, `frases` con su tiempo, metadatos y tiempos. Acepta `progreso_id` para seguir el avance. |
+| `GET /api/audio/detect/progress?id=` | Estado de cada etapa del análisis en curso (`grabacion`, `letra`, `melodia`): `espera`, `activo`, `hecho` u `omitida`. |
+| `GET /api/audio/collections` | Bibliotecas disponibles. |
+| `GET /api/audio/acapella/status`, `POST /api/audio/acapella/prepare` | Estado y preparación de voces y melodías. |
+| `GET /api/audio/letras/status`, `POST /api/audio/letras/prepare` | Estado y preparación de las letras. |
+
+Si faltan las letras, `/detect` responde igual con el análisis de grabaciones y lo indica en `metricas.letra_error`; un audio fuera de rango o en silencio devuelve `400` con el motivo.
 
 ```sql
-SELECT track_id, titulo, artista, fuente
-FROM audio_segmentos
-WHERE id = 1;
+SELECT track_id, inicio_s, fin_s, SCORE() AS s
+FROM letras_acapella
+WHERE MATCH(texto, 'tu mirada tierna la que me entregaba') USING BM25
+ORDER BY s DESC LIMIT 5;
 ```
 
-### 2.6.4 Verificación
+### 2.6.3 Cómo replicar
 
-```bash
-python -m pytest deteccion bench/datasets/test_fma_todas.py -q
+Los audios, índices y modelos no están en Git. Hay dos caminos: **copiar un paquete de datos** ya preparado (minutos) o **prepararlo todo desde cero** (horas).
+
+#### Paso 1. Código y dependencias
+
+Requisitos: Python 3.10+, Node.js 20.19+ (o 22.12+), Git y unos 20 GB libres. Comandos para Windows (PowerShell); en Linux o macOS usa `source .venv/bin/activate`.
+
+```powershell
+mkdir BD2; cd BD2
+git clone https://github.com/iranalvarez27/Proyecto-BD2.git
+git clone https://github.com/iranalvarez27/Aplicaciones-BD2.git      # deben quedar en la misma carpeta
+cd Proyecto-BD2
+python -m venv .venv
+.venv\Scripts\activate
+pip install -r requirements.txt -r ..\Aplicaciones-BD2\requirements.txt
 ```
 
-Las pruebas cubren alineación, secuencias, Chroma, integración de la API e invalidación de cachés. El detector reutiliza metadatos, descriptores y cálculos MFCC entre bloques para reducir el tiempo de análisis.
+#### Paso 2, opción A. Copiar el paquete de datos (recomendado)
 
-### 2.6.5 Despliegue de la biblioteca de audio
+En la computadora donde ya está preparado, con el motor apagado:
 
-El frontend en Vercel solo sirve la interfaz: `frontend/vercel.json` reenvía `/api/*` al backend. Ese backend necesita la biblioteca (`data/` y los modelos no están en Git), si no la lista de bibliotecas sale vacía. La biblioteca se empaqueta una vez y el servidor la instala al arrancar.
-
-```bash
-# 1) en la máquina donde se construyó la biblioteca (regenera las cachés si cambió el modelo)
-python -m deteccion.precalcular -n 10000
-python -m deteccion.biblioteca exportar -n 10000 -o biblioteca-10k.tar.gz      # ~100 MB; --con-audio añade los MP3 (~0.8 GB)
-# 2) sube el .tar.gz a un enlace público (GitHub Release, Cloudflare R2, S3...). El paquete de 10k ya está publicado:
-#    https://github.com/iranalvarez27/Proyecto-BD2/releases/download/biblioteca-audio-10k/biblioteca-10k.tar.gz
-#    sha256 e8cf0d66fe3366cc225a2afb3bb0ef13103c61f74c9312ec3999bbe19d9968b5
-#    Para instalarlo sin exportar nada: python -m deteccion.biblioteca importar <esa URL>
-# 3) en el servidor (Dockerfile, target `app`), variables de entorno:
-#    BIBLIOTECA_URL=https://.../biblioteca-10k.tar.gz   BIBLIOTECA_SHA256=<sha256 que imprime exportar>
-#    MEDIA_BASE_URL=https://.../musica                   (opcional: de dónde escuchar los MP3 originales)
-# 4) en frontend/vercel.json, `destination` = URL pública de ese backend
+```powershell
+cd Proyecto-BD2
+tar -czf ..\copyright-datos.tar.gz --exclude=data/tmp --exclude=data/backups --exclude=data/uploads data   # ~4 GB
+tar -cf  ..\copyright-audios-peru.tar bench/data/musica_propia                                           # ~9.7 GB
 ```
 
-| Elemento | Detalle |
+Copia los dos archivos (por ejemplo, en un USB de 32 GB en exFAT o NTFS) y en la computadora nueva:
+
+```powershell
+cd Proyecto-BD2
+tar -xzf ..\copyright-datos.tar.gz
+tar -xf  ..\copyright-audios-peru.tar
+```
+
+| Archivo | Para qué sirve |
 |---|---|
-| Qué contiene el paquete | Tablas `audios_N` con su índice, `catalog.json` (solo la entrada de la tabla, se fusiona con la del servidor), modelo (`meta.json`, codebook, estandarización), colección, `huellas.json` y las cachés de secuencias MFCC y chroma de las originales. |
-| Cachés portables | Su clave es la huella de contenido de cada MP3 (`huella_archivo`) y el contenido del modelo, no la fecha, el inodo ni la ruta. Si no está el MP3, la huella sale de `huellas.json`. |
-| Sin los MP3 | La detección funciona igual. Solo no se puede escuchar la referencia, salvo que se sirvan aparte con `MEDIA_BASE_URL` (misma estructura `bench/data/fma/...`). Si falta una original sin caché, esa pista queda sin verificar y se informa en `metricas.originales_ausentes`. |
-| Dos fuentes | Además del paquete de 10k hay uno por fuente: `python -m deteccion.biblioteca importar peru fma` (Perú e internacional: 329 MB, 500 canciones; FMA: 727 MB, 7 994 canciones). La pestaña Copyright audio deja elegir en cuál buscar y ofrece solo esas dos opciones (la biblioteca unificada no aparece si existen las fuentes); con una sola fuente se comparan menos vectores y responde antes. Se separan con `python -m deteccion.dividir` y se exportan con `exportar -n <segmentos>`. |
-| Releases publicados | `peru`: `releases/download/biblioteca-audio-peru/biblioteca-peru.tar.gz`, sha256 `137f20a21ee111370151d2a94a6ec38d18420bcbf6552eee82756d951e5e75ba`. `fma`: `releases/download/biblioteca-audio-fma/biblioteca-fma.tar.gz`, sha256 `475c13f563707a505cbfcda7d651e168f8e4835f700ac321b5deff40fd087c1d`. `importar` verifica el hash y rechaza paquetes con un modelo distinto al instalado (`--forzar` lo omite). |
-| Varias bibliotecas | Cada paquete trae su registro `modelo/huellas/<tabla>.json`; al instalar varios no se pisan entre sí. Validado instalando ambos en un directorio limpio y sin MP3: ambas fuentes detectan (6,8 s Perú, 4,6 s FMA), sin falsos positivos y sin originales ausentes. |
-| Preparación para publicar | `python -m deteccion.precalcular -n <N>` y luego `exportar`; después `gh release create biblioteca-audio-<fuente> <archivo>` y comprobar con `curl -sL <url> \| sha256sum`. |
-| Idempotencia | `docker/arrancar.sh` instala solo si la marca `.biblioteca_N.json` no coincide; con disco efímero se reinstala en cada arranque en frío. |
+| `copyright-datos.tar.gz` | Tablas, índices, modelo de audio, voces, melodías y letras. Basta para detectar grabaciones y canciones cantadas. |
+| `copyright-audios-peru.tar` | Audios originales del repertorio y de Perú e internacional, para escucharlos en los resultados. |
+| `bench/data/fma` (16 GB, opcional) | Solo para escuchar las originales de FMA; sin ella, esas coincidencias se detectan igual pero sin reproductor. |
+
+Whisper descarga su modelo (~460 MB) en el primer análisis. Sin internet, copia también `%USERPROFILE%\.cache\huggingface\hub\models--Systran--faster-whisper-small` a la misma ruta.
+
+#### Paso 2, opción B. Preparar desde cero
+
+```powershell
+python -m deteccion.biblioteca importar peru fma     # biblioteca de grabaciones publicada (verifica sha256)
+pip install demucs                                    # separación de voz (instala PyTorch)
+python -m deteccion.acapella preparar                 # voces y melodías; requiere los WAV en bench/data/musica_propia (horas, reanudable)
+python -m deteccion.letras preparar                   # letras con Whisper y tabla letras_acapella (~3 min por canción, reanudable)
+```
+
+`deteccion.letras preparar` se ejecuta con el motor apagado (abre `data/` directamente) o con el motor encendido en `ENGINE_URL`, nunca con ambos escribiendo a la vez.
+
+#### Paso 3. Arrancar y comprobar
+
+```powershell
+# Terminal 1: motor (puerto 8000)
+cd Proyecto-BD2; .venv\Scripts\activate
+python -m uvicorn backend.main:app --port 8000
+
+# Terminal 2: API de audio (puerto 8100)
+cd Aplicaciones-BD2; ..\Proyecto-BD2\.venv\Scripts\activate
+python -m app_bd2.main
+
+# Terminal 3: interfaz (puerto 5173)
+cd Aplicaciones-BD2\frontend
+npm install
+npm run dev
+```
+
+1. `http://localhost:8100/api/health` responde `"engine": "ok"`.
+2. `http://localhost:8100/api/audio/letras/status` responde `"tabla_lista": true`.
+3. En `http://localhost:5173` (usa `localhost` para que el navegador permita el micrófono), pestaña **Copyright audio**, sube `Proyecto-BD2/data/voz_eval/motor_y_motivo__acapella.wav` y pulsa **Analizar**: debe reportar *Motor y Motivo* como *Canción cantada (letra)*. El primer análisis tarda más porque carga Whisper; los siguientes, unos 20 s.
+
+### 2.6.4 Resultados y limitaciones
+
+```powershell
+python -m pytest deteccion -q              # 73 pruebas
+python -m deteccion.evaluar -n 10000       # grabaciones -> bench/results/audio_c.json
+python -m deteccion.evaluar_letras         # canción cantada -> bench/results/letras.json (con --ids ID ... se eligen las canciones; con --salida, el archivo)
+```
+
+| Evaluación | Resultado |
+|---|---|
+| Grabaciones (EXACTO) | Recall 1.00 sin modificar el audio, 0.85 con ruido, 1.00 con cambio de volumen o tempo; 0 falsos positivos en 10 audios fuera de la colección. |
+| Canción cantada, 5 canciones de géneros distintos (15 s de voz sola y 15 s de la original por cada una) | 10 de 10 con la canción correcta, 6,5 s por consulta. |
+| Canción cantada, la canción con más letra de cada género | 8 de 10 con la canción correcta, 6,9 s por consulta. |
+| Grabaciones reales a capela (`data/voz_eval/`) | *Dónde Estarás* y *Motor y Motivo* reconocidas por letra; una canción fuera del repertorio no dio coincidencias. |
+
