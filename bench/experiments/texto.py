@@ -1,6 +1,5 @@
 import argparse
 import csv
-import itertools
 import json
 import math
 import os
@@ -190,47 +189,41 @@ def _construir_pg_gin(conn, docs: list[tuple[int, str]], idioma_pg: str = "spani
 
 
 def _consultar_pg_gin(conn, texto_q: str, k: int, idioma_pg: str = "spanish") -> list[int]:
-    # 1) Conjuncion estricta (AND) con plainto_tsquery y ts_rank (frecuencia + normalizacion).
-    # 2) Si devuelve menos de k documentos en consultas de 2+ palabras, relajacion por quorum
-    #    de pares (t_i & t_j) para aprovechar las intersecciones de GIN sin escanear miles
-    #    de filas por una sola palabra comun.
+    # Usamos OR ('|') sobre los tokens de plainto_tsquery si AND estricto no devuelve k resultados,
+    # emulando ts_rank_cd sobre el indice GIN.
     with conn.cursor() as cur:
         cur.execute(
             f"""
             SELECT id
             FROM bench_esci_gin, plainto_tsquery('{idioma_pg}', %s) query
             WHERE tsv @@ query
-            ORDER BY ts_rank(tsv, query, 32) DESC
+            ORDER BY ts_rank_cd(tsv, query) DESC
             LIMIT %s;
             """,
             (texto_q, k),
         )
         ids = [int(r[0]) for r in cur.fetchall()]
-        if len(ids) >= k:
-            return ids[:k]
-
-        palabras = list(dict.fromkeys(w for w in preprocesar(texto_q, idioma_pg, stemming=False) if w))
-        if len(palabras) >= 2:
-            pares = ["(" + " & ".join(par) + ")" for par in itertools.combinations(palabras[:6], 2)]
-            expr = " | ".join(pares)
-            cur.execute(
-                f"""
-                SELECT id
-                FROM bench_esci_gin, to_tsquery('{idioma_pg}', %s) query
-                WHERE tsv @@ query
-                ORDER BY ts_rank(tsv, query, 32) DESC
-                LIMIT %s;
-                """,
-                (expr, k),
-            )
-            vistos = set(ids)
-            for (doc_id,) in cur.fetchall():
-                doc_id = int(doc_id)
-                if doc_id not in vistos:
-                    ids.append(doc_id)
-                    vistos.add(doc_id)
-                    if len(ids) >= k:
-                        break
+        if len(ids) < k:
+            palabras = [w for w in preprocesar(texto_q, idioma_pg, stemming=False) if w]
+            if len(palabras) > 1:
+                or_expr = " | ".join(palabras)
+                cur.execute(
+                    f"""
+                    SELECT id
+                    FROM bench_esci_gin, to_tsquery('{idioma_pg}', %s) query
+                    WHERE tsv @@ query
+                    ORDER BY ts_rank_cd(tsv, query) DESC
+                    LIMIT %s;
+                    """,
+                    (or_expr, k),
+                )
+                vistos = set(ids)
+                for (doc_id,) in cur.fetchall():
+                    if int(doc_id) not in vistos:
+                        ids.append(int(doc_id))
+                        vistos.add(int(doc_id))
+                        if len(ids) >= k:
+                            break
         return ids[:k]
 
 
