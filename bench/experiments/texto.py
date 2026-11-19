@@ -1,5 +1,6 @@
 import argparse
 import csv
+import itertools
 import json
 import math
 import os
@@ -155,72 +156,81 @@ def _construir_pg_gin(conn, docs: list[tuple[int, str]], idioma_pg: str = "spani
     from psycopg2.extras import execute_values
 
     with conn.cursor() as cur:
+        cur.execute("DROP TABLE IF EXISTS bench_esci_raw;")
         cur.execute("DROP TABLE IF EXISTS bench_esci_gin;")
-        cur.execute(
-            "CREATE TABLE bench_esci_gin ("
-            "id INT PRIMARY KEY, "
-            "contenido TEXT, "
-            "tsv tsvector"
-            ");"
-        )
+        cur.execute("CREATE TEMP TABLE bench_esci_raw (id INT, contenido TEXT);")
         execute_values(
             cur,
-            f"INSERT INTO bench_esci_gin (id, contenido, tsv) VALUES %s",
-            [(doc_id, texto, texto) for doc_id, texto in docs],
-            template=f"(%s, %s, to_tsvector('{idioma_pg}', %s))",
+            "INSERT INTO bench_esci_raw (id, contenido) VALUES %s",
+            docs,
             page_size=1000,
         )
+        # Se incluye to_tsvector (tokenizacion, stopwords y stemming) dentro de la
+        # medicion para igualar el trabajo que realiza SPIMI en bulk_load, y se usa
+        # UNLOGGED porque SPIMI tampoco escribe WAL.
         t0 = time.perf_counter()
+        cur.execute(
+            f"CREATE UNLOGGED TABLE bench_esci_gin AS "
+            f"SELECT id, to_tsvector('{idioma_pg}', contenido) AS tsv "
+            f"FROM bench_esci_raw;"
+        )
         cur.execute("CREATE INDEX idx_bench_esci_gin ON bench_esci_gin USING GIN (tsv);")
         cur.execute("ANALYZE bench_esci_gin;")
         construccion_s = time.perf_counter() - t0
 
+        # En N=1000 la tabla cabe en ~18 paginas y el planificador de PostgreSQL
+        # puede preferir un Seq Scan sobre tsv en vez de usar el indice GIN.
+        # Desactivar seqscan garantiza que siempre se mida el indice GIN en las 3 escalas.
+        cur.execute("SET enable_seqscan = off;")
         cur.execute("SELECT pg_relation_size('idx_bench_esci_gin');")
         bytes_idx = cur.fetchone()[0] or 0
         disco_mb = float(bytes_idx) / (1024.0 * 1024.0)
+        cur.execute("DROP TABLE IF EXISTS bench_esci_raw;")
     return construccion_s, disco_mb
 
 
 def _consultar_pg_gin(conn, texto_q: str, k: int, idioma_pg: str = "spanish") -> list[int]:
-    # Usamos OR ('|') sobre los tokens de plainto_tsquery si AND estricto no devuelve k resultados,
-    # emulando ts_rank_cd sobre el indice GIN.
+    # 1) Conjuncion estricta (AND) con plainto_tsquery y ts_rank (frecuencia + normalizacion).
+    # 2) Si devuelve menos de k documentos en consultas de 2+ palabras, relajacion por quorum
+    #    de pares (t_i & t_j) para aprovechar las intersecciones de GIN sin escanear miles
+    #    de filas por una sola palabra comun.
     with conn.cursor() as cur:
         cur.execute(
             f"""
-            WITH q AS (
-                SELECT plainto_tsquery('{idioma_pg}', %s) AS query_and,
-                       tsquery_phrase(plainto_tsquery('{idioma_pg}', %s), plainto_tsquery('{idioma_pg}', %s), 1) AS dummy
-            )
             SELECT id
             FROM bench_esci_gin, plainto_tsquery('{idioma_pg}', %s) query
             WHERE tsv @@ query
-            ORDER BY ts_rank_cd(tsv, query) DESC
+            ORDER BY ts_rank(tsv, query, 32) DESC
             LIMIT %s;
             """,
-            (texto_q, texto_q, texto_q, texto_q, k),
+            (texto_q, k),
         )
         ids = [int(r[0]) for r in cur.fetchall()]
-        if len(ids) < k:
-            palabras = [w for w in preprocesar(texto_q, idioma_pg, stemming=False) if w]
-            if len(palabras) > 1:
-                or_expr = " | ".join(palabras)
-                cur.execute(
-                    f"""
-                    SELECT id
-                    FROM bench_esci_gin, to_tsquery('{idioma_pg}', %s) query
-                    WHERE tsv @@ query
-                    ORDER BY ts_rank_cd(tsv, query) DESC
-                    LIMIT %s;
-                    """,
-                    (or_expr, k),
-                )
-                vistos = set(ids)
-                for (doc_id,) in cur.fetchall():
-                    if int(doc_id) not in vistos:
-                        ids.append(int(doc_id))
-                        vistos.add(int(doc_id))
-                        if len(ids) >= k:
-                            break
+        if len(ids) >= k:
+            return ids[:k]
+
+        palabras = list(dict.fromkeys(w for w in preprocesar(texto_q, idioma_pg, stemming=False) if w))
+        if len(palabras) >= 2:
+            pares = ["(" + " & ".join(par) + ")" for par in itertools.combinations(palabras[:6], 2)]
+            expr = " | ".join(pares)
+            cur.execute(
+                f"""
+                SELECT id
+                FROM bench_esci_gin, to_tsquery('{idioma_pg}', %s) query
+                WHERE tsv @@ query
+                ORDER BY ts_rank(tsv, query, 32) DESC
+                LIMIT %s;
+                """,
+                (expr, k),
+            )
+            vistos = set(ids)
+            for (doc_id,) in cur.fetchall():
+                doc_id = int(doc_id)
+                if doc_id not in vistos:
+                    ids.append(doc_id)
+                    vistos.add(doc_id)
+                    if len(ids) >= k:
+                        break
         return ids[:k]
 
 
